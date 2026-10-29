@@ -112,8 +112,8 @@ go build -o claude-code . && go test -race ./...
 e2e/run.sh   # Linux, needs `unshare -rn`: a real Rubi, Rubi Home and this plugin, offline
 ```
 
-`go.mod` points at `../rubi` (`replace`) until a Rubi release has `Host.WaitApproval` and Rubi Home's
-`claude` capability; drop the `replace` then. `PublisherKey` is the Rubi-Project plugin key (public half in
+The plugin builds on Rubi v0.11.0 (`Host.WaitApproval` and Rubi Home's `claude` capability). The e2e
+builds Rubi and Rubi Home from a core checkout, `../rubi` by default or `RUBI_REPO`. `PublisherKey` is the Rubi-Project plugin key (public half in
 `publisher-key.pub.pem`); only the end-to-end test overrides it, with a throwaway key.
 
 The end-to-end test builds everything with `-race`, runs it in a network namespace with only loopback,
