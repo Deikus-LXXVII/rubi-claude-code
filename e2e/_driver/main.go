@@ -611,6 +611,38 @@ func run(dir, rubiBin, homeBin, plugin string) (err error) {
 	if err != nil {
 		return err
 	}
+	// No Bot follows claude-code here, so Rubi itself tells the administrator, with a fresh link, and the
+	// request waits in the panel's list (Rubi with approval.list; an older one skips this).
+	var list map[string]any
+	if sc, err = settings(); err != nil {
+		return err
+	}
+	if err := sc.Call("approval.list", nil, &list); err == nil {
+		found := false
+		for _, a := range list["approvals"].([]any) {
+			found = found || a.(map[string]any)["approval_id"] == id
+		}
+		if !found {
+			return fmt.Errorf("approval.list doesn't show %s: %v", id, list)
+		}
+		if err := waitFor("Rubi's approval.requested webhook", 20*time.Second, func() (bool, error) {
+			wh.mu.Lock()
+			defer wh.mu.Unlock()
+			for _, b := range wh.bodies {
+				d, _ := b["data"].(map[string]any)
+				if b["type"] == "rubi.approval.requested" && d["approval_id"] == id {
+					u, _ := b["approval_url"].(string)
+					return strings.Contains(u, "#"), nil
+				}
+			}
+			return false, nil
+		}); err != nil {
+			return err
+		}
+		step("1 the request is in the panel's list, and the Bot got Rubi's approval.requested with a link")
+	} else if !strings.Contains(err.Error(), "unknown") {
+		return fmt.Errorf("approval.list: %w", err)
+	}
 	apc, err := panel(url)
 	if err != nil {
 		return err
