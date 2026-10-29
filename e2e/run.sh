@@ -2,7 +2,8 @@
 # End-to-end check of Claude Code approvals on one machine, without network (unshare -rn) and without
 # touching any real Rubi: a throwaway daemon and helper in a temp dir, a local signed catalog, an
 # in-process relay, and `rubi-home claude-hook` playing Claude Code. Cases: approve -> allow,
-# deny -> deny with the reason, no answer -> deny, Rubi locked -> deny.
+# deny -> deny with the reason, no answer -> deny, a passkey tap on a safe command -> allow, a tap on any
+# other command -> refused (then deny), Rubi locked -> deny.
 #
 #   RUBI_REPO=../rubi e2e/run.sh
 set -euo pipefail

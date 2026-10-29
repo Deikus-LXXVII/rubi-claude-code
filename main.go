@@ -34,15 +34,16 @@ func manifest() rubiplugin.Manifest {
 		Needs:       "Rubi Home on the computer where Claude Code runs, and Claude Code's hook set up (see the plugin's README).",
 		Publisher:   rubiplugin.Publisher{Name: "Rubi-Project", Key: PublisherKey},
 		Source:      "https://github.com/Deikus-LXXVII/rubi-claude-code",
-		// The first core with Rubi Home's "claude" capability and approval.wait (unreleased; see go.mod).
+		// The first core with Rubi Home's "claude" capability, approval.wait and the tap level (unreleased;
+		// see go.mod).
 		MinRubi: "v0.11.0",
 		Entry:   "claude-code",
 		Actions: []rubiplugin.Action{
 			{Kind: kindRun, Title: "Run a command in Claude Code", DefaultLevel: rubiplugin.Strong, Locked: true, Options: opts},
-			// Rubi has no one-tap level a background plugin can use: chat needs the agent to show the
-			// buttons, so this starts at strong too. You can lower it in the panel.
+			// Read-only commands: a tap on the passkey is enough, no Face ID. (Chat would need the agent to
+			// show the buttons.) You can change it in the panel.
 			{Kind: kindSafe, Title: "Run a read-only command in Claude Code (ls, cat, pwd, git status/diff/log)",
-				DefaultLevel: rubiplugin.Strong, Options: opts},
+				DefaultLevel: rubiplugin.Tap, Options: opts},
 		},
 		Events: []rubiplugin.EventType{{Type: eventNeeded, Untrusted: []string{"command", "directory", "claude_says", "computer"}}},
 		Home:   []string{"claude"},

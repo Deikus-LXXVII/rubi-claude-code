@@ -286,7 +286,7 @@ func TestManifest(t *testing.T) {
 	}
 	run, _ := m.Action(kindRun)
 	safe, _ := m.Action(kindSafe)
-	if run.DefaultLevel != rubiplugin.Strong || !run.Locked || safe.DefaultLevel != rubiplugin.Strong {
+	if run.DefaultLevel != rubiplugin.Strong || !run.Locked || safe.DefaultLevel != rubiplugin.Tap || safe.Locked {
 		t.Fatalf("levels: %+v %+v", run, safe)
 	}
 	ev, ok := m.Event(eventNeeded)

@@ -29,8 +29,9 @@ Code runs without asking (its read-only set, or allow rules in managed settings)
 - **No network access**, no files, no secrets.
 - **Actions.** `claude-code.run` (any command; passkey or password, and you can't lower it) and
   `claude-code.run_safe` (a few read-only commands such as `ls`, `cat`, `git status` with plain
-  arguments; passkey by default, and you may lower it). Anything the classifier isn't sure about is
-  `run`.
+  arguments; a passkey **tap** by default, no Face ID, and you may change it). Anything the classifier
+  isn't sure about is `run`. On a security key the tap is just a touch; iPhone and Mac passkeys may still
+  ask for Face ID or Touch ID, which Rubi accepts too. A tap never approves a `run` command.
 - Its approvals count toward Rubi's limit of 30 approved actions per hour, shared with your other actions.
 
 The approval link reaches you through your Bot: subscribe it to the plugin's `approval_needed` event (Rubi

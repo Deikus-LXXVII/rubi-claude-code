@@ -14,11 +14,14 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
@@ -27,6 +30,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -41,6 +45,8 @@ import (
 	"github.com/Deikus-LXXVII/rubi/internal/panelclient"
 	"github.com/Deikus-LXXVII/rubi/internal/paths"
 	"github.com/Deikus-LXXVII/rubi/internal/relay/relaytest"
+	"github.com/Deikus-LXXVII/rubi/internal/vault"
+	"github.com/Deikus-LXXVII/rubi/internal/webauthn"
 )
 
 const pw = "e2e claude-code correct horse battery"
@@ -184,6 +190,44 @@ func (a agent) call(name string, args map[string]any) (map[string]any, error) {
 	b, _ := json.Marshal(res.StructuredContent)
 	_ = json.Unmarshal(b, &out)
 	return out, nil
+}
+
+// softKey is a software passkey (P-256), registered as an approver at pairing. Like a security key asked
+// for userVerification "discouraged", it can sign with user presence only (UP=1, UV=0): a tap.
+type softKey struct {
+	key   *ecdsa.PrivateKey
+	count uint32
+}
+
+func (k *softKey) approver() vault.Approver {
+	spki, _ := x509.MarshalPKIXPublicKey(&k.key.PublicKey)
+	return vault.Approver{CredentialID: "e2e-key", PublicKey: spki, Alg: webauthn.AlgES256, Label: "e2e security key"}
+}
+
+// sign returns a signer for origin (the panel's) with the given authenticator flags: 0x01 = present only
+// (a tap), 0x05 = present and verified (Face ID).
+func (k *softKey) sign(origin string, flags byte) func([]byte) webauthn.Assertion {
+	b64 := base64.RawURLEncoding
+	return func(challenge []byte) webauthn.Assertion {
+		k.count++
+		u, _ := url.Parse(origin)
+		rp := sha256.Sum256([]byte(u.Hostname()))
+		auth := binary.BigEndian.AppendUint32(append(rp[:], flags), k.count)
+		cd, _ := json.Marshal(map[string]string{"type": "webauthn.get", "challenge": b64.EncodeToString(challenge), "origin": origin})
+		h := sha256.Sum256(cd)
+		d := sha256.Sum256(append(append([]byte{}, auth...), h[:]...))
+		sig, _ := ecdsa.SignASN1(rand.Reader, k.key, d[:])
+		return webauthn.Assertion{CredentialID: "e2e-key", ClientDataJSON: b64.EncodeToString(cd),
+			AuthenticatorData: b64.EncodeToString(auth), Signature: b64.EncodeToString(sig)}
+	}
+}
+
+// panelOrigin is the origin of a panel link (https://rubi-panel.com unless the daemon says otherwise).
+func panelOrigin(link string) string {
+	if i := strings.Index(link, "/#"); i > 0 {
+		return link[:i]
+	}
+	return link
 }
 
 func panel(link string) (*panelclient.Client, error) {
@@ -427,10 +471,16 @@ func run(dir, rubiBin, homeBin, plugin string) (err error) {
 	if err != nil {
 		return err
 	}
-	if _, err := pc.PairWithPassword(pw); err != nil {
+	ek, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return err
+	}
+	passkey := &softKey{key: ek}
+	if _, err := pc.PairWithPassword(pw, passkey.approver()); err != nil {
 		return fmt.Errorf("pair: %w", err)
 	}
-	step("Rubi paired with a password")
+	origin := panelOrigin(fmt.Sprint(st["link"]))
+	step("Rubi paired with a password and a software passkey (panel origin %s)", origin)
 
 	settings := func() (*panelclient.Client, error) {
 		out, err := ag.call("rubi_link", map[string]any{"purpose": "settings"})
@@ -620,6 +670,72 @@ func run(dir, rubiBin, homeBin, plugin string) (err error) {
 		return fmt.Errorf("timeout: %+v", r)
 	}
 	step("3 timeout -> deny (%s): %q", r.Took, r.Message)
+
+	// Case 5: a safe command (claude-code.run_safe, level tap) approved with a passkey tap (UP=1, UV=0)
+	// -> allow.
+	if ch, err = ask("ls -la src"); err != nil {
+		return err
+	}
+	if id, url, err = approvalFor("ls -la src"); err != nil {
+		return err
+	}
+	if apc, err = panel(url); err != nil {
+		return err
+	}
+	if ainfo, err = apc.ApprovalInfo(id); err != nil {
+		return err
+	}
+	if ainfo.Approval.Kind != "claude-code.run_safe" || ainfo.Approval.Level != "tap" {
+		return fmt.Errorf("ls -la src should be a tap-level run_safe approval: %+v", ainfo.Approval)
+	}
+	if res, err := apc.ApproveWithPasskey(id, "allow", passkey.sign(origin, 0x01)); err != nil || res["state"] != "executed" {
+		return fmt.Errorf("tap on a safe command: %v %v", res, err)
+	}
+	r = <-ch
+	report("tap", r)
+	if r.Behavior != "allow" {
+		return fmt.Errorf("tap on a safe command: %+v", r)
+	}
+	step("5 quick-tap on a safe command -> allow (%s)", r.Took)
+
+	// Case 6: the same tap on a command that isn't safe (claude-code.run, strong) is refused; the request
+	// stays open, and nothing is allowed. The user then denies it.
+	if ch, err = ask("rm -rf dist"); err != nil {
+		return err
+	}
+	if id, url, err = approvalFor("rm -rf dist"); err != nil {
+		return err
+	}
+	if apc, err = panel(url); err != nil {
+		return err
+	}
+	if ainfo, err = apc.ApprovalInfo(id); err != nil {
+		return err
+	}
+	if ainfo.Approval.Kind != "claude-code.run" || ainfo.Approval.Level != "strong" {
+		return fmt.Errorf("rm -rf dist should be a strong run approval: %+v", ainfo.Approval)
+	}
+	res6, err6 := apc.ApproveWithPasskey(id, "allow", passkey.sign(origin, 0x01))
+	if err6 == nil || !strings.Contains(err6.Error(), "verification") {
+		return fmt.Errorf("a tap approved a strong command: %v %v", res6, err6)
+	}
+	select {
+	case r = <-ch:
+		return fmt.Errorf("the hook answered after a refused tap: %+v", r)
+	case <-time.After(2 * time.Second):
+	}
+	if ainfo, err = apc.ApprovalInfo(id); err != nil || ainfo.Approval.State != "pending" {
+		return fmt.Errorf("after a refused tap the request should still be pending: %+v %v", ainfo.Approval, err)
+	}
+	if _, err := apc.Deny(id); err != nil {
+		return fmt.Errorf("deny after tap: %w", err)
+	}
+	r = <-ch
+	report("tap!run", r)
+	if r.Behavior != "deny" {
+		return fmt.Errorf("tap on a strong command, then deny: %+v", r)
+	}
+	step("6 quick-tap on a non-safe command -> rejected (%q), request stayed pending, then deny", err6.Error())
 
 	// Case 4: Rubi locked -> deny.
 	if _, err := ag.call("rubi_lock", nil); err != nil {
