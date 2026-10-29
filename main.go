@@ -15,9 +15,9 @@ import (
 	"github.com/Deikus-LXXVII/rubi/sdk/rubiplugin"
 )
 
-// PublisherKey is set at build time (-X main.PublisherKey=<base64 SPKI>): the body line of the
-// publisher's publisher-key.pub.pem.
-var PublisherKey string
+// PublisherKey is the Rubi-Project plugin signing key (public half, publisher-key.pub.pem). A var, not a
+// const, only so the end-to-end test can sign with a throwaway key (-X main.PublisherKey=...).
+var PublisherKey = "MCowBQYDK2VwAyEAxeDfKAkO77JdARN7Y2jJT3tXw9mN+GqqH8R5mhcxt8c="
 
 const (
 	kindRun  = "claude-code.run"      // any command: passkey or password in the Rubi panel

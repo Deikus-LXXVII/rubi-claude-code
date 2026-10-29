@@ -110,8 +110,8 @@ e2e/run.sh   # Linux, needs `unshare -rn`: a real Rubi, Rubi Home and this plugi
 ```
 
 `go.mod` points at `../rubi` (`replace`) until a Rubi release has `Host.WaitApproval` and Rubi Home's
-`claude` capability; drop the `replace` then. The release build sets the publisher key with
-`-ldflags "-X main.PublisherKey=…"`.
+`claude` capability; drop the `replace` then. `PublisherKey` is the Rubi-Project plugin key (public half in
+`publisher-key.pub.pem`); only the end-to-end test overrides it, with a throwaway key.
 
 The end-to-end test builds everything with `-race`, runs it in a network namespace with only loopback,
 installs the plugin from a signed local store, pairs Rubi Home through the panel API and checks four
