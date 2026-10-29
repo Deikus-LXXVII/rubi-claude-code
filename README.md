@@ -117,9 +117,10 @@ e2e/run.sh   # Linux, needs `unshare -rn`: a real Rubi, Rubi Home and this plugi
 `publisher-key.pub.pem`); only the end-to-end test overrides it, with a throwaway key.
 
 The end-to-end test builds everything with `-race`, runs it in a network namespace with only loopback,
-installs the plugin from a signed local store, pairs Rubi Home through the panel API and checks four
+installs the plugin from a signed local store, pairs Rubi Home through the panel API and checks six
 endings through the real `rubi-home claude-hook`: approve → allow, deny → deny with the reason, no answer
-→ deny, and Rubi locked → deny.
+→ deny, a passkey tap on a safe command → allow, a tap on any other command → refused (it stays pending),
+and Rubi locked → deny.
 
 ## License
 
