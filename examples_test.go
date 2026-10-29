@@ -32,9 +32,13 @@ func TestManagedSettingsExample(t *testing.T) {
 	if err := json.Unmarshal(b, &s); err != nil {
 		t.Fatal(err)
 	}
-	if !s.AllowManagedHooksOnly || s.DisableAutoMode != "disable" ||
-		s.Permissions.DisableBypassPermissionsMode != "disable" {
+	if !s.AllowManagedHooksOnly || s.DisableAutoMode != "disable" {
 		t.Fatalf("the policy must keep users and Claude from replacing the hook or skipping it: %+v", s)
+	}
+	// bypassPermissions stays allowed by default (the owner's choice); turning it off is the optional
+	// hardening the README describes.
+	if s.Permissions.DisableBypassPermissionsMode != "" {
+		t.Fatalf("the default example turns off bypassPermissions: %q", s.Permissions.DisableBypassPermissionsMode)
 	}
 	// Users keep their own allow rules (a deliberate tradeoff, see the README).
 	var raw map[string]any

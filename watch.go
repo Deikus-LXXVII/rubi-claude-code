@@ -58,7 +58,7 @@ type host interface {
 }
 
 const (
-	pollWait     = 25 * time.Second // the longest claude.next waits
+	pollWait     = 25 * time.Second // the longest claude.next and claude-sessions.next wait
 	refreshEvery = 30 * time.Second // how often the list of computers is read again
 	maxBackoff   = time.Minute
 )
@@ -108,30 +108,45 @@ func (w *watcher) refresh(ctx context.Context) {
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	ops := []string{opNext}
+	if w.s != nil {
+		ops = append(ops, opSessionsNext)
+	}
 	for _, d := range devs {
-		if w.polling[d.ID] {
-			continue
+		for _, op := range ops {
+			key := d.ID + "|" + op
+			if w.polling[key] {
+				continue
+			}
+			w.polling[key] = true
+			w.wg.Go(func() {
+				w.poll(ctx, d, op)
+				w.mu.Lock()
+				delete(w.polling, key)
+				w.mu.Unlock()
+			})
 		}
-		w.polling[d.ID] = true
-		w.wg.Go(func() {
-			w.poll(ctx, d)
-			w.mu.Lock()
-			delete(w.polling, d.ID)
-			w.mu.Unlock()
-		})
 	}
 }
 
-// poll asks one computer for requests until ctx ends or the computer is no longer paired. While it
-// polls, the helper counts Rubi as present; when it stops, the helper denies what is waiting.
-func (w *watcher) poll(ctx context.Context, d rubiplugin.HomeDevice) {
+// The two polls: permission requests (capability "claude") and what sessions say (capability
+// "claude-sessions").
+const (
+	opNext         = "claude.next"
+	opSessionsNext = "claude-sessions.next"
+)
+
+// poll asks one computer for permission requests (opNext) or session messages (opSessionsNext) until ctx
+// ends or the computer is no longer paired. While Rubi polls opNext, the helper counts it as present;
+// when that stops, the helper denies what is waiting.
+func (w *watcher) poll(ctx context.Context, d rubiplugin.HomeDevice, op string) {
 	failures := 0
 	for ctx.Err() == nil {
 		var out struct {
 			Request *request `json:"request"`
 			Out     *outMsg  `json:"out"`
 		}
-		err := w.h.HomeCall(ctx, d.ID, "claude.next", map[string]any{"wait_seconds": int(pollWait / time.Second)}, &out)
+		err := w.h.HomeCall(ctx, d.ID, op, map[string]any{"wait_seconds": int(pollWait / time.Second)}, &out)
 		if err != nil {
 			if ctx.Err() != nil {
 				return
@@ -151,10 +166,10 @@ func (w *watcher) poll(ctx context.Context, d rubiplugin.HomeDevice) {
 			continue
 		}
 		failures = 0
-		if r := out.Request; r != nil {
+		if r := out.Request; r != nil && op == opNext {
 			w.wg.Go(func() { w.handle(ctx, d, *r) })
 		}
-		if o := out.Out; o != nil && w.s != nil {
+		if o := out.Out; o != nil && op == opSessionsNext && w.s != nil {
 			w.wg.Go(func() { w.s.route(ctx, w.h, d, *o) })
 		}
 	}

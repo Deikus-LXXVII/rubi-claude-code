@@ -23,7 +23,7 @@ func boundFixture(t *testing.T) (*fakeHost, *sisters, string) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	if _, err := s.bindTool(ctx, f, bindIn{Sister: "Citri", SessionID: "local_a"}); err != nil {
+	if _, err := s.bindTool(ctx, f, bindIn{VerifiedAgent: "Citri", SessionID: "local_a"}); err != nil {
 		t.Fatal(err)
 	}
 	if len(f.submits) != 1 || f.submits[0].Kind != kindBind {
@@ -107,7 +107,7 @@ func TestBindSendRoute(t *testing.T) {
 func TestBindOneBotPerSession(t *testing.T) {
 	f, s, code := boundFixture(t)
 	ctx := context.Background()
-	if _, err := s.bindTool(ctx, f, bindIn{Sister: "Other", SessionID: "cli-1"}); err == nil {
+	if _, err := s.bindTool(ctx, f, bindIn{VerifiedAgent: "Other", SessionID: "cli-1"}); err == nil {
 		t.Fatal("a second Bot could ask to bind the same session")
 	}
 	if _, err := s.unbindTool(ctx, f, unbindIn{Sister: "Citri", BindCode: "nope"}); err == nil {
@@ -229,5 +229,70 @@ func TestPanel(t *testing.T) {
 	}
 	if _, err := s.panel(f, "unbind", json.RawMessage(`{"sister":"Citri"}`)); err != nil || len(s.st.bindings()) != 0 {
 		t.Fatal("unbind from the panel failed")
+	}
+}
+
+// The binding is made for the Bot Rubi verified, never for a name the caller typed; a call Rubi verified
+// as another Bot can't use someone else's binding.
+func TestBindNeedsTheVerifiedBot(t *testing.T) {
+	f, s, code := boundFixture(t)
+	ctx := context.Background()
+	n := len(f.submits)
+	if _, err := s.bindTool(ctx, f, bindIn{Agent: "Mallory", SessionID: "cli-3"}); err == nil || !strings.Contains(err.Error(), "rubi_agent_code") {
+		t.Fatalf("a self-declared name bound: %v", err)
+	}
+	if len(f.submits) != n {
+		t.Fatal("an unverified bind asked the user")
+	}
+	if _, err := s.bindTool(ctx, f, bindIn{Agent: "Mallory", VerifiedAgent: "Vega", SessionID: "cli-3"}); err != nil {
+		t.Fatal(err)
+	}
+	var tk bindTicket
+	raw, _ := json.Marshal(f.submits[len(f.submits)-1].Payload)
+	_ = json.Unmarshal(raw, &tk)
+	if tk.Sister != "Vega" || f.submits[len(f.submits)-1].Preview.(map[string]any)["bot"] != "Vega" {
+		t.Fatalf("bound for %q, not the verified Bot", tk.Sister)
+	}
+	if _, err := s.sendTool(ctx, f, sendIn{Sister: "Citri", BindCode: code, Text: "hi", VerifiedAgent: "Vega"}); err == nil {
+		t.Fatal("another verified Bot used Citri's binding")
+	}
+	if _, err := s.sendTool(ctx, f, sendIn{Sister: "Citri", BindCode: code, Text: "hi", VerifiedAgent: "citri"}); err != nil {
+		t.Fatalf("the binding's own Bot: %v", err)
+	}
+	if _, err := s.unbindTool(ctx, f, unbindIn{Sister: "Citri", BindCode: code, VerifiedAgent: "Vega"}); err == nil {
+		t.Fatal("another verified Bot unbound Citri")
+	}
+}
+
+// Session messages come through their own poll (claude-sessions.next), not with permission requests.
+func TestWatcherPollsSessionsSeparately(t *testing.T) {
+	f, s, _ := boundFixture(t)
+	f.mu.Lock()
+	f.outs = []outMsg{{ID: "o1", Kind: "reply", SessionID: "cli-1", To: "Citri", Text: "done"}}
+	f.next = func(ctx context.Context, _ string) (*request, error) { <-ctx.Done(); return nil, ctx.Err() }
+	n := len(f.events)
+	f.mu.Unlock()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { newWatcher(f, s).run(ctx); close(done) }()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		f.mu.Lock()
+		got := len(f.events) > n
+		f.mu.Unlock()
+		if got || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	<-done
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.events) <= n || f.events[n]["_type"] != eventReply || f.events[n]["_agent"] != "Citri" {
+		t.Fatalf("reply not routed: %+v", f.events[n:])
+	}
+	if !slices.Contains(f.ops, "claude.next") || !slices.Contains(f.ops, "claude-sessions.next") {
+		t.Fatalf("ops: %v", f.ops)
 	}
 }

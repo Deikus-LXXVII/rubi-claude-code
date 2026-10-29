@@ -25,7 +25,9 @@ Code runs without asking (its read-only set, or allow rules in managed settings)
 ## Permissions
 
 - **Rubi Home: `claude`.** The plugin can answer Claude Code's permission requests on your paired
-  computers. The install screen says so.
+  computers.
+- **Rubi Home: `claude-sessions`.** The plugin can list the Claude Code sessions on your paired computers
+  and pass messages to and from them; this part can't approve anything. The install screen shows both.
 - **No network access**, no files, no secrets.
 - **Actions.** `claude-code.run` (any command; passkey or password, and you can't lower it) and
   `claude-code.run_safe` (a few read-only commands such as `ls`, `cat`, `git status` with plain
@@ -61,8 +63,22 @@ The check reads the command line only. A build, test or script it starts (`make`
 page in the Rubi panel to see and revoke trusts; your Bot can list and revoke them too
 (`claude_code_mandates`), but never add one.
 
-A session running with `bypassPermissions` (a mode the Claude desktop app can set per session) never
-asks, so neither approvals nor trusts apply to it. The example managed settings turn that mode off.
+### Sessions with bypassPermissions
+
+The example managed settings leave `bypassPermissions` allowed (a mode the Claude desktop app can set per
+session). Such a session never asks before a command, so the `PermissionRequest` hook never runs there:
+**neither Rubi approvals nor 2-hour trusts apply to it**, and Claude runs every command without you.
+Its session hooks still run (`SessionStart`, `UserPromptSubmit`, `Stop`, `SessionEnd`), so it shows up in
+`claude_code_sessions` (with a note), and Bots' messages, replies and asks work as in any other session.
+
+Optional hardening: to make every session go through Rubi, turn the mode off in the managed settings,
+inside `"permissions"`:
+
+```json
+"disableBypassPermissionsMode": "disable"
+```
+
+Then a session can't start in, or switch to, `bypassPermissions`.
 
 ## Bots and sessions
 
@@ -72,7 +88,9 @@ the Claude desktop app's session list and Claude Code's transcripts on that comp
 them, it doesn't run Claude).
 
 1. The Bot calls `claude_code_sessions` and picks its session (project, main or sub-session, state).
-2. `claude_code_bind` asks you once, with your passkey. A session talks to one Bot; binding again
+2. `claude_code_bind` (the Bot passes its name as `rubi_agent` and the `agent_code` of its latest Rubi
+   webhook as `rubi_agent_code`; Rubi checks them and tells the plugin the Bot's registered name, so a
+   Bot can't bind as another) asks you once, with your passkey. A session talks to one Bot; binding again
    replaces the Bot's binding. Desktop sessions are followed by the app's id, so a binding survives the
    app restarting the session.
 3. `claude_code_send` (at most 4000 characters, 30 an hour) queues a message. The session's hooks hand it
@@ -90,7 +108,7 @@ copy it to `~/.claude/skills/rubi-sisters/` on the Mac.
 
 ## Set up on a Mac
 
-You need Rubi v0.11.0 or later with this plugin installed, and Claude Code v2.1.295 or later (for
+You need Rubi v0.12.0 or later with this plugin installed, and Claude Code v2.1.295 or later (for
 `onFailure`).
 
 1. **Install Rubi Home** (skip if you have it):
@@ -135,7 +153,8 @@ You need Rubi v0.11.0 or later with this plugin installed, and Claude Code v2.1.
      nor Claude can add one that replaces Rubi's. The example leaves out `allowManagedPermissionRulesOnly`,
      so allow rules in your own or a project's settings still let matching commands run without asking
      Rubi; add it if you want every such command to go through Rubi, at the cost of more approvals.
-   - turns off bypass-permissions and auto mode;
+   - turns off auto mode and leaves bypassPermissions allowed (see
+     [Sessions with bypassPermissions](#sessions-with-bypasspermissions) for turning it off too);
    - denies Claude's edits to `~/.claude`, `~/.claude.json`, a project's `.claude/`, the managed settings
      directory, the hook binary and Rubi Home's files;
    - a `ConfigChange` hook that keeps settings edits from applying to a running session;
@@ -154,8 +173,10 @@ asks in its own prompt again.
   (it can only ask) or change Rubi Home's files; it can't answer for you.
 - Read and Edit deny rules cover Claude's file tools and the file commands Claude Code recognizes in Bash,
   not every program a command starts. That is why every Bash command needs your approval.
-- Bot names are what each Bot says it is. A binding's code, handed only to the Bot that was bound,
-  keeps other Bots from sending as it; events go to the bound Bot by name.
+- A binding is made for the Bot Rubi verified (`rubi_agent` with the `agent_code` from its own webhook;
+  Rubi passes the plugin the registered name), not a name the Bot typed. Its code, handed only to that
+  Bot, keeps other Bots from sending as it. Replies and asks go to that Bot's webhook only: if it isn't
+  connected any more, Rubi drops them (and audits that) instead of waking another Bot.
 - `git diff` and `git log` honour the repository's configuration (for example an external diff tool), and
   `cat` follows symlinks; an approval for `run_safe` still shows the exact command and directory.
 
@@ -166,8 +187,10 @@ go build -o claude-code . && go test -race ./...
 e2e/run.sh   # Linux, needs `unshare -rn`: a real Rubi, Rubi Home and this plugin, offline
 ```
 
-The plugin builds on Rubi v0.11.0 (`Host.WaitApproval` and Rubi Home's `claude` capability). The e2e
-builds Rubi and Rubi Home from a core checkout, `../rubi` by default or `RUBI_REPO`. `PublisherKey` is the Rubi-Project plugin key (public half in
+The plugin builds on the Rubi v0.11.0 SDK (`Host.WaitApproval`) and needs a v0.12.0 core at run time
+(Rubi Home's `claude-sessions` capability, strict delivery of addressed events and `rubi_verified_agent`).
+The e2e builds Rubi and Rubi Home from a core checkout, `../rubi` by default or `RUBI_REPO`; it needs a
+v0.12.0 core (the `citri/claude-m2` branch until v0.12.0 is tagged). `PublisherKey` is the Rubi-Project plugin key (public half in
 `publisher-key.pub.pem`); only the end-to-end test overrides it, with a throwaway key.
 
 The end-to-end test builds everything with `-race`, runs it in a network namespace with only loopback,

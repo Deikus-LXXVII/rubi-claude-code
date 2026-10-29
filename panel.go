@@ -87,7 +87,7 @@ func (s *sisters) panel(h sisterHost, op string, args json.RawMessage) (any, err
 		})
 	}
 	return map[string]any{"title": "Claude Code", "refresh": 30,
-		"note": "Sessions running with bypassPermissions never ask, so approvals and trusts here don't apply to them.",
+		"note": "Sessions running with bypassPermissions never ask, so approvals and trusts here don't apply to them (their messages to and from Bots still work).",
 		"sections": []map[string]any{
 			{"title": "Trusted sessions (2 hours)", "note": "Rubi allows these sessions' plain commands by itself; push, --force, sudo, network, secrets and deleting outside the directory still ask.", "empty": "None.", "items": mitems},
 			{"title": "Bots bound to sessions", "note": "Each Bot talks only to its session.", "empty": "None.", "items": bitems},

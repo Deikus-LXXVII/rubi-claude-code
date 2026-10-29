@@ -4,7 +4,8 @@
 // permission to the Rubi Home helper on that computer. This plugin picks the requests up (claude.next),
 // asks you to approve them in Rubi, and answers the helper (claude.decide): allow once you approved,
 // deny when you deny, cancel or let the approval expire. The helper denies by itself when Rubi doesn't
-// answer in time or is locked. See README.md.
+// answer in time or is locked. Bots can also bind to a session and message it (claude-sessions.list,
+// .send, .next; Rubi Home's "claude-sessions" capability). See README.md.
 package main
 
 import (
@@ -36,9 +37,9 @@ func manifest() rubiplugin.Manifest {
 		Needs:       "Rubi Home on the computer where Claude Code runs, and Claude Code's hook set up (see the plugin's README).",
 		Publisher:   rubiplugin.Publisher{Name: "Rubi-Project", Key: PublisherKey},
 		Source:      "https://github.com/Deikus-LXXVII/rubi-claude-code",
-		// The first core with Rubi Home's "claude" capability, approval.wait and the tap level (unreleased;
-		// see go.mod).
-		MinRubi: "v0.11.0",
+		// v0.12.0: Rubi Home's "claude-sessions" capability, strict delivery of addressed events and the
+		// verified caller (rubi_verified_agent) that binding relies on.
+		MinRubi: "v0.12.0",
 		Entry:   "claude-code",
 		Actions: []rubiplugin.Action{
 			{Kind: kindRun, Title: "Run a command in Claude Code", DefaultLevel: rubiplugin.Strong, Locked: true, Options: trust},
@@ -56,7 +57,7 @@ func manifest() rubiplugin.Manifest {
 			{Type: eventAsk, Untrusted: []string{"text", "kind", "title", "directory", "computer"}},
 		},
 		Panel: "view",
-		Home:  []string{"claude"},
+		Home:  []string{"claude", "claude-sessions"},
 	}
 }
 

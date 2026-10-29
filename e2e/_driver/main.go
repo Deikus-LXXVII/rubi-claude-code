@@ -529,13 +529,13 @@ func run(dir, rubiBin, homeBin, plugin string) (err error) {
 		return err
 	}
 	preview, _ := json.Marshal(info.Approval)
-	if !strings.Contains(string(preview), "Claude Code's permission requests") {
+	if !strings.Contains(string(preview), "Claude Code's permission requests") || !strings.Contains(string(preview), "listing the Claude Code sessions") {
 		return fmt.Errorf("the install screen doesn't say what the plugin may do: %s", preview)
 	}
 	if res, err := ipc.ApproveWithPassword(fmt.Sprint(out["approval_id"]), info.Approval.Options[0].Key, pw); err != nil || res["state"] != "executed" {
 		return fmt.Errorf("install: %v %v", res, err)
 	}
-	step("claude-code installed from the signed local catalog (install screen names the claude capability)")
+	step("claude-code installed from the signed local catalog (install screen names the claude and claude-sessions capabilities)")
 
 	pairOut, err := exec.Command(homeBin, "pair").CombinedOutput()
 	if err != nil {
@@ -850,7 +850,28 @@ func run(dir, rubiBin, homeBin, plugin string) (err error) {
 	}
 	step("7 claude_code_sessions finds the desktop app's session (%s, %s)", s7["repo_key"], s7["role"])
 	sister := "Main"
-	bo, err := ag.call("claude_code_bind", map[string]any{"sister": sister, "session_id": "local_e2e"})
+	// A name the Bot types proves nothing: binding needs the agent code from the Bot's own webhook, and
+	// Rubi passes the plugin the registered name.
+	if _, err := ag.call("claude_code_bind", map[string]any{"sister": sister, "rubi_agent": sister, "rubi_verified_agent": sister, "session_id": "local_e2e"}); err == nil {
+		return errors.New("a bind without a proof (and a forged rubi_verified_agent) went through")
+	}
+	if _, err := ag.call("claude_code_bind", map[string]any{"rubi_agent": sister, "rubi_agent_code": "wrong", "session_id": "local_e2e"}); err == nil {
+		return errors.New("a bind with a wrong agent code went through")
+	}
+	var agentCode string
+	if err := waitFor("Main's agent code", 15*time.Second, func() (bool, error) {
+		wh.mu.Lock()
+		agentCode = wh.code
+		wh.mu.Unlock()
+		if agentCode == "" {
+			_, err := ag.call("rubi_verify", map[string]any{"agent": sister})
+			return false, err
+		}
+		return true, nil
+	}); err != nil {
+		return err
+	}
+	bo, err := ag.call("claude_code_bind", map[string]any{"rubi_agent": "main", "rubi_agent_code": agentCode, "session_id": "local_e2e"})
 	if err != nil {
 		return err
 	}
@@ -865,8 +886,8 @@ func run(dir, rubiBin, homeBin, plugin string) (err error) {
 	if err != nil {
 		return err
 	}
-	if binfo.Approval.Kind != "claude-code.bind" || binfo.Approval.Level != "strong" {
-		return fmt.Errorf("bind should be a strong approval: %+v", binfo.Approval)
+	if binfo.Approval.Kind != "claude-code.bind" || binfo.Approval.Level != "strong" || !strings.Contains(string(binfo.Approval.Preview), `"bot":"Main"`) {
+		return fmt.Errorf("bind should be a strong approval for the registered name Main: %+v", binfo.Approval)
 	}
 	if _, err := bpc.ApproveWithPasskey(fmt.Sprint(bo["approval_id"]), "bind", passkey.sign(origin, 0x01)); err == nil {
 		return errors.New("a tap approved a binding")
@@ -879,7 +900,7 @@ func run(dir, rubiBin, homeBin, plugin string) (err error) {
 		return err
 	}
 	bindCode := fmt.Sprint(bound["bind_code"])
-	step("7 bound with one strong approval (a tap is refused); the Bot got claude_bound")
+	step("7 bound for the verified Bot (no proof or a wrong code refused) with one strong approval (a tap is refused); the Bot got claude_bound")
 	if _, err := ag.call("claude_code_send", map[string]any{"sister": sister, "bind_code": "bc_wrong", "text": "x"}); err == nil {
 		return errors.New("send with a wrong bind code went through")
 	}
@@ -915,6 +936,26 @@ func run(dir, rubiBin, homeBin, plugin string) (err error) {
 		return fmt.Errorf("reply %v, ask %v", rep, ask7)
 	}
 	step("7 Claude's answer came back as claude_reply, its rubi-ask as claude_ask")
+	// The same session switched to bypassPermissions: its session hooks still bring messages in and the
+	// answer out (only PermissionRequest stops firing in that mode).
+	if _, err := ag.call("claude_code_send", map[string]any{"sister": sister, "bind_code": bindCode, "text": "e2e: bypass check"}); err != nil {
+		return err
+	}
+	ups := map[string]any{"session_id": "cli-e2e", "transcript_path": filepath.Join(dir, "none.jsonl"), "cwd": proj,
+		"permission_mode": "bypassPermissions", "hook_event_name": "UserPromptSubmit", "prompt": "carry on"}
+	o3, err := hookEvent(homeBin, helperDir, ups)
+	if err != nil || !strings.Contains(o3, "additionalContext") || !strings.Contains(o3, "e2e: bypass check") {
+		return fmt.Errorf("UserPromptSubmit in a bypassPermissions session: %q %v", o3, err)
+	}
+	stop["permission_mode"], stop["stop_hook_active"] = "bypassPermissions", false
+	stop["last_assistant_message"] = "bypass ok"
+	if o4, err := hookEvent(homeBin, helperDir, stop); err != nil || strings.Contains(o4, "block") {
+		return fmt.Errorf("Stop in a bypassPermissions session: %q %v", o4, err)
+	}
+	if _, err := eventFor("the claude_reply from the bypass session", "claude_reply", func(d map[string]any) bool { return d["text"] == "bypass ok" }); err != nil {
+		return err
+	}
+	step("7 in bypassPermissions too, UserPromptSubmit brings the message in and Stop sends the answer back")
 
 	// Case 8: "trust this session for 2 hours": the next plain commands are allowed without asking;
 	// a push still asks.

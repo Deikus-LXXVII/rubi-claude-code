@@ -26,7 +26,9 @@ type fakeHost struct {
 	decided  []decided
 	events   []map[string]any
 	decideFn func(device string, a answer) error
-	sessions []session // claude.sessions answers
+	sessions []session // claude-sessions.list answers
+	outs     []outMsg  // claude-sessions.next answers, one per call
+	ops      []string  // every op called
 	sent     []map[string]any
 	audits   []string
 	auditLog []map[string]any
@@ -41,6 +43,9 @@ type decided struct {
 func (f *fakeHost) HomeDevices() ([]rubiplugin.HomeDevice, error) { return f.devices, nil }
 
 func (f *fakeHost) HomeCall(ctx context.Context, device, op string, args, out any) error {
+	f.mu.Lock()
+	f.ops = append(f.ops, op)
+	f.mu.Unlock()
 	switch op {
 	case "claude.next":
 		r, err := f.next(ctx, device)
@@ -59,12 +64,28 @@ func (f *fakeHost) HomeCall(ctx context.Context, device, op string, args, out an
 			return fn(device, a)
 		}
 		return nil
-	case "claude.sessions":
+	case "claude-sessions.next": // what a session said, else wait a little like the helper's long poll
+		f.mu.Lock()
+		if len(f.outs) > 0 {
+			o := f.outs[0]
+			f.outs = f.outs[1:]
+			f.mu.Unlock()
+			b, _ := json.Marshal(map[string]any{"out": o})
+			return json.Unmarshal(b, out)
+		}
+		f.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(20 * time.Millisecond):
+		}
+		return json.Unmarshal([]byte(`{"out":null}`), out)
+	case "claude-sessions.list":
 		f.mu.Lock()
 		b, _ := json.Marshal(map[string]any{"sessions": f.sessions})
 		f.mu.Unlock()
 		return json.Unmarshal(b, out)
-	case "claude.send":
+	case "claude-sessions.send":
 		m := args.(map[string]any)
 		f.mu.Lock()
 		f.sent = append(f.sent, m)
@@ -327,7 +348,7 @@ func TestPollsEveryComputerAndStops(t *testing.T) {
 
 func TestManifest(t *testing.T) {
 	m := manifest()
-	if m.ID != "claude-code" || len(m.Egress) != 0 || len(m.Secrets) != 0 || len(m.Home) != 1 || m.Home[0] != "claude" || m.Hooks {
+	if m.ID != "claude-code" || len(m.Egress) != 0 || len(m.Secrets) != 0 || len(m.Home) != 2 || m.Home[0] != "claude" || m.Home[1] != "claude-sessions" || m.Hooks {
 		t.Fatalf("permissions: %+v", m)
 	}
 	run, _ := m.Action(kindRun)
