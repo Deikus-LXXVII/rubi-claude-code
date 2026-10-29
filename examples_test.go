@@ -18,10 +18,9 @@ func TestManagedSettingsExample(t *testing.T) {
 		Timeout                  int
 	}
 	var s struct {
-		AllowManagedHooksOnly           bool
-		AllowManagedPermissionRulesOnly bool
-		DisableAutoMode                 string
-		Permissions                     struct {
+		AllowManagedHooksOnly bool
+		DisableAutoMode       string
+		Permissions           struct {
 			DisableBypassPermissionsMode string
 			Deny                         []string
 		}
@@ -33,9 +32,15 @@ func TestManagedSettingsExample(t *testing.T) {
 	if err := json.Unmarshal(b, &s); err != nil {
 		t.Fatal(err)
 	}
-	if !s.AllowManagedHooksOnly || !s.AllowManagedPermissionRulesOnly || s.DisableAutoMode != "disable" ||
+	if !s.AllowManagedHooksOnly || s.DisableAutoMode != "disable" ||
 		s.Permissions.DisableBypassPermissionsMode != "disable" {
 		t.Fatalf("the policy must keep users and Claude from replacing the hook or skipping it: %+v", s)
+	}
+	// Users keep their own allow rules (a deliberate tradeoff, see the README).
+	var raw map[string]any
+	_ = json.Unmarshal(b, &raw)
+	if _, ok := raw["allowManagedPermissionRulesOnly"]; ok {
+		t.Error("the example sets allowManagedPermissionRulesOnly; the README says it doesn't")
 	}
 	pr := s.Hooks["PermissionRequest"]
 	if len(pr) != 1 || pr[0].Matcher != "^Bash$" || len(pr[0].Hooks) != 1 {

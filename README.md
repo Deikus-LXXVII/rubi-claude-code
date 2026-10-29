@@ -31,7 +31,7 @@ Code runs without asking (its read-only set, or allow rules in managed settings)
   `claude-code.run_safe` (a few read-only commands such as `ls`, `cat`, `git status` with plain
   arguments; passkey by default, and you may lower it). Anything the classifier isn't sure about is
   `run`.
-- Its approvals have their own hourly budget (60), apart from the 30 per hour your other actions share.
+- Its approvals count toward Rubi's limit of 30 approved actions per hour, shared with your other actions.
 
 The approval link reaches you through your Bot: subscribe it to the plugin's `approval_needed` event (Rubi
 asks you to approve that once). The event carries the command and Claude's own description, marked as
@@ -80,8 +80,10 @@ You need Rubi v0.11.0 or later with this plugin installed, and Claude Code v2.1.
    - runs `/usr/local/bin/rubi-home claude-hook` for every Bash permission request, with a 300-second
      timeout and `onFailure: block` (Rubi Home gives up at 280 seconds, so Claude Code's timeout never
      decides);
-   - `allowManagedHooksOnly` and `allowManagedPermissionRulesOnly`: hooks and allow rules from your own,
-     project or local settings don't apply, so neither you nor Claude can add one that skips Rubi;
+   - `allowManagedHooksOnly`: hooks from your own, project or local settings don't apply, so neither you
+     nor Claude can add one that replaces Rubi's. The example leaves out `allowManagedPermissionRulesOnly`,
+     so allow rules in your own or a project's settings still let matching commands run without asking
+     Rubi; add it if you want every such command to go through Rubi, at the cost of more approvals.
    - turns off bypass-permissions and auto mode;
    - denies Claude's edits to `~/.claude`, `~/.claude.json`, a project's `.claude/`, the managed settings
      directory, the hook binary and Rubi Home's files;
