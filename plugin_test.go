@@ -26,6 +26,11 @@ type fakeHost struct {
 	decided  []decided
 	events   []map[string]any
 	decideFn func(device string, a answer) error
+	sessions []session // claude.sessions answers
+	sent     []map[string]any
+	audits   []string
+	auditLog []map[string]any
+	state    json.RawMessage
 }
 
 type decided struct {
@@ -54,8 +59,49 @@ func (f *fakeHost) HomeCall(ctx context.Context, device, op string, args, out an
 			return fn(device, a)
 		}
 		return nil
+	case "claude.sessions":
+		f.mu.Lock()
+		b, _ := json.Marshal(map[string]any{"sessions": f.sessions})
+		f.mu.Unlock()
+		return json.Unmarshal(b, out)
+	case "claude.send":
+		m := args.(map[string]any)
+		f.mu.Lock()
+		f.sent = append(f.sent, m)
+		f.mu.Unlock()
+		b, _ := json.Marshal(map[string]any{"queued": true, "id": "msg_1", "waiting": 1})
+		return json.Unmarshal(b, out)
 	}
 	return errors.New("unexpected op " + op)
+}
+
+func (f *fakeHost) EmitTo(agent, typ string, data map[string]any) (string, error) {
+	data["_agent"] = agent
+	return f.Emit(typ, data)
+}
+
+func (f *fakeHost) Audit(event string, fields map[string]any) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.audits = append(f.audits, event)
+	f.auditLog = append(f.auditLog, fields)
+}
+
+func (f *fakeHost) LoadState(v any) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.state) == 0 {
+		return nil
+	}
+	return json.Unmarshal(f.state, v)
+}
+
+func (f *fakeHost) SaveState(v any) error {
+	b, err := json.Marshal(v)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.state = b
+	return err
 }
 
 func (f *fakeHost) Submit(_ context.Context, r rubiplugin.Request) (map[string]any, error) {
@@ -101,7 +147,7 @@ var mac = rubiplugin.HomeDevice{ID: "dev_mac", Name: "Mac"}
 func TestApprovedCommandIsAllowedOnlyByExecute(t *testing.T) {
 	f := &fakeHost{states: []string{"pending", "executing", "executed"}}
 	r := newRequest("rm -rf build")
-	newWatcher(f).handle(context.Background(), mac, r)
+	newWatcher(f, nil).handle(context.Background(), mac, r)
 
 	if len(f.submits) != 1 {
 		t.Fatalf("submits: %v", f.submits)
@@ -135,7 +181,7 @@ func TestEndingsDeny(t *testing.T) {
 	for state, msg := range map[string]string{"denied": msgDenied, "cancelled": msgCancelled, "expired": msgExpired, "weird": "weird"} {
 		f := &fakeHost{states: []string{"pending", state}}
 		r := newRequest("curl https://example.com")
-		newWatcher(f).handle(context.Background(), mac, r)
+		newWatcher(f, nil).handle(context.Background(), mac, r)
 		if len(f.decided) != 1 {
 			t.Fatalf("%s: decided %v", state, f.decided)
 		}
@@ -149,7 +195,7 @@ func TestEndingsDeny(t *testing.T) {
 
 func TestSafeCommandsUseTheQuickAction(t *testing.T) {
 	f := &fakeHost{states: []string{"executed"}}
-	newWatcher(f).handle(context.Background(), mac, newRequest("git status"))
+	newWatcher(f, nil).handle(context.Background(), mac, newRequest("git status"))
 	if f.submits[0].Kind != kindSafe {
 		t.Fatalf("kind %s", f.submits[0].Kind)
 	}
@@ -159,7 +205,7 @@ func TestSubmitFailureDeniesWithTheReason(t *testing.T) {
 	f := &fakeHost{submit: func(rubiplugin.Request) (map[string]any, error) {
 		return nil, errors.New("hourly limit for approved actions reached")
 	}}
-	newWatcher(f).handle(context.Background(), mac, newRequest("make test"))
+	newWatcher(f, nil).handle(context.Background(), mac, newRequest("make test"))
 	if len(f.decided) != 1 || f.decided[0].Behavior != "deny" || !strings.Contains(f.decided[0].Message, "hourly limit") {
 		t.Fatalf("decided: %+v", f.decided)
 	}
@@ -168,7 +214,7 @@ func TestSubmitFailureDeniesWithTheReason(t *testing.T) {
 func TestNoApprovalNeeded(t *testing.T) {
 	// At level none Rubi has already called execute (which allowed); the watcher adds nothing.
 	f := &fakeHost{submit: func(rubiplugin.Request) (map[string]any, error) { return map[string]any{"allowed": true}, nil }}
-	newWatcher(f).handle(context.Background(), mac, newRequest("ls"))
+	newWatcher(f, nil).handle(context.Background(), mac, newRequest("ls"))
 	if len(f.decided) != 0 || len(f.events) != 0 {
 		t.Fatalf("decided %v events %v", f.decided, f.events)
 	}
@@ -191,7 +237,7 @@ func TestRequestThatDoesntCheckOutIsDenied(t *testing.T) {
 		f := &fakeHost{}
 		r := newRequest("cat x")
 		mutate(&r)
-		newWatcher(f).handle(context.Background(), mac, r)
+		newWatcher(f, nil).handle(context.Background(), mac, r)
 		if len(f.submits) != 0 {
 			t.Errorf("%s: asked about it", name)
 		}
@@ -216,7 +262,7 @@ func TestExpiredRequestIsLeftToTheHelper(t *testing.T) {
 	f := &fakeHost{states: []string{"pending"}}
 	r := newRequest("make")
 	r.ExpiresAt = time.Now().Add(-time.Second)
-	newWatcher(f).handle(context.Background(), mac, r)
+	newWatcher(f, nil).handle(context.Background(), mac, r)
 	if len(f.decided) != 0 {
 		t.Fatalf("decided %v", f.decided)
 	}
@@ -248,7 +294,7 @@ func TestPollsEveryComputerAndStops(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	w := newWatcher(f)
+	w := newWatcher(f, nil)
 	go func() { defer close(done); w.run(ctx) }()
 	deadline := time.Now().Add(5 * time.Second)
 	for {

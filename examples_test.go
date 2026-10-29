@@ -52,6 +52,18 @@ func TestManagedSettingsExample(t *testing.T) {
 		len(h.Args) != 1 || h.Args[0] != "claude-hook" || h.Timeout != 300 || h.OnFailure != "block" {
 		t.Fatalf("PermissionRequest hook: %+v", h)
 	}
+	// The session hooks bring the Bots' messages in and the answers out. They must never block Claude
+	// Code: a short timeout and no onFailure (rubi-home prints nothing when it can't reach the helper).
+	for _, ev := range []string{"SessionStart", "UserPromptSubmit", "Stop", "SessionEnd"} {
+		hs := s.Hooks[ev]
+		if len(hs) != 1 || len(hs[0].Hooks) != 1 {
+			t.Fatalf("%s: %+v", ev, hs)
+		}
+		if h := hs[0].Hooks[0]; h.Command != "/usr/local/bin/rubi-home" || len(h.Args) != 1 || h.Args[0] != "claude-hook" ||
+			h.Timeout == 0 || h.Timeout > 15 || h.OnFailure != "" {
+			t.Fatalf("%s hook: %+v", ev, h)
+		}
+	}
 	if cc := s.Hooks["ConfigChange"]; len(cc) != 1 || len(cc[0].Hooks) != 1 {
 		t.Fatalf("ConfigChange: %+v", cc)
 	}

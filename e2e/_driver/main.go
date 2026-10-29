@@ -338,6 +338,17 @@ func hook(bin, helperDir, command string) <-chan hookResult {
 	return out
 }
 
+// hookEvent runs `rubi-home claude-hook` for another hook event (SessionStart, Stop …) and returns what
+// it printed.
+func hookEvent(bin, helperDir string, in map[string]any) (string, error) {
+	b, _ := json.Marshal(in)
+	cmd := exec.Command(bin, "claude-hook")
+	cmd.Env = append(os.Environ(), "RUBI_HOME_DIR="+helperDir)
+	cmd.Stdin = bytes.NewReader(b)
+	out, err := cmd.Output()
+	return strings.TrimSpace(string(out)), err
+}
+
 func run(dir, rubiBin, homeBin, plugin string) (err error) {
 	for _, d := range []string{dir} {
 		if !strings.HasPrefix(filepath.Clean(d), os.TempDir()) {
@@ -768,6 +779,208 @@ func run(dir, rubiBin, homeBin, plugin string) (err error) {
 		return fmt.Errorf("tap on a strong command, then deny: %+v", r)
 	}
 	step("6 quick-tap on a non-safe command -> rejected (%q), request stayed pending, then deny", err6.Error())
+
+	// The Bot reads its events with the code from its webhook.
+	eventFor := func(what, typ string, match func(d map[string]any) bool) (map[string]any, error) {
+		var found map[string]any
+		err := waitFor(what, 30*time.Second, func() (bool, error) {
+			wh.mu.Lock()
+			code, name := wh.code, wh.agent
+			wh.mu.Unlock()
+			if name == "" {
+				name = "Main"
+			}
+			if code == "" {
+				_, err := ag.call("rubi_verify", map[string]any{"agent": name})
+				return false, err
+			}
+			evs, err := ag.call("rubi_events", map[string]any{"agent": name, "code": code})
+			if err != nil {
+				return false, err
+			}
+			if evs["needs_code"] == true {
+				wh.mu.Lock()
+				wh.code = ""
+				wh.mu.Unlock()
+				return false, nil
+			}
+			list, _ := evs["events"].([]any)
+			for _, e := range list {
+				m, _ := e.(map[string]any)
+				d, _ := m["data"].(map[string]any)
+				if strings.HasSuffix(fmt.Sprint(m["type"]), typ) && match(d) {
+					found = d
+					return true, nil
+				}
+			}
+			return false, nil
+		})
+		return found, err
+	}
+
+	// Case 7: a Bot finds its project's session (the desktop app's store), binds to it with one strong
+	// approval, sends it a message, the Stop hook hands the message to Claude, and Claude's answer (and
+	// its rubi-ask) come back to that Bot.
+	proj := filepath.Join(dir, "proj")
+	if err := os.MkdirAll(filepath.Join(proj, ".git"), 0o700); err != nil {
+		return err
+	}
+	_ = os.WriteFile(filepath.Join(proj, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o600)
+	_ = os.WriteFile(filepath.Join(proj, ".git", "config"), []byte("[remote \"origin\"]\n\turl = git@github.com:e2e/proj.git\n"), 0o600)
+	store := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "Claude", "claude-code-sessions", "acct", "org")
+	if err := os.MkdirAll(store, 0o700); err != nil {
+		return err
+	}
+	desk, _ := json.Marshal(map[string]any{"sessionId": "local_e2e", "cliSessionId": "cli-e2e", "cwd": proj, "originCwd": proj,
+		"title": "E2E main session", "permissionMode": "default", "createdAt": time.Now().UnixMilli(), "lastActivityAt": time.Now().UnixMilli()})
+	if err := os.WriteFile(filepath.Join(store, "local_e2e.json"), desk, 0o600); err != nil {
+		return err
+	}
+	sl, err := ag.call("claude_code_sessions", map[string]any{"repo": "e2e/proj"})
+	if err != nil {
+		return err
+	}
+	ss7, _ := sl["sessions"].([]any)
+	if len(ss7) != 1 {
+		return fmt.Errorf("claude_code_sessions: %v", sl)
+	}
+	s7 := ss7[0].(map[string]any)
+	if s7["session_id"] != "cli-e2e" || s7["repo_key"] != "github.com/e2e/proj" || s7["role"] != "main" || s7["source"] != "desktop" {
+		return fmt.Errorf("the desktop session: %v", s7)
+	}
+	step("7 claude_code_sessions finds the desktop app's session (%s, %s)", s7["repo_key"], s7["role"])
+	sister := "Main"
+	bo, err := ag.call("claude_code_bind", map[string]any{"sister": sister, "session_id": "local_e2e"})
+	if err != nil {
+		return err
+	}
+	if bo["status"] != "awaiting_approval" {
+		return fmt.Errorf("bind should ask: %v", bo)
+	}
+	bpc, err := panel(fmt.Sprint(bo["approval_url"]))
+	if err != nil {
+		return err
+	}
+	binfo, err := bpc.ApprovalInfo(fmt.Sprint(bo["approval_id"]))
+	if err != nil {
+		return err
+	}
+	if binfo.Approval.Kind != "claude-code.bind" || binfo.Approval.Level != "strong" {
+		return fmt.Errorf("bind should be a strong approval: %+v", binfo.Approval)
+	}
+	if _, err := bpc.ApproveWithPasskey(fmt.Sprint(bo["approval_id"]), "bind", passkey.sign(origin, 0x01)); err == nil {
+		return errors.New("a tap approved a binding")
+	}
+	if res, err := bpc.ApproveWithPassword(fmt.Sprint(bo["approval_id"]), "bind", pw); err != nil || res["state"] != "executed" {
+		return fmt.Errorf("bind: %v %v", res, err)
+	}
+	bound, err := eventFor("the claude_bound event", "claude_bound", func(d map[string]any) bool { return d["session_id"] == "cli-e2e" })
+	if err != nil {
+		return err
+	}
+	bindCode := fmt.Sprint(bound["bind_code"])
+	step("7 bound with one strong approval (a tap is refused); the Bot got claude_bound")
+	if _, err := ag.call("claude_code_send", map[string]any{"sister": sister, "bind_code": "bc_wrong", "text": "x"}); err == nil {
+		return errors.New("send with a wrong bind code went through")
+	}
+	if _, err := ag.call("claude_code_send", map[string]any{"sister": sister, "bind_code": bindCode, "text": "e2e: audit found 2 issues in x.go"}); err != nil {
+		return err
+	}
+	stop := map[string]any{"session_id": "cli-e2e", "transcript_path": filepath.Join(dir, "none.jsonl"), "cwd": proj,
+		"permission_mode": "default", "hook_event_name": "Stop", "stop_hook_active": false}
+	o1, err := hookEvent(homeBin, helperDir, stop)
+	if err != nil {
+		return fmt.Errorf("Stop hook: %w", err)
+	}
+	var blk struct{ Decision, Reason string }
+	if json.Unmarshal([]byte(o1), &blk); blk.Decision != "block" || !strings.Contains(blk.Reason, "e2e: audit found 2 issues") {
+		return fmt.Errorf("Stop should block with the message: %q", o1)
+	}
+	step("7 Stop hook hands the message to Claude (decision block)")
+	stop["stop_hook_active"] = true
+	stop["last_assistant_message"] = "Fixed both in x.go.\n```rubi-ask kind=research\nIs there a newer x release?\n```"
+	o2, err := hookEvent(homeBin, helperDir, stop)
+	if err != nil || strings.Contains(o2, "block") {
+		return fmt.Errorf("second Stop should let Claude stop: %q %v", o2, err)
+	}
+	rep, err := eventFor("the claude_reply event", "claude_reply", func(d map[string]any) bool { return strings.Contains(fmt.Sprint(d["text"]), "Fixed both") })
+	if err != nil {
+		return err
+	}
+	ask7, err := eventFor("the claude_ask event", "claude_ask", func(d map[string]any) bool { return d["text"] == "Is there a newer x release?" })
+	if err != nil {
+		return err
+	}
+	if rep["session_id"] != "cli-e2e" || ask7["kind"] != "research" {
+		return fmt.Errorf("reply %v, ask %v", rep, ask7)
+	}
+	step("7 Claude's answer came back as claude_reply, its rubi-ask as claude_ask")
+
+	// Case 8: "trust this session for 2 hours": the next plain commands are allowed without asking;
+	// a push still asks.
+	if ch, err = ask("go test ./..."); err != nil {
+		return err
+	}
+	if id, url, err = approvalFor("go test ./..."); err != nil {
+		return err
+	}
+	if apc, err = panel(url); err != nil {
+		return err
+	}
+	if res, err := apc.ApproveWithPassword(id, "trust_2h", pw); err != nil || res["state"] != "executed" {
+		return fmt.Errorf("trust: %v %v", res, err)
+	}
+	if r = <-ch; r.Behavior != "allow" {
+		return fmt.Errorf("trust: %+v", r)
+	}
+	select {
+	case r = <-hook(homeBin, helperDir, "go vet ./... && go test -race ./internal/..."):
+	case <-time.After(20 * time.Second):
+		return errors.New("a command under the trust wasn't allowed by itself")
+	}
+	report("mandate", r)
+	if r.Behavior != "allow" {
+		return fmt.Errorf("mandate: %+v", r)
+	}
+	step("8 trusted for 2 hours, then go vet && go test allowed without asking (%s)", r.Took)
+	if ch, err = ask("git status && git push origin main"); err != nil {
+		return fmt.Errorf("push under a trust: %w", err)
+	}
+	if id, url, err = approvalFor("git status && git push origin main"); err != nil {
+		return err
+	}
+	if apc, err = panel(url); err != nil {
+		return err
+	}
+	if ainfo, err = apc.ApprovalInfo(id); err != nil || !strings.Contains(string(ainfo.Approval.Preview), "push") {
+		return fmt.Errorf("push approval: %+v %v", ainfo.Approval, err)
+	}
+	if _, err := apc.Deny(id); err != nil {
+		return err
+	}
+	if r = <-ch; r.Behavior != "deny" {
+		return fmt.Errorf("push under a trust: %+v", r)
+	}
+	report("push", r)
+	step("8 git push under the trust still asked, and was denied")
+	mo, err := ag.call("claude_code_mandates", map[string]any{"revoke": "all"})
+	if err != nil || fmt.Sprint(mo["revoked"]) != "1" {
+		return fmt.Errorf("revoke: %v %v", mo, err)
+	}
+	if ch, err = ask("go vet ./..."); err != nil {
+		return fmt.Errorf("after revoking: %w", err)
+	}
+	if id, url, err = approvalFor("go vet ./..."); err != nil {
+		return err
+	}
+	if apc, err = panel(url); err != nil {
+		return err
+	}
+	if _, err := apc.Deny(id); err != nil {
+		return err
+	}
+	<-ch
+	step("8 revoked: the next command asks again")
 
 	// Case 4: Rubi locked -> deny.
 	if _, err := ag.call("rubi_lock", nil); err != nil {

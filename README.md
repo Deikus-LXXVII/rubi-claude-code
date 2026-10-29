@@ -32,11 +32,61 @@ Code runs without asking (its read-only set, or allow rules in managed settings)
   arguments; a passkey **tap** by default, no Face ID, and you may change it). Anything the classifier
   isn't sure about is `run`. On a security key the tap is just a touch; iPhone and Mac passkeys may still
   ask for Face ID or Touch ID, which Rubi accepts too. A tap never approves a `run` command.
+- `claude-code.bind` (passkey or password, can't be lowered): lets one Bot talk to one Claude Code
+  session; see [Bots and sessions](#bots-and-sessions).
 - Its approvals count toward Rubi's limit of 30 approved actions per hour, shared with your other actions.
 
 The approval link reaches you through your Bot: subscribe it to the plugin's `approval_needed` event (Rubi
 asks you to approve that once). The event carries the command and Claude's own description, marked as
 untrusted.
+
+## Trust a session for 2 hours
+
+A `run` approval has a second button, **Allow and trust this session for 2 hours**. For two hours (or 300
+commands) Rubi then allows that session's commands in that directory (and below it) by itself, each one
+written to Rubi's audit log, as long as every part of the command line (`&&`, `||`, `;`, `|`, `&`,
+newlines) is a plain command on the plugin's list. These always ask, whatever the trust:
+
+- `git push` in any spelling, `--force`, `reset --hard` and other git commands that throw work away or
+  change config or remotes;
+- `sudo`, shells and wrappers (`sh -c`, `eval`, `env`, `xargs`), substitutions, variables, backticks,
+  escapes, subshells, here documents;
+- the network (`curl`, `ssh`, `gh`, installs, `go run x@latest`, publishing or deploy targets);
+- writing or deleting outside the directory, and paths that hold credentials (`.ssh`, `.env`, keys,
+  tokens);
+- programs by path (`./script.sh`), interpreters and anything not on the list.
+
+The check reads the command line only. A build, test or script it starts (`make`, `go test`,
+`npm run`) can do anything you can, so a trust means you trust the project's own code. See the plugin's
+page in the Rubi panel to see and revoke trusts; your Bot can list and revoke them too
+(`claude_code_mandates`), but never add one.
+
+A session running with `bypassPermissions` (a mode the Claude desktop app can set per session) never
+asks, so neither approvals nor trusts apply to it. The example managed settings turn that mode off.
+
+## Bots and sessions
+
+Each Bot (a "sister") can bind to one Claude Code session, usually the main session of its project, and
+then message it. Nothing here is specific to one setup: projects are git remotes, and sessions come from
+the Claude desktop app's session list and Claude Code's transcripts on that computer (Rubi Home reads
+them, it doesn't run Claude).
+
+1. The Bot calls `claude_code_sessions` and picks its session (project, main or sub-session, state).
+2. `claude_code_bind` asks you once, with your passkey. A session talks to one Bot; binding again
+   replaces the Bot's binding. Desktop sessions are followed by the app's id, so a binding survives the
+   app restarting the session.
+3. `claude_code_send` (at most 4000 characters, 30 an hour) queues a message. The session's hooks hand it
+   to Claude at its next prompt, or when it stops (at most 5 batches in a row, so it can't be kept busy
+   forever). Claude's answer in that turn comes back to the Bot as a `claude_reply` event.
+4. Claude asks the Bot with a ` ```rubi-ask kind=research``` ` block in an answer; it arrives as a
+   `claude_ask` event, also from the project's sub-sessions. The Bot answers with `claude_code_send` and
+   `reply_to_ask`.
+
+A Bot can't approve commands, and messages never grant permissions. You can unbind in the plugin's page.
+Messages are injected only through hooks; Rubi never resumes a session that is open in the app.
+
+The Claude side's instructions are in [`kit/skills/rubi-sisters`](kit/skills/rubi-sisters/SKILL.md):
+copy it to `~/.claude/skills/rubi-sisters/` on the Mac.
 
 ## Set up on a Mac
 
@@ -88,12 +138,14 @@ You need Rubi v0.11.0 or later with this plugin installed, and Claude Code v2.1.
    - turns off bypass-permissions and auto mode;
    - denies Claude's edits to `~/.claude`, `~/.claude.json`, a project's `.claude/`, the managed settings
      directory, the hook binary and Rubi Home's files;
-   - a `ConfigChange` hook that keeps settings edits from applying to a running session.
+   - a `ConfigChange` hook that keeps settings edits from applying to a running session;
+   - `SessionStart`, `UserPromptSubmit`, `Stop` and `SessionEnd` hooks that bring Bots' messages in and
+     the answers out (10-second timeout, never blocking: when Rubi Home doesn't answer they do nothing).
 
 6. **Try it.** Restart Claude Code and ask it to run `rm -rf /tmp/rubi-test`. The Rubi approval link
    arrives through your Bot; approve it and the command runs. Lock Rubi and try again: it is denied.
 
-To turn it off, remove the two hooks (or the file) from the managed settings. Without them, Claude Code
+To turn it off, remove the hooks (or the file) from the managed settings. Without them, Claude Code
 asks in its own prompt again.
 
 ### Limits
@@ -102,6 +154,8 @@ asks in its own prompt again.
   (it can only ask) or change Rubi Home's files; it can't answer for you.
 - Read and Edit deny rules cover Claude's file tools and the file commands Claude Code recognizes in Bash,
   not every program a command starts. That is why every Bash command needs your approval.
+- Bot names are what each Bot says it is. A binding's code, handed only to the Bot that was bound,
+  keeps other Bots from sending as it; events go to the bound Bot by name.
 - `git diff` and `git log` honour the repository's configuration (for example an external diff tool), and
   `cat` follows symlinks; an approval for `run_safe` still shows the exact command and directory.
 

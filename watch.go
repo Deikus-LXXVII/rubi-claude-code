@@ -38,10 +38,12 @@ type answer struct {
 
 // ticket is the approval's payload: which request on which computer the approval answers.
 type ticket struct {
-	Device    string `json:"device"`
-	ID        string `json:"id"`
-	SessionID string `json:"session_id"`
-	Digest    string `json:"digest"`
+	Device     string `json:"device"`
+	DeviceName string `json:"device_name,omitempty"`
+	ID         string `json:"id"`
+	SessionID  string `json:"session_id"`
+	Digest     string `json:"digest"`
+	Cwd        string `json:"cwd,omitempty"` // the scope of a mandate given with this approval
 }
 
 type homeCaller interface {
@@ -50,12 +52,9 @@ type homeCaller interface {
 
 // host is what the watcher uses of *rubiplugin.Host (a fake in tests).
 type host interface {
-	homeCaller
-	HomeDevices() ([]rubiplugin.HomeDevice, error)
-	Submit(ctx context.Context, r rubiplugin.Request) (map[string]any, error)
+	sisterHost
 	WaitApproval(ctx context.Context, id string, wait time.Duration) (rubiplugin.ApprovalState, error)
 	Emit(typ string, data map[string]any) (string, error)
-	Logf(format string, args ...any)
 }
 
 const (
@@ -74,14 +73,15 @@ const (
 
 type watcher struct {
 	h       host
+	s       *sisters // mandates, bindings and routing (nil: none)
 	backoff func(n int) time.Duration
 	mu      sync.Mutex
 	polling map[string]bool
 	wg      sync.WaitGroup
 }
 
-func newWatcher(h host) *watcher {
-	return &watcher{h: h, polling: map[string]bool{}, backoff: func(n int) time.Duration {
+func newWatcher(h host, s *sisters) *watcher {
+	return &watcher{h: h, s: s, polling: map[string]bool{}, backoff: func(n int) time.Duration {
 		return min(time.Duration(1<<min(n, 6))*time.Second, maxBackoff)
 	}}
 }
@@ -129,6 +129,7 @@ func (w *watcher) poll(ctx context.Context, d rubiplugin.HomeDevice) {
 	for ctx.Err() == nil {
 		var out struct {
 			Request *request `json:"request"`
+			Out     *outMsg  `json:"out"`
 		}
 		err := w.h.HomeCall(ctx, d.ID, "claude.next", map[string]any{"wait_seconds": int(pollWait / time.Second)}, &out)
 		if err != nil {
@@ -153,6 +154,9 @@ func (w *watcher) poll(ctx context.Context, d rubiplugin.HomeDevice) {
 		if r := out.Request; r != nil {
 			w.wg.Go(func() { w.handle(ctx, d, *r) })
 		}
+		if o := out.Out; o != nil && w.s != nil {
+			w.wg.Go(func() { w.s.route(ctx, w.h, d, *o) })
+		}
 	}
 }
 
@@ -170,6 +174,23 @@ func (w *watcher) handle(ctx context.Context, d rubiplugin.HomeDevice, r request
 		deny(msgMalformed)
 		return
 	}
+	mandateNote := ""
+	if w.s != nil {
+		m, why := w.s.st.use(d.ID, r, w.s.now())
+		if m != nil {
+			err := w.h.HomeCall(ctx, d.ID, "claude.decide", answer{ID: r.ID, SessionID: r.SessionID, Digest: r.Digest, Behavior: "allow"}, nil)
+			fields := map[string]any{"mandate": m.ID, "device": d.ID, "session": r.SessionID, "request": r.ID,
+				"command": oneLine(r.Command, 300), "directory": r.Cwd, "uses": m.Uses}
+			if err != nil {
+				fields["error"] = oneLine(err.Error(), 200)
+			}
+			w.h.Audit(auditMandateAll, fields)
+			return
+		}
+		if why != "" {
+			mandateNote = "your 2-hour trust for this session doesn't cover this: " + why
+		}
+	}
 	safe, why := classify(r.Command)
 	kind := kindRun
 	if safe {
@@ -177,11 +198,14 @@ func (w *watcher) handle(ctx context.Context, d rubiplugin.HomeDevice, r request
 	}
 	preview := map[string]any{"command": r.Command, "directory": r.Cwd, "computer": d.Name, "tool": r.ToolName,
 		"session": r.SessionID, "why_this_approval": why}
+	if mandateNote != "" {
+		preview["mandate"] = mandateNote
+	}
 	if r.Description != "" {
 		preview["claude_says"] = r.Description
 	}
 	out, err := w.h.Submit(ctx, rubiplugin.Request{Kind: kind, Summary: "Claude Code: " + oneLine(r.Command, 100),
-		Preview: preview, Payload: ticket{Device: d.ID, ID: r.ID, SessionID: r.SessionID, Digest: r.Digest}})
+		Preview: preview, Payload: ticket{Device: d.ID, DeviceName: d.Name, ID: r.ID, SessionID: r.SessionID, Digest: r.Digest, Cwd: r.Cwd}})
 	if err != nil {
 		w.h.Logf("%s: asking about %s: %v", d.Name, r.ID, err)
 		deny("Rubi couldn't ask you (" + oneLine(err.Error(), 200) + "), so the command was denied.")

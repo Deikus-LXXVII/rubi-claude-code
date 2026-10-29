@@ -23,9 +23,67 @@
           {
             "type": "command",
             "command": "/usr/local/bin/rubi-home",
-            "args": ["claude-hook"],
+            "args": [
+              "claude-hook"
+            ],
             "timeout": 300,
             "onFailure": "block"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/local/bin/rubi-home",
+            "args": [
+              "claude-hook"
+            ],
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/local/bin/rubi-home",
+            "args": [
+              "claude-hook"
+            ],
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/local/bin/rubi-home",
+            "args": [
+              "claude-hook"
+            ],
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/local/bin/rubi-home",
+            "args": [
+              "claude-hook"
+            ],
+            "timeout": 10
           }
         ]
       }
@@ -37,7 +95,10 @@
           {
             "type": "command",
             "command": "/bin/sh",
-            "args": ["-c", "echo 'Rubi policy: settings changes during a session are not applied; restart Claude Code to load them.' >&2; exit 2"],
+            "args": [
+              "-c",
+              "echo 'Rubi policy: settings changes during a session are not applied; restart Claude Code to load them.' >&2; exit 2"
+            ],
             "onFailure": "block"
           }
         ]
