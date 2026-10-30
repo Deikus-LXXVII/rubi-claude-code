@@ -134,7 +134,7 @@ func (s *store) bind(b binding) error {
 	defer s.mu.Unlock()
 	kept := s.st.Bindings[:0]
 	for _, x := range s.st.Bindings {
-		if x.Sister != b.Sister {
+		if !sameBot(x.Sister, b.Sister) {
 			kept = append(kept, x)
 		}
 	}
@@ -148,7 +148,7 @@ func (s *store) unbind(sister string) (bool, error) {
 	kept := s.st.Bindings[:0]
 	found := false
 	for _, x := range s.st.Bindings {
-		if x.Sister == sister {
+		if sameBot(x.Sister, sister) {
 			found = true
 			continue
 		}
@@ -172,7 +172,7 @@ func (s *store) bindingOf(sister, code string) (binding, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, b := range s.st.Bindings {
-		if b.Sister == sister && code != "" && subtle.ConstantTimeCompare([]byte(b.Code), []byte(code)) == 1 {
+		if sameBot(b.Sister, sister) && code != "" && subtle.ConstantTimeCompare([]byte(b.Code), []byte(code)) == 1 {
 			return b, true
 		}
 	}
@@ -184,7 +184,7 @@ func (s *store) follow(sister, sessionID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i := range s.st.Bindings {
-		if s.st.Bindings[i].Sister == sister && s.st.Bindings[i].SessionID != sessionID {
+		if sameBot(s.st.Bindings[i].Sister, sister) && s.st.Bindings[i].SessionID != sessionID {
 			s.st.Bindings[i].SessionID = sessionID
 			_ = s.saveLocked()
 		}

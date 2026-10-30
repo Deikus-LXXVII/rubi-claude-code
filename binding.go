@@ -255,7 +255,7 @@ func (s *sisters) bindTool(ctx context.Context, h sisterHost, in bindIn) (any, e
 		return nil, err
 	}
 	for _, b := range s.st.bindings() {
-		if b.Sister != sister && b.Device == d.ID && (b.SessionID == sess.SessionID || b.AppSessionID != "" && b.AppSessionID == sess.AppSessionID) {
+		if !sameBot(b.Sister, sister) && b.Device == d.ID && (b.SessionID == sess.SessionID || b.AppSessionID != "" && b.AppSessionID == sess.AppSessionID) {
 			return nil, fmt.Errorf("that session is bound to %s; a session talks to one Bot (the user can unbind it in the panel)", b.Sister)
 		}
 	}
@@ -268,7 +268,7 @@ func (s *sisters) bindTool(ctx context.Context, h sisterHost, in bindIn) (any, e
 		preview["note"] = "This is a sub-session; a Bot usually binds to the project's main session."
 	}
 	for _, b := range s.st.bindings() {
-		if b.Sister == sister {
+		if sameBot(b.Sister, sister) {
 			preview["replaces"] = b.Title + " (" + b.SessionID + ")"
 		}
 	}
@@ -285,7 +285,7 @@ func (s *sisters) executeBind(h sisterHost, t bindTicket) (any, error) {
 		RepoKey: t.RepoKey, Cwd: t.Cwd, Title: t.Title, Code: newID("bc_"), Since: s.now().UTC()}
 	var prev *binding
 	for _, x := range s.st.bindings() {
-		if x.Sister == b.Sister {
+		if sameBot(x.Sister, b.Sister) {
 			prev = &x
 		}
 	}
@@ -319,9 +319,12 @@ type unbindIn struct {
 	VerifiedAgent string `json:"rubi_verified_agent,omitempty" jsonschema:"set by Rubi; don't pass it"`
 }
 
+// sameBot says whether two names are the same Bot: Rubi's Bot names don't depend on case.
+func sameBot(a, b string) bool { return strings.EqualFold(strings.TrimSpace(a), strings.TrimSpace(b)) }
+
 // notOtherBot refuses a call Rubi verified as coming from a Bot other than the binding's.
 func notOtherBot(sister, verified string) error {
-	if verified != "" && !strings.EqualFold(strings.TrimSpace(sister), verified) {
+	if verified != "" && !sameBot(sister, verified) {
 		return fmt.Errorf("Rubi confirmed you as %s; this binding belongs to another Bot", verified)
 	}
 	return nil
@@ -331,13 +334,14 @@ func (s *sisters) unbindTool(_ context.Context, h sisterHost, in unbindIn) (any,
 	if err := notOtherBot(in.Sister, in.VerifiedAgent); err != nil {
 		return nil, err
 	}
-	if _, ok := s.st.bindingOf(in.Sister, in.BindCode); !ok {
+	b, ok := s.st.bindingOf(in.Sister, in.BindCode)
+	if !ok {
 		return nil, errors.New("no binding with that sister and code (the user can unbind in the panel)")
 	}
-	if _, err := s.st.unbind(in.Sister); err != nil {
+	if _, err := s.st.unbind(b.Sister); err != nil {
 		return nil, err
 	}
-	h.Audit("binding_removed", map[string]any{"sister": in.Sister, "by": "bot"})
+	h.Audit("binding_removed", map[string]any{"sister": b.Sister, "by": "bot"})
 	return map[string]any{"unbound": true}, nil
 }
 
@@ -466,7 +470,7 @@ func (s *sisters) route(ctx context.Context, h sisterHost, d rubiplugin.HomeDevi
 	}
 	switch o.Kind {
 	case "reply":
-		if o.To != target.Sister {
+		if !sameBot(o.To, target.Sister) {
 			h.Logf("%s: reply for %s from a session bound to %s dropped", d.Name, o.To, target.Sister)
 			return
 		}

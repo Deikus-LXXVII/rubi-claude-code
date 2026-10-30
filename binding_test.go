@@ -397,3 +397,24 @@ func TestSendSaysWhenClaudeReads(t *testing.T) {
 		t.Fatalf("ended session: %v, sent %d", err, len(f.sent)-n)
 	}
 }
+
+// TestSisterNameIgnoresCase: Rubi's Bot names don't depend on case, so "citri" uses Citri's binding;
+// the code is still what proves it, and another name is still another Bot.
+func TestSisterNameIgnoresCase(t *testing.T) {
+	f, s, code := boundFixture(t)
+	ctx := context.Background()
+	for _, name := range []string{"citri", " CITRI "} {
+		if _, err := s.sendTool(ctx, f, sendIn{Sister: name, BindCode: code, Text: "hi", VerifiedAgent: "Citri"}); err != nil {
+			t.Fatalf("%q: %v", name, err)
+		}
+	}
+	if _, err := s.sendTool(ctx, f, sendIn{Sister: "citri", BindCode: "bc_wrong", Text: "hi"}); err == nil {
+		t.Fatal("a wrong code went through")
+	}
+	if _, err := s.sendTool(ctx, f, sendIn{Sister: "Citrine", BindCode: code, Text: "hi"}); err == nil {
+		t.Fatal("another Bot's name went through")
+	}
+	if _, err := s.unbindTool(ctx, f, unbindIn{Sister: "CITRI", BindCode: code, VerifiedAgent: "citri"}); err != nil || len(s.st.bindings()) != 0 {
+		t.Fatalf("unbind by another case: %v %+v", err, s.st.bindings())
+	}
+}
