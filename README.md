@@ -54,12 +54,19 @@ newlines) is a plain command on the plugin's list. These always ask, whatever th
 - `sudo`, shells and wrappers (`sh -c`, `eval`, `env`, `xargs`), substitutions, variables, backticks,
   escapes, subshells, here documents;
 - the network (`curl`, `ssh`, `gh`, installs, `go run x@latest`, publishing or deploy targets);
-- writing or deleting outside the directory, and paths that hold credentials (`.ssh`, `.env`, keys,
-  tokens);
+- options that name another program or code to run (`git grep -O`, `go test -exec`, `make --eval`,
+  `cargo --config`, `npm --script-shell`);
+- writing or deleting outside the directory (redirections, output options such as `sort -o`,
+  `go build -o`, `cp -t`, report and cache paths of build tools, `git worktree add`) or into `.git`
+  (a hook written there runs at the next commit);
+- paths that hold credentials or run at login (`.ssh`, `.env`, keys, tokens, `.zshrc` and other shell
+  startup files, `.config`, browser cookies);
 - programs by path (`./script.sh`), interpreters and anything not on the list.
 
 The check reads the command line only. A build, test or script it starts (`make`, `go test`,
-`npm run`) can do anything you can, so a trust means you trust the project's own code. See the plugin's
+`npm run`, `pytest`) runs the project's own code and can do anything you can, including network access
+and writing outside the directory; Claude may have just written that code. So a trust means you trust
+the project's own code, and the approval says so. See the plugin's
 page in the Rubi panel to see and revoke trusts; your Bot can list and revoke them too
 (`claude_code_mandates`), but never add one.
 

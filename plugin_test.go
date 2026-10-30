@@ -366,3 +366,24 @@ func TestManifest(t *testing.T) {
 		t.Fatalf("event: %+v", ev)
 	}
 }
+
+// TestTrustOptionIsHonest: the 2-hour trust says builds and tests run the project's own code, and
+// makes no promise the command-line check can't keep (no network or writes outside at all).
+func TestTrustOptionIsHonest(t *testing.T) {
+	m := manifest()
+	run, _ := m.Action(kindRun)
+	var meaning string
+	for _, o := range run.Options {
+		if o.Key == optionTrust {
+			meaning = o.Meaning
+		}
+	}
+	for _, want := range []string{"builds and tests", "project's own code", "still ask", ".git", "Revoke"} {
+		if !strings.Contains(meaning, want) {
+			t.Errorf("trust meaning lacks %q: %s", want, meaning)
+		}
+	}
+	if strings.Contains(meaning, "never push, --force, sudo, network") {
+		t.Errorf("trust meaning still promises no network at all: %s", meaning)
+	}
+}

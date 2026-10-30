@@ -30,7 +30,7 @@ const (
 func manifest() rubiplugin.Manifest {
 	opts := []rubiplugin.Option{{Key: optionAllow, Label: "Allow", Meaning: "Claude Code runs this command once"}}
 	trust := append(opts, rubiplugin.Option{Key: optionTrust, Label: "Allow and trust this session for 2 hours",
-		Meaning: "Claude Code runs this command; for 2 hours Rubi also allows this session's plain commands in this directory by itself (never push, --force, sudo, network, secrets or deleting outside it), each one audited; revoke it in the panel"})
+		Meaning: "Claude Code runs this command. For 2 hours Rubi also allows this session's plain, listed commands in this directory by itself, each one audited. That includes builds and tests (make, go test, npm run), which run the project's own code with your rights, so choose it only if you trust that code. Push, --force, sudo, network commands, credential paths and writing outside the directory or into .git still ask. Revoke it in the panel"})
 	return rubiplugin.Manifest{
 		ID: "claude-code", Name: "Claude Code", Version: "v0.2.0",
 		Description: "Approve the shell commands Claude Code asks to run on your computer.",
