@@ -47,10 +47,12 @@ untrusted.
 A `run` approval has a second button, **Allow and trust this session for 2 hours**. For two hours (or 300
 commands) Rubi then allows that session's commands in that directory (and below it) by itself, each one
 written to Rubi's audit log, as long as every part of the command line (`&&`, `||`, `;`, `|`, `&`,
-newlines) is a plain command on the plugin's list. These always ask, whatever the trust:
+newlines) is a plain command on the plugin's list. Every option of a listed program is checked against
+that program's list of known options (what each takes: a flag, a value, a file it reads, a file it writes,
+a program to run); an option that isn't on the list asks. These always ask, whatever the trust:
 
 - `git push` in any spelling, `--force`, `reset --hard` and other git commands that throw work away or
-  change config or remotes;
+  change config or remotes (`git restore` only unstages; `git checkout` of a branch or `-b` is allowed, and because a single name can't be told from a branch, checking out a path can still overwrite working files);
 - `sudo`, shells and wrappers (`sh -c`, `eval`, `env`, `xargs`), substitutions, variables, backticks,
   escapes, subshells, here documents;
 - the network (`curl`, `ssh`, `gh`, installs, `go run x@latest`, publishing or deploy targets);
@@ -61,13 +63,20 @@ newlines) is a plain command on the plugin's list. These always ask, whatever th
   (a hook written there runs at the next commit);
 - paths that hold credentials or run at login (`.ssh`, `.env`, keys, tokens, `.zshrc` and other shell
   startup files, `.config`, browser cookies);
+- environment variables set in front of a command, except a short list of harmless ones (`CI`, `TZ`,
+  `GOOS`, `CGO_ENABLED` ...), and `cd` that is not joined to the next command by `&&`;
+- `go generate`, `go mod download`, `npm outdated` and other commands whose purpose is to fetch or run something;
 - programs by path (`./script.sh`), interpreters and anything not on the list.
 
-The check reads the command line only. A build, test or script it starts (`make`, `go test`,
-`npm run`, `pytest`) runs the project's own code and can do anything you can, including network access
-and writing outside the directory; Claude may have just written that code. So a trust means you trust
-the project's own code, and the approval says so. See the plugin's
-page in the Rubi panel to see and revoke trusts; your Bot can list and revoke them too
+The check reads the command line only. A build, test or script it starts (`make`, `go test`, `npm run`,
+`pytest`) runs the project's own code and can do anything you can, including network access and writing
+outside the directory, and Claude may have just written that code. So a trust is only as safe as trusting
+Claude with your rights in that project, and the approval says so. Builds and `go mod tidy` may also fetch the
+project's declared dependencies. Reading files is allowed anywhere on disk except credential paths (`cat /etc/hosts`
+works); only writes are held to the directory. The `jq` filter check for `env` is a hint, not a barrier. The check does not look at your disk: a symlink already in the project that points
+outside is followed by the commands that use it, and `cd NAME` can land elsewhere if your own zsh
+configuration sets `cdablevars` or `CDPATH`. Use the plugin's page in the Rubi panel to see and
+revoke trusts; your Bot can list and revoke them too
 (`claude_code_mandates`), but never add one.
 
 ### Sessions with bypassPermissions
