@@ -26,10 +26,11 @@ type fakeHost struct {
 	decided   []decided
 	events    []map[string]any
 	decideFn  func(device string, a answer) error
-	sessions  []session // claude-sessions.list answers
-	listHang  bool      // claude-sessions.list never answers (until ctx ends)
-	outs      []outMsg  // claude-sessions.next answers, one per call
-	ops       []string  // every op called
+	sessions  []session       // claude-sessions.list answers
+	listHang  bool            // claude-sessions.list never answers (until ctx ends)
+	hangOn    map[string]bool // claude-sessions.list never answers on these computers
+	outs      []outMsg        // claude-sessions.next answers, one per call
+	ops       []string        // every op called
 	sent      []map[string]any
 	audits    []string
 	auditLog  []map[string]any
@@ -83,7 +84,7 @@ func (f *fakeHost) HomeCall(ctx context.Context, device, op string, args, out an
 		}
 		return json.Unmarshal([]byte(`{"out":null}`), out)
 	case "claude-sessions.list":
-		if f.listHang {
+		if f.listHang || f.hangOn[device] {
 			<-ctx.Done()
 			return errors.New("Rubi Home didn't answer")
 		}

@@ -126,19 +126,27 @@ func listSessions(ctx context.Context, h sisterHost, repo string, archived bool)
 	if err != nil {
 		return nil, err
 	}
-	var out []deviceSessions
-	for _, d := range devs {
-		var res struct {
-			Sessions []session `json:"sessions"`
-		}
-		dctx, cancel := context.WithTimeout(ctx, listTimeout)
-		err := h.HomeCall(dctx, d.ID, "claude-sessions.list", map[string]any{"repo": repo, "include_archived": archived}, &res)
-		if err != nil && dctx.Err() != nil && ctx.Err() == nil {
-			err = fmt.Errorf("no session list within %s (Rubi Home may be stuck reading a project's disk)", listTimeout)
-		}
-		cancel()
-		out = append(out, deviceSessions{d, res.Sessions, err})
+	// One computer at a time would make a stuck one cost every other its full timeout: ask them all at
+	// once, each within listTimeout, and keep the order Rubi listed them in.
+	out := make([]deviceSessions, len(devs))
+	var wg sync.WaitGroup
+	for i, d := range devs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			var res struct {
+				Sessions []session `json:"sessions"`
+			}
+			dctx, cancel := context.WithTimeout(ctx, listTimeout)
+			defer cancel()
+			err := h.HomeCall(dctx, d.ID, "claude-sessions.list", map[string]any{"repo": repo, "include_archived": archived}, &res)
+			if err != nil && dctx.Err() != nil && ctx.Err() == nil {
+				err = fmt.Errorf("no session list within %s (Rubi Home may be stuck reading a project's disk)", listTimeout)
+			}
+			out[i] = deviceSessions{d, res.Sessions, err}
+		}()
 	}
+	wg.Wait()
 	return out, nil
 }
 

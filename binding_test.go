@@ -456,3 +456,30 @@ func TestAskFromUnboundSessionPicksOneBinding(t *testing.T) {
 		t.Fatalf("asks went to: %+v", got)
 	}
 }
+
+// TestSessionListAsksComputersAtOnce: stuck computers cost one timeout together, not one each, and the
+// answer keeps the order Rubi listed the computers in.
+func TestSessionListAsksComputersAtOnce(t *testing.T) {
+	old := listTimeout
+	listTimeout = 200 * time.Millisecond
+	defer func() { listTimeout = old }()
+	devs := []rubiplugin.HomeDevice{{ID: "d1", Name: "Stuck 1"}, mac, {ID: "d3", Name: "Stuck 3"}, {ID: "d4", Name: "Stuck 4"}, {ID: "d5", Name: "Stuck 5"}}
+	f := &fakeHost{devices: devs, sessions: []session{mainSess}, hangOn: map[string]bool{"d1": true, "d3": true, "d4": true, "d5": true}}
+	start := time.Now()
+	all, err := listSessions(context.Background(), f, "", false)
+	if took := time.Since(start); err != nil || took > 600*time.Millisecond { // one after another: 800ms or more
+		t.Fatalf("err %v after %s", err, took)
+	}
+	if len(all) != len(devs) {
+		t.Fatalf("got %d computers", len(all))
+	}
+	for i, ds := range all {
+		stuck := f.hangOn[ds.device.ID]
+		if ds.device.ID != devs[i].ID || stuck != (ds.err != nil) || !stuck && len(ds.list) != 1 {
+			t.Fatalf("computer %d: %+v", i, ds)
+		}
+		if stuck && !strings.Contains(ds.err.Error(), "no session list within") {
+			t.Fatalf("computer %d: %v", i, ds.err)
+		}
+	}
+}
