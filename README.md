@@ -409,7 +409,7 @@ server of the `rubi-sisters` plugin as connected.
 
 ## Set up on a Mac
 
-You need Rubi v0.12.0 or later with this plugin installed, and Claude Code v2.1.295 or later (for
+You need Rubi v0.13.0 or later with this plugin installed, and Claude Code v2.1.295 or later (for
 `onFailure`).
 
 1. **Install Rubi Home** (skip if you have it):
@@ -530,10 +530,11 @@ go build -o claude-code . && go test -race ./...
 e2e/run.sh   # Linux, needs `unshare -rn`: a real Rubi, Rubi Home and this plugin, offline
 ```
 
-The plugin builds on the Rubi v0.11.0 SDK (`Host.WaitApproval`) and needs a v0.12.0 core at run time
-(Rubi Home's `claude-sessions` capability, strict delivery of addressed events and `rubi_verified_agent`).
+The plugin builds on the Rubi v0.11.0 SDK (`Host.WaitApproval`) and needs a v0.13.0 core at run time
+(Rubi Home's `claude-start` capability, the panel's view prompt, `claude-sessions.bound`; v0.12.0 brought
+`claude-sessions`, strict delivery of addressed events and `rubi_verified_agent`).
 The e2e builds Rubi and Rubi Home from a core checkout, `../rubi` by default or `RUBI_REPO`; it needs a
-v0.12.0 core (the `citri/claude-m2` branch until v0.12.0 is tagged). `PublisherKey` is the Rubi-Project plugin key (public half in
+v0.13.0 core (the `citri/plugin-rc` branch until v0.13.0 is tagged). `PublisherKey` is the Rubi-Project plugin key (public half in
 `publisher-key.pub.pem`); only the end-to-end test overrides it, with a throwaway key.
 
 The end-to-end test builds everything with `-race`, runs it in a network namespace with only loopback,
