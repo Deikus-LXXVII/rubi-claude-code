@@ -31,8 +31,10 @@ func manifest() rubiplugin.Manifest {
 	opts := []rubiplugin.Option{{Key: optionAllow, Label: "Allow", Meaning: "Claude Code runs this command once"}}
 	trust := append(opts, rubiplugin.Option{Key: optionTrust, Label: "Allow and trust this session for 2 hours",
 		Meaning: "Claude Code runs this command. For 2 hours Rubi also allows this session's plain, listed commands in this directory by itself, each one audited. That includes builds and tests (make, go test, npm run), which run the project's own code with your rights, so choose it only if you trust that code. Push, --force, sudo, network commands, credential paths and writing outside the directory or into .git still ask. Revoke it in the panel"})
+	// Version is the last release; a release build replaces it with its tag (rubiplugin.Version, set
+	// with -ldflags in .github/workflows/release.yml).
 	return rubiplugin.Manifest{
-		ID: "claude-code", Name: "Claude Code", Version: "v0.2.0",
+		ID: "claude-code", Name: "Claude Code", Version: "v0.2.1",
 		Description: "Approve the shell commands Claude Code asks to run on your computer.",
 		Needs:       "Rubi Home on the computer where Claude Code runs, and Claude Code's hook set up (see the plugin's README).",
 		Publisher:   rubiplugin.Publisher{Name: "Rubi-Project", Key: PublisherKey},
