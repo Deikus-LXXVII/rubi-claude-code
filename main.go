@@ -51,6 +51,8 @@ func manifest() rubiplugin.Manifest {
 				DefaultLevel: rubiplugin.Tap, Options: opts},
 			{Kind: kindBind, Title: "Let a Bot talk to a Claude Code session", DefaultLevel: rubiplugin.Strong, Locked: true,
 				Options: []rubiplugin.Option{{Key: "bind", Label: "Bind", Meaning: "The Bot can send this session short messages and gets its answers and questions; it can't approve commands"}}},
+			{Kind: kindStart, Title: "Let a Bot start a new Claude Code session", DefaultLevel: rubiplugin.Strong, Locked: true,
+				Options: []rubiplugin.Option{{Key: "start", Label: "Start", Meaning: "Starts a new Claude Code session on your computer with the Bot's task as its first message, and binds the Bot to it. The session runs with the Claude desktop app's permission settings: if those skip permission prompts, Claude can run any command there without asking, and Rubi approvals don't apply to it"}}},
 		},
 		Events: []rubiplugin.EventType{
 			{Type: eventNeeded, Untrusted: []string{"command", "directory", "claude_says", "computer"}},
@@ -60,7 +62,7 @@ func manifest() rubiplugin.Manifest {
 			{Type: eventAsk, Untrusted: []string{"text", "kind", "title", "directory", "computer"}},
 		},
 		Panel: "view",
-		Home:  []string{"claude", "claude-sessions"},
+		Home:  []string{"claude", "claude-sessions", "claude-start"},
 	}
 }
 
@@ -102,6 +104,13 @@ func main() {
 		}
 		return sis.executeBind(h, t)
 	})
+	p.OnExecute(kindStart, func(ctx context.Context, h *rubiplugin.Host, _ string, payload json.RawMessage) (any, error) {
+		var t startTicket
+		if err := json.Unmarshal(payload, &t); err != nil {
+			return nil, fmt.Errorf("bad payload")
+		}
+		return sis.executeStart(ctx, h, t)
+	})
 	p.OnPanel = func(_ context.Context, h *rubiplugin.Host, op string, args json.RawMessage) (any, error) {
 		return sis.panel(h, op, args)
 	}
@@ -111,6 +120,10 @@ func main() {
 		})
 	rubiplugin.AddTool(p, "claude_code_bind", "Ask the user (one strong approval) to bind you to one Claude Code session, usually the main session of your project. After that you can message it with claude_code_send and you get its answers (claude_reply) and questions (claude_ask). Binding again replaces your binding.",
 		func(ctx context.Context, h *rubiplugin.Host, in bindIn) (any, error) { return sis.bindTool(ctx, h, in) })
+	rubiplugin.AddTool(p, "claude_code_start", "Ask the user (one strong approval) to start a NEW Claude Code session on their computer in a project directory, with your task as its first message, when no session exists for your project. On approval you are bound to the new session automatically (claude_bound event with your bind_code) and can use claude_code_send. The directory must be one of the user's existing Claude Code projects (see claude_code_sessions) or a folder they allowed. The session may run without permission prompts; keep the task small and specific. At most 5 requests an hour.",
+		func(ctx context.Context, h *rubiplugin.Host, in startIn) (any, error) {
+			return sis.startTool(ctx, h, in)
+		})
 	rubiplugin.AddTool(p, "claude_code_unbind", "End your binding to a Claude Code session.",
 		func(ctx context.Context, h *rubiplugin.Host, in unbindIn) (any, error) {
 			return sis.unbindTool(ctx, h, in)

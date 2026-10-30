@@ -43,6 +43,8 @@ type fakeHost struct {
 	logs      []string
 	hangBound bool // claude-sessions.bound never answers (until ctx ends)
 	bound     []map[string]any
+	createFn  func(ctx context.Context, args map[string]any) (map[string]any, error) // claude-sessions.create (nil: an old Rubi Home)
+	creates   []map[string]any
 }
 
 type decided struct {
@@ -118,6 +120,20 @@ func (f *fakeHost) HomeCall(ctx context.Context, device, op string, args, out an
 		}
 		f.bound = append(f.bound, args.(map[string]any))
 		return nil
+	case "claude-start.create":
+		f.mu.Lock()
+		fn := f.createFn
+		f.creates = append(f.creates, args.(map[string]any))
+		f.mu.Unlock()
+		if fn == nil {
+			return errors.New(`Rubi Home doesn't do "claude-start.create"`)
+		}
+		ans, err := fn(ctx, args.(map[string]any))
+		if err != nil {
+			return err
+		}
+		b, _ := json.Marshal(ans)
+		return json.Unmarshal(b, out)
 	case "claude-sessions.send":
 		m := args.(map[string]any)
 		f.mu.Lock()
@@ -397,7 +413,7 @@ func TestPollsEveryComputerAndStops(t *testing.T) {
 
 func TestManifest(t *testing.T) {
 	m := manifest()
-	if m.ID != "claude-code" || len(m.Egress) != 0 || len(m.Secrets) != 0 || len(m.Home) != 2 || m.Home[0] != "claude" || m.Home[1] != "claude-sessions" || m.Hooks {
+	if m.ID != "claude-code" || len(m.Egress) != 0 || len(m.Secrets) != 0 || len(m.Home) != 3 || m.Home[0] != "claude" || m.Home[1] != "claude-sessions" || m.Home[2] != "claude-start" || m.Hooks {
 		t.Fatalf("permissions: %+v", m)
 	}
 	run, _ := m.Action(kindRun)

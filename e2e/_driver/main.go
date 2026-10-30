@@ -32,6 +32,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	neturl "net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -477,7 +478,8 @@ func run(dir, rubiBin, homeBin, plugin string) (err error) {
 		return err
 	}
 	for k, v := range map[string]string{"HOME": fakeHome, "XDG_CONFIG_HOME": filepath.Join(fakeHome, ".config"),
-		"RUBI_HOME": rubiHome, "RUBI_HOME_DIR": helperDir} {
+		"RUBI_HOME": rubiHome, "RUBI_HOME_DIR": helperDir,
+		"RUBI_E2E_LAUNCH_FILE": filepath.Join(dir, "launch.log")} {
 		if err := os.Setenv(k, v); err != nil {
 			return err
 		}
@@ -640,13 +642,14 @@ func run(dir, rubiBin, homeBin, plugin string) (err error) {
 		return err
 	}
 	preview, _ := json.Marshal(info.Approval)
-	if !strings.Contains(string(preview), "Claude Code's permission requests") || !strings.Contains(string(preview), "listing the Claude Code sessions") {
+	if !strings.Contains(string(preview), "Claude Code's permission requests") || !strings.Contains(string(preview), "listing the Claude Code sessions") ||
+		!strings.Contains(string(preview), "starting a new Claude Code session") || !strings.Contains(string(preview), "can run any command") {
 		return fmt.Errorf("the install screen doesn't say what the plugin may do: %s", preview)
 	}
 	if res, err := ipc.ApproveWithPassword(fmt.Sprint(out["approval_id"]), info.Approval.Options[0].Key, pw); err != nil || res["state"] != "executed" {
 		return fmt.Errorf("install: %v %v", res, err)
 	}
-	step("claude-code installed from the signed local catalog (install screen names the claude and claude-sessions capabilities)")
+	step("claude-code installed from the signed local catalog (install screen names the claude, claude-sessions and claude-start capabilities)")
 
 	pairOut, err := exec.Command(homeBin, "pair").CombinedOutput()
 	if err != nil {
@@ -1341,6 +1344,107 @@ func run(dir, rubiBin, homeBin, plugin string) (err error) {
 	}
 	<-ch
 	step("8 revoked: the next command asks again")
+
+	// Case 7e: a Bot starts a session where none exists. The helper of this build (-tags rubie2e) can't open
+	// the desktop app: its launcher appends the claude:// link to a file, and this driver plays the new
+	// session's SessionStart hook, as the app would. The folder is allowed by claude_start_dirs.
+	startsRoot := filepath.Join(dir, "starts")
+	startCwd := filepath.Join(startsRoot, "new proj & #1")
+	if err := os.MkdirAll(startCwd, 0o700); err != nil {
+		return err
+	}
+	if po, err := ag.call("claude_code_start", map[string]any{"rubi_agent": "main", "rubi_agent_code": agentCode, "cwd": startCwd, "task": "x"}); err != nil || po["status"] != "awaiting_approval" {
+		return fmt.Errorf("claude_code_start should ask: %v %v", po, err)
+	} else if ci, err := panel(fmt.Sprint(po["approval_url"])); err != nil {
+		return err
+	} else if _, err := ci.Deny(fmt.Sprint(po["approval_id"])); err != nil {
+		return err
+	}
+	cfgPath := filepath.Join(helperDir, "config.json")
+	cfgRaw, err := os.ReadFile(cfgPath)
+	if err != nil {
+		return err
+	}
+	var cfgMap map[string]any
+	if err := json.Unmarshal(cfgRaw, &cfgMap); err != nil {
+		return err
+	}
+	cfgMap["claude_start_dirs"] = []string{startsRoot}
+	cfgRaw, _ = json.Marshal(cfgMap)
+	if err := os.WriteFile(cfgPath, cfgRaw, 0o600); err != nil {
+		return err
+	}
+	launchFile := os.Getenv("RUBI_E2E_LAUNCH_FILE")
+	task7e := "e2e: run the tests & report"
+	so, err := ag.call("claude_code_start", map[string]any{"rubi_agent": "main", "rubi_agent_code": agentCode, "cwd": startCwd, "task": task7e})
+	if err != nil {
+		return err
+	}
+	if so["status"] != "awaiting_approval" {
+		return fmt.Errorf("claude_code_start should ask: %v", so)
+	}
+	spc, err := panel(fmt.Sprint(so["approval_url"]))
+	if err != nil {
+		return err
+	}
+	sinfo, err := spc.ApprovalInfo(fmt.Sprint(so["approval_id"]))
+	if err != nil {
+		return err
+	}
+	if sinfo.Approval.Kind != "claude-code.start" || sinfo.Approval.Level != "strong" || !strings.Contains(string(sinfo.Approval.Preview), "bypassPermissions") ||
+		!strings.Contains(string(sinfo.Approval.Preview), "Starts a NEW Claude Code session") {
+		return fmt.Errorf("start should be a strong approval that says what it does: %+v", sinfo.Approval)
+	}
+	if _, err := spc.ApproveWithPasskey(fmt.Sprint(so["approval_id"]), "start", passkey.sign(origin, 0x01)); err == nil {
+		return errors.New("a tap approved starting a session")
+	}
+	if b, _ := os.ReadFile(launchFile); len(b) != 0 {
+		return errors.New("a session was launched before the approval")
+	}
+	played := make(chan error, 1)
+	go func() { // the desktop app: opens the link, the new session's hook arrives
+		var link string
+		for end := time.Now().Add(30 * time.Second); time.Now().Before(end); time.Sleep(50 * time.Millisecond) {
+			if b, _ := os.ReadFile(launchFile); strings.Contains(string(b), "\n") {
+				link = strings.TrimSpace(string(b))
+				break
+			}
+		}
+		u, err := neturl.Parse(link)
+		if err != nil || u.Scheme != "claude" || u.Host != "code" || u.Path != "/new" {
+			played <- fmt.Errorf("launch link %q: %v", link, err)
+			return
+		}
+		if q := u.Query(); q.Get("folder") != startCwd || !strings.HasPrefix(q.Get("q"), "A message from this project's sister") ||
+			!strings.HasSuffix(q.Get("q"), "--- message from Main ---\n"+task7e) || strings.ContainsAny(link, " #") {
+			played <- fmt.Errorf("launch link %q carries the wrong folder or prompt", link)
+			return
+		}
+		_, err = hookEvent(homeBin, helperDir, map[string]any{"session_id": "cli-started", "transcript_path": filepath.Join(dir, "none2.jsonl"),
+			"cwd": startCwd, "permission_mode": "bypassPermissions", "hook_event_name": "SessionStart", "source": "startup"})
+		played <- err
+	}()
+	if res, err := spc.ApproveWithPassword(fmt.Sprint(so["approval_id"]), "start", pw); err != nil || res["state"] != "executed" {
+		return fmt.Errorf("start: %v %v", res, err)
+	} else if raw, _ := json.Marshal(res); strings.Contains(string(raw), "bc_") || !strings.Contains(string(raw), "cli-started") {
+		return fmt.Errorf("the start approval's result carries a bind code or lacks the session: %s", raw)
+	}
+	if err := <-played; err != nil {
+		return err
+	}
+	started, err := eventFor("the claude_bound event of the started session", "claude_bound", func(d map[string]any) bool { return d["session_id"] == "cli-started" })
+	if err != nil {
+		return err
+	}
+	if _, err := ag.call("claude_code_send", map[string]any{"sister": sister, "bind_code": fmt.Sprint(started["bind_code"]), "text": "e2e: second message to the started session"}); err != nil {
+		return err
+	}
+	o7e, err := hookEvent(homeBin, helperDir, map[string]any{"session_id": "cli-started", "transcript_path": filepath.Join(dir, "none2.jsonl"), "cwd": startCwd,
+		"permission_mode": "bypassPermissions", "hook_event_name": "Stop", "stop_hook_active": false})
+	if err != nil || !strings.Contains(o7e, "second message to the started session") {
+		return fmt.Errorf("Stop hook of the started session: %q %v", o7e, err)
+	}
+	step("7e claude_code_start: strong approval naming the bypassPermissions risk, launch link built for the folder and framed task, SessionStart matched, Bot bound (claude_bound) and claude_code_send reached the new session")
 
 	// Case 4: Rubi locked -> deny.
 	if _, err := ag.call("rubi_lock", nil); err != nil {

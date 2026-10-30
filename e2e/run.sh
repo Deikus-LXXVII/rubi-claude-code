@@ -6,7 +6,9 @@
 # other command -> refused (then deny), Rubi locked -> deny; a Bot binds to a desktop-app session (only
 # with its webhook's agent code, strong approval), sends a message, the Stop hook hands it to Claude and
 # the answer and a rubi-ask come back to that Bot, also with the session in bypassPermissions; "trust
-# this session for 2 hours" auto-allows plain commands, a push still asks, revoke ends it.
+# this session for 2 hours" auto-allows plain commands, a push still asks, revoke ends it; a Bot starts a
+# new session (claude_code_start; the helper is built with -tags rubie2e so its launcher writes the claude://
+# link to a file instead of opening the app) and is bound to it.
 #
 #   RUBI_REPO=../rubi e2e/run.sh
 set -euo pipefail
@@ -22,7 +24,7 @@ printf '{"Replace":{"%s/cmd/rubi-claude-e2e/main.go":"%s/_driver/main.go"}}' "$R
 (cd "$RUBI_REPO" &&
   go build -race -overlay "$WORK/overlay.json" -o "$WORK/e2e" ./cmd/rubi-claude-e2e &&
   go build -race -o "$WORK/rubi" ./cmd/rubi &&
-  go build -race -o "$WORK/rubi-home" ./cmd/rubi-home)
+  go build -race -tags rubie2e -o "$WORK/rubi-home" ./cmd/rubi-home)  # rubie2e: the launcher writes the claude:// link to a file
 KEY=$("$WORK/e2e" keys "$WORK")
 (cd "$PLUGIN_REPO" && go build -race -ldflags "-X main.PublisherKey=$KEY" -o "$WORK/claude-code" .)
 

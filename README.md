@@ -122,6 +122,50 @@ them, it doesn't run Claude).
    (the answer went back as `claude_reply`), or `expired` (24 hours unread). `queued` is the `claude_code_send` result itself (`message_id`), so it isn't repeated as an
    event. Every event may wake the Bot's agent, so there are only these few.
 
+### Starting a session when none exists
+
+If your project has no Claude Code session open, the Bot can ask for one with `claude_code_start`
+(`rubi_agent`, `rubi_agent_code`, `device`, `cwd`, `task`). It is a strong approval with your passkey, and
+the approval says what it does: it starts a NEW Claude Code session on that computer in that directory. The
+approval shows the Bot's `task` word for word (at most 2000 characters and 40 lines) and, below it, the
+header Rubi adds before it, so you see the whole first message. The session receives it framed as a message
+from the sister, not as your own words. The task is rejected, not cleaned, if it contains invisible
+characters (zero-width, bidirectional, tag, private-use, control, C1) or more than two blank lines in a row;
+Rubi Home checks the same, so what you approved is what is launched.
+
+- **Capability.** The plugin declares the separate Rubi Home capability `claude-start`, which the install
+  screen words as starting a new session with a first message (and, where permission prompts are skipped,
+  Claude running any command). Plugins without it can't start sessions.
+- **Permissions.** The session runs with the Claude desktop app's permission settings. If those skip permission
+  prompts (`bypassPermissions`, which desktop sessions may use), Claude can run any command there without
+  asking, and Rubi approvals and 2-hour trusts don't apply to it. Approve only if you trust the Bot's task
+  with that. The result repeats this when the session reports `bypassPermissions`.
+- **Where.** Rubi Home starts sessions only in a directory where Claude Code already has a session (a project
+  you have used) or inside a folder you list as `claude_start_dirs` in Rubi Home's `config.json`
+  (absolute paths, none by default). The path must be the real one: a path that goes through a symbolic link
+  is refused, so the directory you approve is the directory the session runs in. Never `~/.claude`, `~/.ssh`,
+  `~/Library`, `~/.local`, `~/.npm`, `~/.oh-my-zsh`, `~/.zsh*`, your home folder itself, `/var`, `/opt`,
+  `/Applications`, `/Volumes` itself, system folders. At most 3 starts an hour per computer, and in this plugin
+  5 requests an hour per Bot and 10 in all.
+- **How.** Rubi Home opens the desktop app's `claude://code/new?folder=...&q=...` link with `/usr/bin/open`
+  (a Mac with the Claude desktop app is needed) and waits up to 45 seconds for the new session's SessionStart
+  hook (a fresh `startup`, not a resume, in that folder; the first message carries a random reference code that
+  is checked when the transcript shows it). The hooks must be set up as for any other session. A headless
+  `claude -p` is not used: it needs the command-line tool signed in and leaves no live session behind.
+- **After it starts.** The Bot is bound to the new session in the same step, as with `claude_code_bind`: it
+  gets `claude_bound` with its `bind_code` (the code is never in the approval's result) and can use
+  `claude_code_send`. If the session doesn't show up in time (the app may wait for you to confirm, or the
+  hooks are missing), the result says it was launched but not seen yet; once `claude_code_sessions` lists it,
+  the Bot binds with `claude_code_bind` (a new approval). If Rubi Home doesn't answer after the request was
+  sent, the error says the session may have been started: check the desktop app before trying again.
+- **Needs a newer Rubi.** `claude-start` is a new capability; the plugin's `MinRubi` has to be raised to the core
+  release that has it when that is tagged.
+
+Manual check on the Mac (not done yet): put a scratch folder in `claude_start_dirs`, have a Bot call
+`claude_code_start` with a harmless task, approve, and see that the app opens a session in that folder with
+the framed message, that the Bot gets `claude_bound`, that the session keeps running, and which permission
+mode it has. Also try a task with spaces, quotes, `&`, `#` and non-ASCII text.
+
 ### Waking an idle session
 
 Hooks fire only when Claude Code runs a turn, so a session waiting for you would read a message only
