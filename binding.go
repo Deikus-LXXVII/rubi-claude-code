@@ -698,6 +698,12 @@ func askBinding(ctx context.Context, h sisterHost, device string, asker session,
 // route sends a session's reply or ask to the Bot bound to it (or, for an ask from a sub-session, to
 // the Bot bound to a session of the same project). Nothing bound: nothing goes out.
 func (s *sisters) route(ctx context.Context, h sisterHost, d rubiplugin.HomeDevice, o outMsg) {
+	if len(o.To) >= len("local:") && strings.EqualFold(o.To[:len("local:")], "local:") {
+		// A local process (rubi-home claude-send) wrote to the session; Rubi Home keeps what it is told.
+		// Rubi Home doesn't send these; a Bot never gets one.
+		h.Logf("%s: an entry for a local sender was dropped", d.Name)
+		return
+	}
 	var target *binding
 	var sess session
 	for _, b := range s.st.bindings() {

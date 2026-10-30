@@ -153,6 +153,21 @@ func TestToolMadeAsksAndRepliesRoute(t *testing.T) {
 	}
 }
 
+// Anything addressed to a local sender (rubi-home claude-send) is dropped, never forwarded to a Bot, whatever
+// kind it is and whichever Bot the session is bound to.
+func TestEntriesForLocalSendersAreNeverRouted(t *testing.T) {
+	f, s, _ := boundFixture(t)
+	ctx := context.Background()
+	n := len(f.events)
+	for _, to := range []string{"local:Citri", "LOCAL:x", "local:"} {
+		s.route(ctx, f, mac, outMsg{ID: "co_9", Kind: "reply", SessionID: "cli-1", To: to, InReplyTo: []string{"cm_9"}, Text: "private answer"})
+		s.route(ctx, f, mac, outMsg{ID: "cm_9", Kind: "status", State: "answered", SessionID: "cli-1", To: to})
+	}
+	if got := f.events[n:]; len(got) != 0 {
+		t.Fatalf("routed: %+v", got)
+	}
+}
+
 // A Rubi Home that was updated is asked again when polling (re-)starts.
 func TestBoundIsRetriedAfterRubiHomeIsUpdated(t *testing.T) {
 	f := &fakeHost{devices: []rubiplugin.HomeDevice{mac}, sessions: []session{mainSess, subSess, otherSess}, oldHome: true}
