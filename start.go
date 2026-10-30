@@ -164,7 +164,7 @@ func (s *sisters) startTool(ctx context.Context, h sisterHost, in startIn) (any,
 			h.Audit("project_trust_start_outside", map[string]any{"mandate": pt.ID, "sister": sister, "directory": dir, "root": pt.Root})
 			return nil, fmt.Errorf("the session was started in %s, which is outside the trusted project %s (a symlink?); %s was unbound from it and the trust does not cover it: ask the user", dir, pt.Root, sister)
 		}
-		m["approval"] = "none needed: " + pt.ID + ", the user's trust of " + pt.Root + " until " + s.expiryTime(trustOffer{Expires: pt.Expires}).Format("Mon 2 Jan 15:04 MST")
+		m["approval"] = "none needed: " + pt.ID + ", the user's trust of " + pt.Root + " " + s.trustEnd(*pt)
 		return m, nil
 	}
 	preview := map[string]any{"bot": sister, "computer": d.Name, "directory": in.Cwd, "first_message_from_bot": task,

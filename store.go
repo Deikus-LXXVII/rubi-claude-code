@@ -3,6 +3,8 @@ package main
 import (
 	"crypto/rand"
 	"crypto/subtle"
+	"fmt"
+	"slices"
 	"sync"
 	"time"
 )
@@ -163,8 +165,15 @@ func (s *store) issueProject(p projectTrust, now time.Time) ([]projectTrust, err
 	}
 	s.st.Projects = kept
 	if len(s.st.Projects) >= maxProjectTrusts {
-		replaced = append(replaced, s.st.Projects[0])
-		s.st.Projects = s.st.Projects[1:]
+		// The oldest timed trust goes; an unlimited one only ends on a revoke, so if they all are, nothing is
+		// granted (and nothing changed).
+		i := slices.IndexFunc(s.st.Projects, func(x projectTrust) bool { return !x.Unlimited })
+		if i < 0 {
+			s.st = before
+			return nil, fmt.Errorf("there are already %d project trusts until revoked; revoke one first", maxProjectTrusts)
+		}
+		replaced = append(replaced, s.st.Projects[i])
+		s.st.Projects = slices.Delete(s.st.Projects, i, i+1)
 	}
 	s.st.Projects = append(s.st.Projects, p)
 	if err := s.saveLocked(); err != nil {

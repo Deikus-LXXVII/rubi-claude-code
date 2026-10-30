@@ -116,8 +116,8 @@ func TestTrustExpiry(t *testing.T) {
 }
 
 func TestReleaseBuildHasNoExpiryHook(t *testing.T) {
-	if projectTrustExpiryHook != nil && !testBuiltWithE2E {
-		t.Fatal("the test-only expiry hook is present in a build without the rubie2e tag")
+	if (projectTrustExpiryHook != nil || clockHook != nil) && !testBuiltWithE2E {
+		t.Fatal("a test-only hook (expiry, clock) is present in a build without the rubie2e tag")
 	}
 }
 
@@ -128,7 +128,7 @@ func TestRunApprovalOffersProjectTrust(t *testing.T) {
 		t.Fatalf("submits %d", len(f.submits))
 	}
 	sub := f.submits[0]
-	if len(sub.Options) != 3 || sub.Options[0].Key != optionAllow || sub.Options[1].Key != optionTrust || sub.Options[2].Key != optionTrustProject {
+	if len(sub.Options) != 4 || sub.Options[0].Key != optionAllow || sub.Options[1].Key != optionTrust || sub.Options[2].Key != optionTrustProject || sub.Options[3].Key != optionTrustForever {
 		t.Fatalf("options %+v", sub.Options)
 	}
 	o := sub.Options[2]
@@ -748,7 +748,7 @@ func TestBotNeedsApprovalAfterTheTrustEnds(t *testing.T) {
 func TestProjectTrustTextIsHonest(t *testing.T) {
 	m := manifest()
 	run, _ := m.Action(kindRun)
-	if len(run.Options) != 3 || run.Options[2].Key != optionTrustProject {
+	if len(run.Options) != 4 || run.Options[2].Key != optionTrustProject || run.Options[3].Key != optionTrustForever {
 		t.Fatalf("run options %+v", run.Options)
 	}
 	for _, want := range []string{"04:00", "24 hours", "still ask", "git tag", "start and bind sessions", "revoke"} {
