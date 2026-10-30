@@ -60,7 +60,9 @@ func (s *sisters) panel(h sisterHost, op string, args json.RawMessage) (any, err
 		if err != nil {
 			return nil, err
 		}
-		h.Audit("binding_removed", map[string]any{"sister": a.Sister, "by": "user"})
+		if ok {
+			h.Audit("binding_removed", map[string]any{"sister": a.Sister, "by": "user"})
+		}
 		return map[string]any{"unbound": ok}, nil
 	default:
 		return nil, fmt.Errorf("unknown op %q", op)

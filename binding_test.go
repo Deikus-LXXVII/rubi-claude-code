@@ -239,6 +239,14 @@ func TestPanel(t *testing.T) {
 	if _, err := s.panel(f, "unbind", json.RawMessage(`{"sister":"Citri"}`)); err != nil || len(s.st.bindings()) != 0 {
 		t.Fatal("unbind from the panel failed")
 	}
+	// Unbinding what isn't bound changes nothing, so the audit log doesn't claim a removal.
+	removed := func() int {
+		return len(slices.DeleteFunc(slices.Clone(f.audits), func(a string) bool { return a != "binding_removed" }))
+	}
+	n := removed()
+	if v, err := s.panel(f, "unbind", json.RawMessage(`{"sister":"Citri"}`)); err != nil || v.(map[string]any)["unbound"] != false || removed() != n {
+		t.Fatalf("unbinding nothing: %v %v, removals %d -> %d", v, err, n, removed())
+	}
 }
 
 // The binding is made for the Bot Rubi verified, never for a name the caller typed; a call Rubi verified
