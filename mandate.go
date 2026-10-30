@@ -882,7 +882,12 @@ func secretPath(s string) string {
 		part = strings.TrimSpace(part)
 		switch part {
 		case ".ssh", ".aws", ".gnupg", ".kube", ".docker", ".claude", ".claude.json", ".rubi-home", "rubi home", "keychains",
-			".git-credentials", ".netrc", ".npmrc", ".pypirc", ".zsh_history", ".bash_history", "launchagents":
+			".git-credentials", ".netrc", ".npmrc", ".pypirc", ".zsh_history", ".bash_history", "launchagents",
+			// shell startup files (a line there runs in every new terminal) and per-user settings with tokens
+			".zshrc", ".zprofile", ".zshenv", ".zlogin", ".zlogout", ".bashrc", ".bash_profile", ".bash_login", ".profile",
+			".gitconfig", ".config", ".vault-token", ".pgpass", ".my.cnf", ".azure", ".gcloud", ".terraform.d",
+			// browser sessions: Safari, Chrome, Firefox cookies and Chrome's saved passwords
+			"cookies", "cookies.binarycookies", "cookies.sqlite", "login data":
 			return part
 		}
 		if strings.HasPrefix(part, ".env") || strings.HasPrefix(part, "id_rsa") || strings.HasPrefix(part, "id_ed25519") ||

@@ -292,3 +292,33 @@ func TestMandateWritesAndRunsOnlyInside(t *testing.T) {
 		}
 	}
 }
+
+// TestMandateSecretPaths: shell startup files, per-user settings with tokens and browser cookies ask,
+// wherever they are named (an argument, an option value, a redirection); project files don't.
+func TestMandateSecretPaths(t *testing.T) {
+	for _, c := range []string{
+		"cat /Users/v/.zshrc",
+		"cat ~/.zprofile",
+		"cp /Users/v/.bash_profile notes.txt",
+		"head -5 /Users/v/.profile",
+		"cat /Users/v/.gitconfig",
+		"cat /Users/v/.config/gh/hosts.yml",
+		"cat /Users/v/.vault-token",
+		"cat /Users/v/.pgpass",
+		"cat /Users/v/Library/Cookies/Cookies.binarycookies",
+		"cat '/Users/v/Library/Application Support/Google/Chrome/Default/Cookies'",
+		"cat '/Users/v/Library/Application Support/Google/Chrome/Default/Login Data'",
+		"xxd /Users/v/Library/Application Support/Firefox/Profiles/x/cookies.sqlite",
+		"rg --files-from=/Users/v/.zshrc foo",
+		"wc -l < /Users/v/.bashrc",
+	} {
+		if ok, _ := mandateAllows(c, root, root); ok {
+			t.Errorf("%q: allowed, want refused", c)
+		}
+	}
+	for _, c := range []string{"cat config/app.yaml", "cat README.md", "ls internal", "cat profile.go", "grep -rn cookie internal"} {
+		if ok, why := mandateAllows(c, root, root); !ok {
+			t.Errorf("%q: refused (%s), want allowed", c, why)
+		}
+	}
+}
