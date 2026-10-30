@@ -1,6 +1,7 @@
 package main
 
 import (
+	"math/rand"
 	"strings"
 	"testing"
 	"time"
@@ -8,26 +9,27 @@ import (
 
 const root = "/Users/v/project"
 
+var mandateAllowedCases = []string{
+	"ls -la",
+	"go test ./...",
+	"go vet ./... && go test -race ./internal/...",
+	"git status; git diff --stat | head -50",
+	"git add -A && git commit -m 'fix: bug'",
+	"git log --oneline -20",
+	"cat go.mod > out.txt",
+	"rg -n foo internal",
+	"rm -rf build",
+	"mkdir -p tmp/x && touch tmp/x/a",
+	"cd internal && go test ./...",
+	"make test",
+	"npm test",
+	"go build ./... 2>&1 | tail -5",
+	"CI=1 go test ./...",
+	"cat /etc/hosts",
+}
+
 func TestMandateAllows(t *testing.T) {
-	allowed := []string{
-		"ls -la",
-		"go test ./...",
-		"go vet ./... && go test -race ./internal/...",
-		"git status; git diff --stat | head -50",
-		"git add -A && git commit -m 'fix: bug'",
-		"git log --oneline -20",
-		"cat go.mod > out.txt",
-		"rg -n foo internal",
-		"rm -rf build",
-		"mkdir -p tmp/x && touch tmp/x/a",
-		"cd internal && go test ./...",
-		"make test",
-		"npm test",
-		"go build ./... 2>&1 | tail -5",
-		"FOO=1 go test ./...",
-		"cat /etc/hosts",
-	}
-	for _, c := range allowed {
+	for _, c := range mandateAllowedCases {
 		if ok, why := mandateAllows(c, root, root); !ok {
 			t.Errorf("%q: refused (%s), want allowed", c, why)
 		}
@@ -200,97 +202,100 @@ func TestMandateNeverAllowsPushRandom(t *testing.T) {
 
 // TestMandateWritesAndRunsOnlyInside: the escapes the 2026-10-30 audit found (each was allowed by
 // v0.2.1) now ask, and the everyday in-project form of the same commands is still allowed.
+var writesAllowedCases = []string{
+	"sort -u notes.txt",
+	"sort -o sorted.txt notes.txt",
+	"sort -k2 -t, data.csv > sorted.csv",
+	"uniq -c words.txt",
+	"uniq words.txt out/uniq.txt",
+	"xxd bin.dat | head",
+	"xxd -r dump.hex out.bin",
+	"tree -L 2",
+	"tree -o tree.txt",
+	"go build -o bin/app ./cmd/app",
+	"go test -coverprofile=cover.out ./...",
+	"go test -run 'TestA/sub' -count=1 ./...",
+	"go env GOPATH",
+	"go clean -testcache",
+	"find . -name '*.go' -print0",
+	"git worktree add wt/feat -b feat",
+	"git grep -n foo",
+	"make test V=1",
+	"make -C sub build",
+	"cargo build",
+	"cargo test --target-dir target/ci",
+	"npm run build",
+	"pytest -q tests --basetemp=tmp/pytest",
+	"cp -t build a.txt b.txt",
+	"echo x >> notes.md",
+	"cat .git/config",
+	"cd internal && go test ./...",
+}
+
 func TestMandateWritesAndRunsOnlyInside(t *testing.T) {
-	allowed := []string{
-		"sort -u notes.txt",
-		"sort -o sorted.txt notes.txt",
-		"sort -k2 -t, data.csv > sorted.csv",
-		"uniq -c words.txt",
-		"uniq words.txt out/uniq.txt",
-		"xxd bin.dat | head",
-		"xxd -r dump.hex out.bin",
-		"tree -L 2",
-		"tree -o tree.txt",
-		"go build -o bin/app ./cmd/app",
-		"go test -coverprofile=cover.out ./...",
-		"go test -run 'TestA/sub' -count=1 ./...",
-		"go env GOPATH",
-		"go clean -testcache",
-		"find . -name '*.go' -print0",
-		"git worktree add wt/feat -b feat",
-		"git grep -n foo",
-		"make test V=1",
-		"make -C sub build",
-		"cargo build",
-		"cargo test --target-dir target/ci",
-		"npm run build",
-		"pytest -q tests --basetemp=tmp/pytest",
-		"cp -t build a.txt b.txt",
-		"echo x >> notes.md",
-		"cat .git/config",
-		"cd internal && go test ./...",
-	}
-	for _, c := range allowed {
+	for _, c := range writesAllowedCases {
 		if ok, why := mandateAllows(c, root, root); !ok {
 			t.Errorf("%q: refused (%s), want allowed", c, why)
 		}
 	}
-	refused := []string{
-		// writes outside the directory
-		"sort -o /Users/v/.zshrc notes.txt",
-		"sort --output=/tmp/x notes.txt",
-		"sort -uo /tmp/x notes.txt",
-		"sort -T /tmp notes.txt",
-		"uniq notes.txt /Users/v/.zprofile",
-		"uniq -f 1 notes.txt /tmp/out",
-		"xxd -r dump.hex /Users/v/bin/tool",
-		"xxd in.bin ../out.hex",
-		"tree -o /tmp/out.txt",
-		"go build -o /usr/local/bin/rubi-home ./cmd/x",
-		"go build -o=../bin/x .",
-		"go test -coverprofile=/tmp/c.out ./...",
-		"go test -cpuprofile /tmp/cpu.out ./...",
-		"find . -fprint0 /Users/v/x",
-		"git worktree add /tmp/elsewhere",
-		"git worktree add ../sibling -b x",
-		"git worktree move wt /tmp/wt",
-		"cargo build --target-dir /tmp/t",
-		"npm run build --prefix ../other",
-		"pytest --basetemp=/Users/v/Documents",
-		"pytest --cov-report=html:/tmp/cov",
-		"pytest -o cache_dir=/tmp/c",
-		"cp --target-directory=/tmp a.txt",
-		"cp -t/tmp a.txt",
-		"go clean -modcache",
-		"go env -w GOFLAGS=-mod=mod",
-		// git's own files: a hook or config there runs at the next git command
-		"tee .git/hooks/pre-commit",
-		"chmod 755 .git/hooks/pre-commit",
-		"echo x > .git/hooks/pre-commit",
-		"cp evil .git/hooks/post-checkout",
-		"echo '[core]' >> .git/config",
-		"go build -o .git/hooks/pre-commit ./cmd/x",
-		// options that run another program or text
-		"git grep --open-files-in-pager=vim foo",
-		"git grep -Ovim foo",
-		"git grep -O foo",
-		"go test -exec=echo ./...",
-		"go run -toolexec=strace .",
-		"cargo build --config 'target.x.runner=zsh'",
-		"cargo build -Zunstable-options",
-		"npm test --script-shell=zsh",
-		"make --eval='all: ; ls'",
-		"make -E 'all: ; ls'",
-		"make CC='cc; ls'",
-		"make SHELL=zsh",
-		"sort --compress-program=gzip notes.txt",
-		"rg --hostname-bin=x foo",
-	}
-	for _, c := range refused {
+	for _, c := range escapeProbes {
 		if ok, _ := mandateAllows(c, root, root); ok {
 			t.Errorf("%q: allowed, want refused", c)
 		}
 	}
+}
+
+// escapeProbes are the escapes the 2026-10-30 audit found; each must ask. They seed FuzzMandate.
+var escapeProbes = []string{
+	// writes outside the directory
+	"sort -o /Users/v/.zshrc notes.txt",
+	"sort --output=/tmp/x notes.txt",
+	"sort -uo /tmp/x notes.txt",
+	"sort -T /tmp notes.txt",
+	"uniq notes.txt /Users/v/.zprofile",
+	"uniq -f 1 notes.txt /tmp/out",
+	"xxd -r dump.hex /Users/v/bin/tool",
+	"xxd in.bin ../out.hex",
+	"tree -o /tmp/out.txt",
+	"go build -o /usr/local/bin/rubi-home ./cmd/x",
+	"go build -o=../bin/x .",
+	"go test -coverprofile=/tmp/c.out ./...",
+	"go test -cpuprofile /tmp/cpu.out ./...",
+	"find . -fprint0 /Users/v/x",
+	"git worktree add /tmp/elsewhere",
+	"git worktree add ../sibling -b x",
+	"git worktree move wt /tmp/wt",
+	"cargo build --target-dir /tmp/t",
+	"npm run build --prefix ../other",
+	"pytest --basetemp=/Users/v/Documents",
+	"pytest --cov-report=html:/tmp/cov",
+	"pytest -o cache_dir=/tmp/c",
+	"cp --target-directory=/tmp a.txt",
+	"cp -t/tmp a.txt",
+	"go clean -modcache",
+	"go env -w GOFLAGS=-mod=mod",
+	// git's own files: a hook or config there runs at the next git command
+	"tee .git/hooks/pre-commit",
+	"chmod 755 .git/hooks/pre-commit",
+	"echo x > .git/hooks/pre-commit",
+	"cp evil .git/hooks/post-checkout",
+	"echo '[core]' >> .git/config",
+	"go build -o .git/hooks/pre-commit ./cmd/x",
+	// options that run another program or text
+	"git grep --open-files-in-pager=vim foo",
+	"git grep -Ovim foo",
+	"git grep -O foo",
+	"go test -exec=echo ./...",
+	"go run -toolexec=strace .",
+	"cargo build --config 'target.x.runner=zsh'",
+	"cargo build -Zunstable-options",
+	"npm test --script-shell=zsh",
+	"make --eval='all: ; ls'",
+	"make -E 'all: ; ls'",
+	"make CC='cc; ls'",
+	"make SHELL=zsh",
+	"sort --compress-program=gzip notes.txt",
+	"rg --hostname-bin=x foo",
 }
 
 // TestMandateSecretPaths: shell startup files, per-user settings with tokens and browser cookies ask,
@@ -321,4 +326,38 @@ func TestMandateSecretPaths(t *testing.T) {
 			t.Errorf("%q: refused (%s), want allowed", c, why)
 		}
 	}
+}
+
+// FuzzMandate builds commands from a vocabulary (programs, options including unknown, exec and write
+// ones, paths inside, outside, in .git and secret, separators, redirections) and checks with an oracle
+// that does not use the spec table that an allowed command has no write outside the directory or in
+// .git, no exec option, no credential path and no address. A first byte 0xff makes the rest a whole command.
+func FuzzMandate(f *testing.F) {
+	for _, c := range escapeProbes {
+		f.Add(append([]byte{0xff}, c...))
+	}
+	for _, c := range reviewRefused {
+		f.Add(append([]byte{0xff}, c...))
+	}
+	f.Add([]byte{0, 3, 40, 3, 50, 120, 130})
+	f.Fuzz(func(t *testing.T, data []byte) { checkOracle(t, fuzzCommand(data)) })
+}
+
+// TestMandateOracleSample runs the fuzz body over a fixed random sample, so go test covers it.
+func TestMandateOracleSample(t *testing.T) {
+	rng := rand.New(rand.NewSource(77))
+	allowed := 0
+	for i := 0; i < 5000; i++ {
+		data := make([]byte, 8+rng.Intn(100))
+		rng.Read(data)
+		cmd := fuzzCommand(data)
+		if ok, _ := mandateAllows(cmd, root, root); ok {
+			allowed++
+		}
+		checkOracle(t, cmd)
+	}
+	for _, c := range append(append([]string(nil), escapeProbes...), reviewRefused...) {
+		checkOracle(t, c)
+	}
+	t.Logf("%d of 5000 sampled commands were allowed", allowed)
 }

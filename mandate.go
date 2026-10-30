@@ -12,14 +12,19 @@ package main
 // substitutions, backticks), options that name another program to run (git grep -O, go -exec, make
 // --eval), the network (curl, ssh, installs, publishing), writing or deleting outside the session's
 // directory or into git's own files (a hook there runs at the next commit), and paths that hold
-// credentials. The check reads only the command line:
+// credentials. Every option of a listed program must be on that program's list (mandate_programs.go,
+// mandate_git.go); an unknown option asks. The check reads only the command line:
 // a build, test or script it runs (make, go test, npm run) can do anything you can, so a mandate trusts
-// the project's own code.
+// the project's own code. The check reads no files either: a symlink that already exists in the project
+// and points outside is followed by the commands that use it (a link the command line itself makes is
+// resolved from the link's directory and must stay inside). A cd NAME can still land elsewhere when the
+// user's own zsh configuration sets cdablevars or CDPATH; the check can't see that.
 
 import (
 	"path"
 	"strings"
 	"time"
+	"unicode"
 )
 
 const (
@@ -75,6 +80,7 @@ type redirect struct {
 type segment struct {
 	words  []word
 	redirs []redirect
+	next   string // the operator that joins it to the next command: && || ; | &; "" for the last
 }
 
 // splitShell splits a command line the way a POSIX shell would for the plain subset the mandate
@@ -87,6 +93,8 @@ func splitShell(s string) ([]segment, string) {
 	var w strings.Builder
 	inWord, glob := false, false
 	pendingRedir := ""
+	dup := false // after >& or <&: a descriptor number or - duplicates a descriptor, any other word is a file
+	bad := ""
 	lastOp := "" // the operator before the current command; && || | need one after them
 	empty := func() bool { return !inWord && len(cur.words) == 0 && len(cur.redirs) == 0 && pendingRedir == "" }
 	endWord := func() string {
@@ -97,8 +105,14 @@ func splitShell(s string) ([]segment, string) {
 		w.Reset()
 		inWord, glob = false, false
 		if pendingRedir != "" {
-			cur.redirs = append(cur.redirs, redirect{pendingRedir, wd})
-			pendingRedir = ""
+			isDup := dup && (isDigits(wd.text) || wd.text == "-")
+			if dup && !isDup && wd.text != "" && wd.text[0] >= '0' && wd.text[0] <= '9' {
+				bad = "an ambiguous descriptor redirection"
+			}
+			if !isDup {
+				cur.redirs = append(cur.redirs, redirect{pendingRedir, wd})
+			}
+			pendingRedir, dup = "", false
 			return ""
 		}
 		cur.words = append(cur.words, wd)
@@ -155,11 +169,11 @@ func splitShell(s string) ([]segment, string) {
 				return nil, why
 			}
 			lastOp = ";"
+			segs[len(segs)-1].next = ";"
 		case c == '&' || c == '|':
 			// "2>&1" and ">&2" duplicate a descriptor: no file.
-			if c == '&' && pendingRedir == ">" && !inWord && i+1 < len(r) && r[i+1] >= '0' && r[i+1] <= '9' {
-				pendingRedir = ""
-				i++
+			if c == '&' && (pendingRedir == ">" || pendingRedir == "<") && !inWord && i > 0 && (r[i-1] == '>' || r[i-1] == '<') {
+				dup = true
 				continue
 			}
 			lastOp = string(c)
@@ -170,6 +184,7 @@ func splitShell(s string) ([]segment, string) {
 			if why := endSeg(); why != "" {
 				return nil, why
 			}
+			segs[len(segs)-1].next = lastOp
 		case c == '>' || c == '<':
 			if inWord && isDigits(w.String()) { // a descriptor number: 2>
 				w.Reset()
@@ -217,6 +232,9 @@ func splitShell(s string) ([]segment, string) {
 			return nil, why
 		}
 	}
+	if bad != "" {
+		return nil, bad
+	}
 	return segs, ""
 }
 
@@ -244,37 +262,91 @@ func mandateAllows(command, root, cwd string) (bool, string) {
 	if why != "" {
 		return false, "uses " + why
 	}
-	dir := path.Clean(cwd)
+	// dirs are the places the next command may run in. A cd joined by && moves them; after any other
+	// operator the next command may also run where an earlier command ran (a cd that was skipped or failed).
+	dirs := []string{path.Clean(cwd)}
+	seen := dirs
 	for _, sg := range segs {
-		next, why := checkSegment(sg, root, dir)
-		if why != "" {
-			return false, why
+		var next []string
+		isCd := false
+		for _, d := range dirs {
+			nd, cd, why := checkSegment(sg, root, d)
+			if why != "" {
+				return false, why
+			}
+			isCd = cd
+			next = addDir(next, nd)
 		}
-		dir = next
+		if isCd && sg.next != "" && sg.next != "&&" {
+			return false, "cd joined to the next command by " + sg.next + " (only && keeps the directory)"
+		}
+		for _, d := range next {
+			seen = addDir(seen, d)
+		}
+		if sg.next == "&&" {
+			dirs = next
+		} else {
+			dirs = seen
+		}
+		if len(dirs) > 8 {
+			return false, "too many working directories"
+		}
 	}
 	return true, "inside the mandate"
 }
 
-var riskyEnv = []string{"PATH", "LD_", "DYLD_", "GIT_", "BASH_ENV", "ENV", "PROMPT_COMMAND", "NODE_OPTIONS", "PYTHON", "PERL5", "RUBYOPT", "HOME", "SHELL", "EDITOR", "VISUAL", "PAGER"}
+func addDir(ds []string, d string) []string {
+	for _, x := range ds {
+		if x == d {
+			return ds
+		}
+	}
+	return append(append([]string(nil), ds...), d)
+}
 
-// checkSegment checks one command and returns the working directory after it (cd).
-func checkSegment(sg segment, root, dir string) (string, string) {
+// harmlessEnv are the variables a command may set in front of itself (CI=1 go test): names only, matched
+// without regard to case; anything else (PATH, CC, GOCACHE, CDPATH, XDG_*, proxies ...) asks.
+var harmlessEnv = map[string]bool{"CI": true, "NO_COLOR": true, "FORCE_COLOR": true, "CLICOLOR": true, "CLICOLOR_FORCE": true,
+	"TERM": true, "COLUMNS": true, "LINES": true, "LANG": true, "TZ": true, "GOOS": true, "GOARCH": true, "GOARM": true, "GOAMD64": true,
+	"GOMAXPROCS": true, "GOGC": true, "GOTRACEBACK": true, "CGO_ENABLED": true, "RUST_BACKTRACE": true, "RUST_LOG": true,
+	"NODE_ENV": true, "PYTHONDONTWRITEBYTECODE": true, "PYTHONUNBUFFERED": true, "DEBUG": true, "VERBOSE": true}
+
+func harmlessName(n string) bool {
+	u := strings.ToUpper(n)
+	return harmlessEnv[u] || strings.HasPrefix(u, "LC_")
+}
+
+// checkSegment checks one command and returns the working directory after it (cd) and whether it was a cd.
+func checkSegment(sg segment, root, dir string) (string, bool, string) {
 	ws := sg.words
 	for _, w := range ws {
-		if bad := secretPath(w.text); bad != "" {
-			return dir, "touches a credential path (" + bad + ")"
+		if bad := secretIn(w.text); bad != "" {
+			return dir, false, "touches a credential path (" + bad + ")"
 		}
 		if hasURL(w.text) {
-			return dir, "names a network address (" + oneLine(w.text, 60) + ")"
+			return dir, false, "names a network address (" + oneLine(w.text, 60) + ")"
+		}
+		if w.glob {
+			if why := globCheck(root, dir, w); why != "" {
+				return dir, false, why
+			}
 		}
 	}
 	for _, rd := range sg.redirs {
-		if bad := secretPath(rd.target.text); bad != "" {
-			return dir, "touches a credential path (" + bad + ")"
+		if bad := secretIn(rd.target.text); bad != "" {
+			return dir, false, "touches a credential path (" + bad + ")"
+		}
+		if hasURL(rd.target.text) {
+			return dir, false, "names a network address (" + oneLine(rd.target.text, 60) + ")"
+		}
+		if rd.target.glob {
+			if why := globCheck(root, dir, rd.target); why != "" {
+				return dir, false, why
+			}
 		}
 		if rd.op != "<" && !devNull(rd.target.text) {
 			if why := writeCheck(root, dir, rd.target); why != "" {
-				return dir, why
+				return dir, false, why
 			}
 		}
 	}
@@ -284,23 +356,31 @@ func checkSegment(sg segment, root, dir string) (string, string) {
 		if !ok || name == "" || strings.ContainsAny(name, "/.-") {
 			break
 		}
-		for _, p := range riskyEnv {
-			if name == p || strings.HasPrefix(name, p) {
-				return dir, "sets " + name
-			}
+		if !harmlessName(name) {
+			return dir, false, "sets " + name
+		}
+		if why := envValueCheck(root, dir, ws[0]); why != "" {
+			return dir, false, why
 		}
 		ws = ws[1:]
 	}
 	if len(ws) == 0 {
-		return dir, "only sets variables"
+		return dir, false, "only sets variables"
 	}
-	// Wrappers that just run the next word.
+	// Wrappers that just run the next word. time and command keep the shell's own builtins; nice, nohup
+	// and timeout start an external program, so a cd behind them changes nothing in the shell.
+	wrapped := false
 	for len(ws) > 1 {
 		switch ws[0].text {
-		case "time", "nohup", "command":
+		case "time", "command":
+			ws = ws[1:]
+			continue
+		case "nohup":
+			wrapped = true
 			ws = ws[1:]
 			continue
 		case "nice", "timeout":
+			wrapped = true
 			ws = ws[1:]
 			for len(ws) > 1 && (strings.HasPrefix(ws[0].text, "-") || isDuration(ws[0].text)) {
 				ws = ws[1:]
@@ -311,27 +391,55 @@ func checkSegment(sg segment, root, dir string) (string, string) {
 	}
 	prog := ws[0]
 	if prog.glob || strings.Contains(prog.text, "/") {
-		return dir, "runs a program by path (" + oneLine(prog.text, 60) + ")"
+		return dir, false, "runs a program by path (" + oneLine(prog.text, 60) + ")"
 	}
 	args := ws[1:]
 	name := prog.text
 	if why, ok := alwaysAsk[name]; ok {
-		return dir, name + " always asks (" + why + ")"
+		return dir, false, name + " always asks (" + why + ")"
 	}
-	rule, ok := programs[name]
+	spec, ok := programs[name]
 	if !ok {
-		return dir, name + " isn't on the mandate's list"
+		return dir, false, name + " isn't on the mandate's list"
 	}
-	if why := rule(args, root, dir); why != "" {
-		return dir, why
+	if name == "cd" && wrapped {
+		return dir, true, "cd behind a wrapper runs as a program and changes nothing"
+	}
+	if why := checkArgs(name, spec, args, root, dir); why != "" {
+		return dir, name == "cd", why
 	}
 	if name == "cd" {
 		if len(args) == 0 || args[len(args)-1].text == "-" {
-			return dir, "cd out of the trusted directory"
+			return dir, true, "cd out of the trusted directory"
 		}
-		return resolve(dir, args[len(args)-1].text), ""
+		return resolve(dir, args[len(args)-1].text), true, ""
 	}
-	return dir, ""
+	return dir, false, ""
+}
+
+// envValueCheck: the value of a NAME=value in front of a command names no place outside the directory,
+// no address and no credential.
+func envValueCheck(root, dir string, w word) string {
+	name, val, _ := strings.Cut(w.text, "=")
+	if w.glob {
+		return "sets " + name + " to a wildcard"
+	}
+	if bad := secretIn(val); bad != "" {
+		return "sets " + name + " to a credential path (" + bad + ")"
+	}
+	if hasURL(val) {
+		return "sets " + name + " to a network address"
+	}
+	for _, piece := range strings.FieldsFunc(val, func(c rune) bool { return c == '=' || c == ':' || c == ',' || c == ' ' || c == '\t' }) {
+		for _, p := range pathCandidates(piece) {
+			if pathish(p) {
+				if why := writeCheck(root, dir, word{text: p}); why != "" {
+					return "sets " + name + " to a path: " + why
+				}
+			}
+		}
+	}
+	return ""
 }
 
 func isDuration(s string) bool {
@@ -354,176 +462,6 @@ var alwaysAsk = map[string]string{
 	"node": "runs code", "deno": "runs code", "php": "runs code", "npx": "downloads and runs packages",
 }
 
-type argRule func(args []word, root, dir string) string
-
-// programs on the mandate's list, with what each may do.
-var programs = map[string]argRule{
-	// read-only and harmless
-	"ls": noRule, "cat": noRule, "head": noRule, "tail": noRule, "wc": noRule, "grep": noRule,
-	"diff": noRule, "cmp": noRule, "jq": noRule, "echo": noRule, "printf": noRule, "pwd": noRule,
-	"which": noRule, "file": noRule, "stat": noRule, "du": noRule, "date": noRule, "true": noRule, "false": noRule,
-	"test": noRule, "basename": noRule, "dirname": noRule, "realpath": noRule, "readlink": noRule, "tr": noRule,
-	"cut": noRule, "shasum": noRule, "sha256sum": noRule, "md5": noRule,
-	// read, but an option or operand names a file they write
-	"sort": sortRule, "uniq": outputOperand("-f", "-s", "-w"), "xxd": outputOperand("-c", "-cols", "-g", "-groupsize", "-l", "-len", "-o", "-offset", "-s", "-seek", "-n", "-name"),
-	"tree": treeRule,
-	"rg":   forbidOpts("--pre", "--pre-glob", "--hostname-bin"),
-	"find": forbidOpts("-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprint0", "-fprintf", "-fls"),
-	// writing: every path inside the directory
-	"mkdir": pathsInside, "touch": pathsInside, "cp": pathsInside, "mv": pathsInside, "ln": pathsInside,
-	"chmod": pathsInside, "tee": pathsInside, "rm": removeInside, "rmdir": removeInside,
-	"cd": cdRule,
-	// builds and tests: they run the project's own code, but every path on the command line stays inside
-	// the directory (outside git's own files) and no option names another program to run
-	"go":            noOutside(goRule(noDownloads(subcommands("build", "test", "vet", "fmt", "run", "list", "env", "version", "mod", "work", "doc", "generate", "tool", "clean")))),
-	"gofmt":         pathsInside,
-	"make":          noOutside(makeRule),
-	"cargo":         noOutside(forbidThen([]string{"--config", "-Z"}, noPublish(subcommands("build", "test", "check", "fmt", "clippy", "run", "doc", "bench", "tree", "metadata", "clean")))),
-	"npm":           noOutside(forbidThen(npmExec, noPublish(subcommands("test", "run", "ls", "outdated", "version")))),
-	"pnpm":          noOutside(forbidThen(npmExec, noPublish(subcommands("test", "run", "ls", "outdated")))),
-	"yarn":          noOutside(forbidThen(npmExec, noPublish(subcommands("test", "run")))),
-	"swift":         noOutside(subcommands("build", "test", "run")),
-	"pytest":        noOutside(noRule),
-	"git":           gitRule,
-	"golangci-lint": noOutside(noRule), "staticcheck": noOutside(noRule),
-}
-
-func noRule([]word, string, string) string { return "" }
-
-// forbidOpts refuses the named options, alone or as -opt=value (a two-letter one also glued, -Zx).
-func forbidOpts(opts ...string) argRule { return forbidThen(opts, noRule) }
-
-// forbidThen refuses opts, then applies r.
-func forbidThen(opts []string, r argRule) argRule {
-	return func(args []word, root, dir string) string {
-		for _, a := range args {
-			for _, o := range opts {
-				if a.text == o || strings.HasPrefix(a.text, o+"=") || len(o) == 2 && o[1] != '-' && strings.HasPrefix(a.text, o) {
-					return "option " + o + " runs or changes things"
-				}
-			}
-		}
-		return r(args, root, dir)
-	}
-}
-
-// npmExec are npm, pnpm and yarn options that name a program or code to run.
-var npmExec = []string{"--script-shell", "--node-options"}
-
-func subcommands(allowed ...string) argRule {
-	return func(args []word, root, dir string) string {
-		for i := 0; i < len(args); i++ {
-			a := args[i].text
-			if a == "-C" && i+1 < len(args) { // go -C dir, make -C dir
-				if !inside(root, dir, args[i+1]) {
-					return "works outside the trusted directory (" + args[i+1].text + ")"
-				}
-				i++
-				continue
-			}
-			if strings.HasPrefix(a, "-") {
-				continue
-			}
-			for _, s := range allowed {
-				if a == s {
-					return ""
-				}
-			}
-			return "subcommand " + a + " isn't on the mandate's list"
-		}
-		return "no subcommand"
-	}
-}
-
-// noPublish refuses script and target names that look like publishing (npm run deploy).
-func noPublish(r argRule) argRule {
-	return func(args []word, root, dir string) string {
-		for _, a := range args {
-			if publishing(a.text) {
-				return a.text + " looks like publishing"
-			}
-		}
-		return r(args, root, dir)
-	}
-}
-
-func publishing(s string) bool {
-	l := strings.ToLower(s)
-	for _, p := range []string{"push", "publish", "release", "deploy", "upload"} {
-		if strings.Contains(l, p) {
-			return true
-		}
-	}
-	return false
-}
-
-// noDownloads refuses module@version arguments (go run x@latest fetches code).
-func noDownloads(r argRule) argRule {
-	return func(args []word, root, dir string) string {
-		for _, a := range args {
-			if strings.Contains(a.text, "@") {
-				return "downloads a module (" + a.text + ")"
-			}
-		}
-		return r(args, root, dir)
-	}
-}
-
-func makeRule(args []word, root, dir string) string {
-	for i := 0; i < len(args); i++ {
-		a := args[i].text
-		switch {
-		case a == "--eval" || strings.HasPrefix(a, "--eval=") || strings.HasPrefix(a, "-E"):
-			return "make --eval runs the text it is given"
-		case !strings.HasPrefix(a, "-") && strings.Contains(a, "="):
-			// VAR=value overrides a variable the Makefile may run (CC, SHELL): a plain value only.
-			name, val, _ := strings.Cut(a, "=")
-			if n := strings.ToUpper(strings.TrimSuffix(strings.TrimSuffix(name, ":"), "+")); n == "SHELL" || n == ".SHELLFLAGS" || n == "MAKEFLAGS" || n == "MFLAGS" || n == "MAKESHELL" {
-				return "make " + name + "= changes how recipes run"
-			}
-			if strings.ContainsAny(val, " \t;|&<>()$`'\"\\") {
-				return "make " + name + "= with a command-like value"
-			}
-		case a == "-C" || a == "-f" || a == "--directory" || a == "--file" || a == "--makefile":
-			if i+1 >= len(args) || !inside(root, dir, args[i+1]) {
-				return "make outside the trusted directory"
-			}
-			i++
-		case publishing(a):
-			return "make target " + a + " looks like publishing"
-		}
-	}
-	return ""
-}
-
-func pathsInside(args []word, root, dir string) string {
-	for _, a := range args {
-		if strings.HasPrefix(a.text, "-") {
-			// --target-directory=DIR, -tDIR: a path glued to an option.
-			if v := optionValue(a.text); v != "" && pathish(v) {
-				if why := writeCheck(root, dir, word{text: v}); why != "" {
-					return why
-				}
-			}
-			continue
-		}
-		if why := writeCheck(root, dir, a); why != "" {
-			return why
-		}
-	}
-	return ""
-}
-
-// cdRule: cd stays in the directory.
-func cdRule(args []word, root, dir string) string {
-	for _, a := range args {
-		if !strings.HasPrefix(a.text, "-") && !inside(root, dir, a) {
-			return "goes outside the trusted directory (" + a.text + ")"
-		}
-	}
-	return ""
-}
-
 // writeCheck says why a write to the path w names is refused: outside the directory, or into git's own
 // files (a hook or config written there runs at the next git command).
 func writeCheck(root, dir string, w word) string {
@@ -538,315 +476,48 @@ func writeCheck(root, dir string, w word) string {
 
 func inGitDir(dir string, w word) bool {
 	for _, part := range strings.Split(resolve(dir, globPrefix(w)), "/") {
-		if part == ".git" {
+		if strings.EqualFold(part, ".git") {
 			return true
 		}
 	}
-	return false
-}
-
-// optionValue is the value glued to an option: after = (--out=x), or after the letter (-ox).
-func optionValue(a string) string {
-	if _, v, ok := strings.Cut(a, "="); ok {
-		return v
-	}
-	if len(a) > 2 && a[0] == '-' && a[1] != '-' {
-		return a[2:]
-	}
-	return ""
-}
-
-// pathish: s may name a place outside the working directory.
-func pathish(s string) bool {
-	if strings.HasPrefix(s, "/") || strings.HasPrefix(s, "~") {
-		return true
-	}
-	for _, part := range strings.Split(s, "/") {
-		if part == ".." || part == ".git" {
-			return true
+	// a wildcard part that starts with a dot or a bracket can match .git (.g*, .gi?/hooks, [.]git)
+	if w.glob {
+		for _, part := range strings.Split(w.text, "/") {
+			i := strings.IndexAny(part, "*?[")
+			if i < 0 || part[0] != '.' && part[0] != '[' {
+				continue
+			}
+			if m, err := path.Match(strings.ToLower(part), ".git"); m || err != nil && strings.HasPrefix(".git", strings.ToLower(part[:i])) {
+				return true
+			}
 		}
 	}
 	return false
-}
-
-// noOutside wraps a build or test tool's rule: no word on its command line, nor a value inside one
-// (-o=/x, cache_dir=/x, html:/x, a,b), names a place outside the directory or in git's own files. These
-// tools write outputs, caches and reports wherever they are told to.
-func noOutside(r argRule) argRule {
-	return func(args []word, root, dir string) string {
-		for _, a := range args {
-			for _, piece := range strings.FieldsFunc(a.text, func(c rune) bool { return c == '=' || c == ':' || c == ',' }) {
-				p := strings.TrimLeft(piece, "-")
-				if len(piece) > 2 && piece[0] == '-' && piece[1] != '-' && !pathish(p) {
-					p = piece[2:] // -o/x
-				}
-				if pathish(p) {
-					if why := writeCheck(root, dir, word{text: p, glob: a.glob}); why != "" {
-						return why
-					}
-				}
-			}
-		}
-		return r(args, root, dir)
-	}
-}
-
-// goRule refuses go options that run another program (-exec, -toolexec), go env -w/-u (writes Go's own
-// settings file) and go clean of the shared caches.
-func goRule(r argRule) argRule {
-	return func(args []word, root, dir string) string {
-		sub := ""
-		for _, a := range args {
-			t := a.text
-			name, _, _ := strings.Cut(strings.TrimLeft(t, "-"), "=")
-			if strings.HasPrefix(t, "-") {
-				switch name {
-				case "exec", "toolexec":
-					return "go -" + name + " runs another program"
-				case "w", "u":
-					if sub == "env" {
-						return "go env -" + name + " changes Go's settings"
-					}
-				case "cache", "modcache", "fuzzcache":
-					if sub == "clean" {
-						return "go clean -" + name + " deletes outside the trusted directory"
-					}
-				}
-				continue
-			}
-			if sub == "" {
-				sub = t
-			}
-		}
-		return r(args, root, dir)
-	}
-}
-
-// sortRule: sort reads anything, but -o/--output and -T/--temporary-directory write, and
-// --compress-program runs a program.
-func sortRule(args []word, root, dir string) string {
-	for i := 0; i < len(args); i++ {
-		t := args[i].text
-		if strings.HasPrefix(t, "--compress-program") {
-			return "sort --compress-program runs another program"
-		}
-		var target string
-		has := false
-		switch {
-		case t == "--output" || t == "--temporary-directory":
-			has = true
-			if i+1 < len(args) {
-				target = args[i+1].text
-				i++
-			}
-		case strings.HasPrefix(t, "--output=") || strings.HasPrefix(t, "--temporary-directory="):
-			has, target = true, t[strings.Index(t, "=")+1:]
-		case len(t) > 1 && t[0] == '-' && t[1] != '-':
-			// a short cluster: -o FILE, -oFILE, -uo FILE (o or T takes the rest or the next word)
-			if j := strings.IndexAny(t[1:], "oT"); j >= 0 {
-				has = true
-				if rest := t[j+2:]; rest != "" {
-					target = rest
-				} else if i+1 < len(args) {
-					target = args[i+1].text
-					i++
-				}
-			}
-		}
-		if has {
-			if target == "" {
-				return "sort output without a file"
-			}
-			if why := writeCheck(root, dir, word{text: target}); why != "" {
-				return why
-			}
-		}
-	}
-	return ""
-}
-
-// outputOperand is for uniq and xxd: [INPUT [OUTPUT]], where the second operand is written. valued are
-// the options that take a separate value.
-func outputOperand(valued ...string) argRule {
-	return func(args []word, root, dir string) string {
-		n := 0
-		for i := 0; i < len(args); i++ {
-			t := args[i].text
-			if strings.HasPrefix(t, "-") && t != "-" {
-				for _, v := range valued {
-					if t == v {
-						i++
-					}
-				}
-				continue
-			}
-			n++
-			if n >= 2 {
-				if why := writeCheck(root, dir, args[i]); why != "" {
-					return why
-				}
-			}
-		}
-		return ""
-	}
-}
-
-// treeRule: tree -o FILE writes FILE.
-func treeRule(args []word, root, dir string) string {
-	for i := 0; i < len(args); i++ {
-		t := args[i].text
-		target, has := "", false
-		switch {
-		case t == "-o":
-			has = true
-			if i+1 < len(args) {
-				target = args[i+1].text
-				i++
-			}
-		case strings.HasPrefix(t, "-o"):
-			has, target = true, t[2:]
-		}
-		if has {
-			if target == "" {
-				return "tree -o without a file"
-			}
-			if why := writeCheck(root, dir, word{text: target}); why != "" {
-				return why
-			}
-		}
-	}
-	return ""
-}
-
-func removeInside(args []word, root, dir string) string {
-	if why := pathsInside(args, root, dir); why != "" {
-		return strings.Replace(why, "writes", "removes", 1)
-	}
-	for _, a := range args {
-		if strings.HasPrefix(a.text, "-") {
-			continue
-		}
-		p := resolve(dir, globPrefix(a))
-		if p == path.Clean(root) {
-			return "removes the whole trusted directory"
-		}
-		for _, part := range strings.Split(p, "/") {
-			if part == ".git" {
-				return "removes git's own files"
-			}
-		}
-	}
-	return ""
-}
-
-// git subcommands a mandate allows; everything else (push, fetch, pull, clone, remote, config,
-// submodule, filter-branch, reset, clean, aliases …) asks.
-var gitAllowed = map[string]bool{"status": true, "diff": true, "log": true, "show": true, "add": true, "commit": true,
-	"switch": true, "checkout": true, "restore": true, "branch": true, "stash": true, "merge": true, "rebase": true,
-	"cherry-pick": true, "revert": true, "mv": true, "rm": true, "blame": true, "grep": true, "rev-parse": true,
-	"ls-files": true, "describe": true, "shortlog": true, "show-ref": true, "cat-file": true, "worktree": true}
-
-var gitForbidden = []string{"--force", "-f", "--force-with-lease", "--exec", "-x", "--exec-path", "--upload-pack",
-	"--receive-pack", "--ext-diff", "--textconv", "--output", "-o", "--hard", "--merge", "--keep", "-D", "--delete",
-	"--discard-changes", "--git-dir", "--work-tree", "-c", "--config-env",
-	"-O", "--open-files-in-pager"} // git grep -O<program> runs it on the matches
-
-// gitForbiddenShort are one-letter git options that force, delete or run things (also inside -xyz).
-const gitForbiddenShort = "fDxocO"
-
-func gitRule(args []word, root, dir string) string {
-	i := 0
-	for ; i < len(args); i++ {
-		a := args[i].text
-		if a == "-C" {
-			if i+1 >= len(args) || !inside(root, dir, args[i+1]) {
-				return "git outside the trusted directory"
-			}
-			i++
-			continue
-		}
-		if a == "--no-pager" || a == "-P" || a == "--no-optional-locks" {
-			continue
-		}
-		if strings.HasPrefix(a, "-") {
-			return "git option " + a + " isn't on the mandate's list"
-		}
-		break
-	}
-	if i >= len(args) {
-		return "git without a command"
-	}
-	sub := args[i].text
-	if sub == "push" {
-		return "git push always asks"
-	}
-	if !gitAllowed[sub] {
-		return "git " + sub + " isn't on the mandate's list"
-	}
-	rest := args[i+1:]
-	for _, a := range rest {
-		for _, f := range gitForbidden {
-			if a.text == f || strings.HasPrefix(a.text, f+"=") {
-				return "git option " + f + " always asks"
-			}
-		}
-		if t := a.text; len(t) > 2 && t[0] == '-' && t[1] != '-' && strings.ContainsAny(t[1:], gitForbiddenShort) {
-			return "git option " + t + " always asks"
-		}
-	}
-	switch sub {
-	case "checkout", "restore":
-		for _, a := range rest {
-			if a.text == "." || a.text == "--" && sub == "checkout" {
-				return "git " + sub + " that discards changes always asks"
-			}
-		}
-	case "worktree":
-		if len(rest) > 0 && (rest[0].text == "remove" || rest[0].text == "prune") {
-			return "git worktree " + rest[0].text + " always asks"
-		}
-		if len(rest) > 0 && (rest[0].text == "add" || rest[0].text == "move") {
-			// every operand (the new worktree's path, a branch, a commit) as a path: a branch name is a
-			// relative path inside, so only real places outside are refused
-			for j := 1; j < len(rest); j++ {
-				t := rest[j].text
-				if t == "-b" || t == "-B" || t == "--reason" {
-					j++
-					continue
-				}
-				if strings.HasPrefix(t, "-") {
-					continue
-				}
-				if why := writeCheck(root, dir, rest[j]); why != "" {
-					return "git worktree " + rest[0].text + " " + why
-				}
-			}
-		}
-	case "stash":
-		if len(rest) > 0 && (rest[0].text == "drop" || rest[0].text == "clear") {
-			return "git stash " + rest[0].text + " always asks"
-		}
-	case "mv", "rm":
-		return pathsInside(rest, root, dir)
-	}
-	return ""
 }
 
 // inside: the path a word names (relative to dir) is in root. A word starting with ~ is the home
 // directory (outside); a glob counts by the part before its first wildcard.
 func inside(root, dir string, w word) bool {
 	t := globPrefix(w)
-	if strings.HasPrefix(t, "~") {
+	if strings.HasPrefix(t, "~") || strings.HasPrefix(w.text, "~") {
 		return false
+	}
+	// a ".." after the first wildcard (a*/../../x) leaves the prefix the check resolved
+	if i := strings.IndexAny(w.text, "*?["); w.glob && i >= 0 {
+		for _, part := range strings.Split(w.text[i:], "/") {
+			if part == ".." {
+				return false
+			}
+		}
 	}
 	return within(root, resolve(dir, t))
 }
 
 func globPrefix(w word) string {
-	if !w.glob {
+	i := strings.IndexAny(w.text, "*?[")
+	if !w.glob || i < 0 {
 		return w.text
 	}
-	i := strings.IndexAny(w.text, "*?[")
 	p := w.text[:i]
 	if p == "" {
 		return "."
@@ -876,34 +547,131 @@ func hasURL(s string) bool {
 	return false
 }
 
+// secretIn is secretPath for a word that may carry a path after = : or , (--ignore-file=.env, a,b) or
+// glued to a short option (-f.env).
+func secretIn(s string) string {
+	if bad := secretPath(s); bad != "" {
+		return bad
+	}
+	for _, piece := range strings.FieldsFunc(s, func(c rune) bool { return c == '=' || c == ':' || c == ',' || unicode.IsSpace(c) }) {
+		if bad := secretPath(piece); bad != "" {
+			return bad
+		}
+		if len(piece) > 2 && piece[0] == '-' && piece[1] != '-' {
+			if bad := secretPath(piece[2:]); bad != "" {
+				return bad
+			}
+		}
+	}
+	return ""
+}
+
+// secretNames are path components that hold credentials, settings with tokens or things that run at login.
+var secretNames = []string{".ssh", ".aws", ".gnupg", ".kube", ".docker", ".claude", ".claude.json", ".rubi-home", "rubi home", "keychains",
+	".git-credentials", ".netrc", ".npmrc", ".pypirc", ".zsh_history", ".bash_history", "launchagents",
+	// shell startup files (a line there runs in every new terminal) and per-user settings with tokens
+	".zshrc", ".zprofile", ".zshenv", ".zlogin", ".zlogout", ".bashrc", ".bash_profile", ".bash_login", ".profile",
+	".gitconfig", ".config", ".vault-token", ".pgpass", ".my.cnf", ".azure", ".gcloud", ".terraform.d",
+	".dockercfg", ".s3cfg", ".boto", ".oci", ".mysql_history", ".psql_history", ".python_history", ".node_repl_history", ".m2",
+	".codex", ".openai", ".cursor", ".mozilla", "environ",
+	// browser sessions: Safari, Chrome, Firefox cookies and Chrome's saved passwords
+	"cookies", "cookies.binarycookies", "cookies.sqlite", "login data"}
+
+var (
+	secretPrefixes = []string{".env", "id_rsa", "id_ed25519", "id_ecdsa"}
+	secretSuffixes = []string{".pem", ".key", ".p12", ".pfx", ".keychain", ".keychain-db"}
+	secretInfixes  = []string{"secret", "credential", "password"}
+)
+
+func secretName(part string) bool {
+	for _, n := range secretNames {
+		if part == n {
+			return true
+		}
+	}
+	for _, p := range secretPrefixes {
+		if strings.HasPrefix(part, p) {
+			return true
+		}
+	}
+	for _, suf := range secretSuffixes {
+		if strings.HasSuffix(part, suf) {
+			return true
+		}
+	}
+	for _, sub := range secretInfixes {
+		if strings.Contains(part, sub) {
+			return true
+		}
+	}
+	return false
+}
+
 // secretPath returns the part of s that names a credential or settings location, or "".
 func secretPath(s string) string {
 	for _, part := range strings.Split(strings.ToLower(s), "/") {
 		part = strings.TrimSpace(part)
-		switch part {
-		case ".ssh", ".aws", ".gnupg", ".kube", ".docker", ".claude", ".claude.json", ".rubi-home", "rubi home", "keychains",
-			".git-credentials", ".netrc", ".npmrc", ".pypirc", ".zsh_history", ".bash_history", "launchagents",
-			// shell startup files (a line there runs in every new terminal) and per-user settings with tokens
-			".zshrc", ".zprofile", ".zshenv", ".zlogin", ".zlogout", ".bashrc", ".bash_profile", ".bash_login", ".profile",
-			".gitconfig", ".config", ".vault-token", ".pgpass", ".my.cnf", ".azure", ".gcloud", ".terraform.d",
-			// browser sessions: Safari, Chrome, Firefox cookies and Chrome's saved passwords
-			"cookies", "cookies.binarycookies", "cookies.sqlite", "login data":
+		if secretName(part) {
 			return part
 		}
-		if strings.HasPrefix(part, ".env") || strings.HasPrefix(part, "id_rsa") || strings.HasPrefix(part, "id_ed25519") ||
-			strings.HasPrefix(part, "id_ecdsa") {
-			return part
+	}
+	return ""
+}
+
+// secretCandidates are names a wildcard component is tried against.
+func secretCandidates() []string {
+	c := append([]string(nil), secretNames...)
+	c = append(c, secretPrefixes...)
+	c = append(c, ".env.local", "server.pem", "server.key", "login.keychain-db")
+	for _, i := range secretInfixes {
+		c = append(c, i, i+"s", "my"+i+"s.txt")
+	}
+	return c
+}
+
+// secretGlob returns the credential name a wildcard in s can match (.s?h, id_*, [.]env), or "". A pattern
+// needs two literal characters, and one that starts with a wildcard doesn't match a name that starts with a dot.
+func secretGlob(s string) string {
+	for _, piece := range strings.FieldsFunc(strings.ToLower(s), func(c rune) bool { return c == '=' || c == ':' || c == ',' || unicode.IsSpace(c) }) {
+		cands := []string{piece}
+		if len(piece) > 2 && piece[0] == '-' && piece[1] != '-' {
+			cands = append(cands, piece[2:])
 		}
-		for _, suf := range []string{".pem", ".key", ".p12", ".pfx", ".keychain", ".keychain-db"} {
-			if strings.HasSuffix(part, suf) {
-				return part
+		for _, cand := range cands {
+			for _, part := range strings.Split(cand, "/") {
+				i := strings.IndexAny(part, "*?[")
+				if i < 0 || len(strings.Trim(part, "*?[]")) < 2 {
+					continue
+				}
+				for _, name := range secretCandidates() {
+					if name[0] == '.' && part[0] != '.' && part[0] != '[' {
+						continue
+					}
+					if m, _ := path.Match(strings.ReplaceAll(part, "[!", "[^"), name); m {
+						return part
+					}
+				}
 			}
 		}
-		for _, sub := range []string{"secret", "credential", "password"} {
-			if strings.Contains(part, sub) {
-				return part
+	}
+	return ""
+}
+
+// globCheck: an unquoted wildcard word must be provably inside the directory (not at ~, not absolute outside,
+// not a relative path that leaves it: ../../.*/*), and may not match a credential name.
+func globCheck(root, dir string, w word) string {
+	if !strings.HasPrefix(w.text, "-") && !inside(root, dir, w) {
+		return "a wildcard path outside the trusted directory (" + oneLine(w.text, 60) + ")"
+	}
+	for _, piece := range strings.FieldsFunc(w.text, func(c rune) bool { return c == '=' || c == ':' || c == ',' || unicode.IsSpace(c) }) {
+		for _, p := range pathCandidates(piece) {
+			if strings.ContainsAny(p, "*?[") && !inside(root, dir, word{text: p, glob: true}) || strings.HasPrefix(p, "~") {
+				return "a wildcard path outside the trusted directory (" + oneLine(w.text, 60) + ")"
 			}
 		}
+	}
+	if bad := secretGlob(w.text); bad != "" {
+		return "a wildcard that can match a credential path (" + bad + ")"
 	}
 	return ""
 }
