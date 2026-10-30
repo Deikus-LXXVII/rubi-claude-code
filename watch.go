@@ -141,6 +141,9 @@ const (
 // when that stops, the helper denies what is waiting.
 func (w *watcher) poll(ctx context.Context, d rubiplugin.HomeDevice, op string) {
 	failures := 0
+	if op == opSessionsNext && w.s != nil {
+		go w.s.syncBound(ctx, w.h, d.ID) // off the poll: it must not delay messages
+	}
 	for ctx.Err() == nil {
 		var out struct {
 			Request *request `json:"request"`

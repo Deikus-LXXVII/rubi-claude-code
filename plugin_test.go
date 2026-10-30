@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -38,6 +39,10 @@ type fakeHost struct {
 	auditLog  []map[string]any
 	state     json.RawMessage
 	emitToErr error // EmitTo fails (no Bot of that name with a webhook)
+	oldHome   bool  // Rubi Home doesn't know claude-sessions.bound
+	logs      []string
+	hangBound bool // claude-sessions.bound never answers (until ctx ends)
+	bound     []map[string]any
 }
 
 type decided struct {
@@ -98,6 +103,21 @@ func (f *fakeHost) HomeCall(ctx context.Context, device, op string, args, out an
 		b, _ := json.Marshal(ans)
 		f.mu.Unlock()
 		return json.Unmarshal(b, out)
+	case "claude-sessions.bound":
+		f.mu.Lock()
+		hang := f.hangBound
+		f.mu.Unlock()
+		if hang {
+			<-ctx.Done()
+			return ctx.Err()
+		}
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		if f.oldHome {
+			return errors.New(`Rubi Home doesn't do "claude-sessions.bound"`)
+		}
+		f.bound = append(f.bound, args.(map[string]any))
+		return nil
 	case "claude-sessions.send":
 		m := args.(map[string]any)
 		f.mu.Lock()
@@ -179,7 +199,11 @@ func (f *fakeHost) Emit(typ string, data map[string]any) (string, error) {
 	return "ev_1", nil
 }
 
-func (f *fakeHost) Logf(string, ...any) {}
+func (f *fakeHost) Logf(format string, args ...any) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.logs = append(f.logs, fmt.Sprintf(format, args...))
+}
 
 func newRequest(command string) request {
 	in, _ := json.Marshal(map[string]any{"command": command, "description": "List files"})

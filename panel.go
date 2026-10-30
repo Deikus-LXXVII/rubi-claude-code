@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -56,12 +57,21 @@ func (s *sisters) panel(h sisterHost, op string, args json.RawMessage) (any, err
 		h.Audit("mandate_revoked", map[string]any{"mandate": a.ID, "count": n, "by": "user"})
 		return map[string]any{"revoked": n}, nil
 	case "unbind":
+		var was []binding
+		for _, b := range s.st.bindings() {
+			if sameBot(b.Sister, a.Sister) {
+				was = append(was, b)
+			}
+		}
 		ok, err := s.st.unbind(a.Sister)
 		if err != nil {
 			return nil, err
 		}
 		if ok {
 			h.Audit("binding_removed", map[string]any{"sister": a.Sister, "by": "user"})
+			for _, b := range was {
+				s.tellBound(context.Background(), h, b, false)
+			}
 		}
 		return map[string]any{"unbound": ok}, nil
 	default:

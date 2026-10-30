@@ -77,6 +77,13 @@ type sisterHost interface {
 	Logf(format string, args ...any)
 }
 
+// opBound tells Rubi Home which Bot is bound to a session, so the sister tools inside Claude Code
+// (rubi_sisters) can name her. An older Rubi Home doesn't know the operation.
+const opBound = "claude-sessions.bound"
+
+// boundTimeout bounds one opBound call, so a stuck Rubi Home never holds up a bind, an unbind or a send.
+var boundTimeout = 5 * time.Second
+
 // sisters holds what the tools and the watcher share besides the store: rate limits and the asks
 // handed out (so an answer can go to the session that asked).
 type sisters struct {
@@ -85,6 +92,8 @@ type sisters struct {
 	hits map[string][]time.Time
 	asks map[string]askRef
 	now  func() time.Time
+	// oldHome holds the computers whose Rubi Home doesn't know opBound (logged once each).
+	oldHome map[string]bool
 }
 
 type askRef struct {
@@ -94,6 +103,58 @@ type askRef struct {
 
 func newSisters(st *store) *sisters {
 	return &sisters{st: st, hits: map[string][]time.Time{}, asks: map[string]askRef{}, now: time.Now}
+}
+
+// tellBound tells Rubi Home on b's computer that b's sister is bound (or no longer bound) to b's session. It
+// is best effort: the binding works without it, only rubi_sisters in Claude Code knows less. A Rubi Home that
+// doesn't know the operation is logged once per computer.
+func (s *sisters) tellBound(ctx context.Context, h sisterHost, b binding, bound bool) {
+	if b.Device == "" || b.SessionID == "" {
+		return
+	}
+	s.mu.Lock()
+	old := s.oldHome[b.Device]
+	s.mu.Unlock()
+	if old {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, boundTimeout)
+	defer cancel()
+	err := h.HomeCall(ctx, b.Device, opBound, map[string]any{"session_id": b.SessionID, "sister": b.Sister, "bound": bound}, nil)
+	if err == nil {
+		return
+	}
+	if ctx.Err() != nil {
+		h.Logf("telling %s which Bot is bound to %s: no answer within %s", firstNonEmpty(b.DeviceName, b.Device), b.SessionID, boundTimeout)
+		return
+	}
+	if strings.Contains(err.Error(), "doesn't do") || strings.Contains(err.Error(), "unknown op") {
+		s.mu.Lock()
+		first := !s.oldHome[b.Device]
+		if s.oldHome == nil {
+			s.oldHome = map[string]bool{}
+		}
+		s.oldHome[b.Device] = true
+		s.mu.Unlock()
+		if first {
+			h.Logf("%s: this Rubi Home is too old to tell Claude Code which Bot is bound (the sister tools there won't name her); update it", firstNonEmpty(b.DeviceName, b.Device))
+		}
+		return
+	}
+	h.Logf("telling %s which Bot is bound to %s: %v", firstNonEmpty(b.DeviceName, b.Device), b.SessionID, err)
+}
+
+// syncBound tells a computer about every binding made on it (Rubi Home forgets nothing it was told, but a
+// binding made before it knew the operation, or a Rubi Home that was reinstalled, would be missing).
+func (s *sisters) syncBound(ctx context.Context, h sisterHost, device string) {
+	s.mu.Lock()
+	delete(s.oldHome, device) // Rubi Home may have been updated since: try again
+	s.mu.Unlock()
+	for _, b := range s.st.bindings() {
+		if b.Device == device {
+			s.tellBound(ctx, h, b, true)
+		}
+	}
 }
 
 // allow counts one use of key and says whether it stays within n per hour.
@@ -208,6 +269,14 @@ func findSession(ctx context.Context, h sisterHost, device, id string) (rubiplug
 	return rubiplugin.HomeDevice{}, session{}, errors.New("no such Claude Code session on your computers (list them with claude_code_sessions)")
 }
 
+// followed records the session's new Claude Code id for a binding and tells Rubi Home.
+func (s *sisters) followed(h sisterHost, b binding, newID string) {
+	s.st.follow(b.Sister, newID)
+	s.tellBound(context.Background(), h, b, false)
+	b.SessionID = newID
+	s.tellBound(context.Background(), h, b, true)
+}
+
 // current resolves a binding to the session's id now (a desktop session may have a new Claude Code id).
 func (s *sisters) current(ctx context.Context, h sisterHost, b binding) (session, error) {
 	key := b.AppSessionID
@@ -219,7 +288,7 @@ func (s *sisters) current(ctx context.Context, h sisterHost, b binding) (session
 		return session{}, fmt.Errorf("the bound session isn't there any more (%v); bind again", err)
 	}
 	if sess.SessionID != "" && sess.SessionID != b.SessionID {
-		s.st.follow(b.Sister, sess.SessionID)
+		s.followed(h, b, sess.SessionID)
 		h.Audit("binding_followed", map[string]any{"sister": b.Sister, "app_session": b.AppSessionID, "session": sess.SessionID})
 	}
 	return sess, nil
@@ -360,6 +429,10 @@ func (s *sisters) executeBind(h sisterHost, t bindTicket) (any, error) {
 		return nil, fmt.Errorf("not bound: Rubi couldn't deliver the binding's code to %s (%v); connect that Bot with a webhook, then bind again", b.Sister, err)
 	}
 	h.Audit("binding_created", map[string]any{"sister": b.Sister, "device": b.Device, "session": b.SessionID, "app_session": b.AppSessionID, "project": b.RepoKey})
+	if prev != nil && (prev.Device != b.Device || prev.SessionID != b.SessionID) {
+		s.tellBound(context.Background(), h, *prev, false)
+	}
+	s.tellBound(context.Background(), h, b, true)
 	return map[string]any{"bound": true, "sister": b.Sister, "session_id": b.SessionID, "title": b.Title,
 		"next_step": b.Sister + " got the bind_code in its claude_bound event; it is never shown anywhere else."}, nil
 }
@@ -393,6 +466,7 @@ func (s *sisters) unbindTool(_ context.Context, h sisterHost, in unbindIn) (any,
 		return nil, err
 	}
 	h.Audit("binding_removed", map[string]any{"sister": b.Sister, "by": "bot"})
+	s.tellBound(context.Background(), h, b, false)
 	return map[string]any{"unbound": true}, nil
 }
 
@@ -611,7 +685,7 @@ func (s *sisters) route(ctx context.Context, h sisterHost, d rubiplugin.HomeDevi
 				if b.AppSessionID != "" && b.AppSessionID == found.AppSessionID {
 					b := b
 					target = &b
-					s.st.follow(b.Sister, found.SessionID)
+					s.followed(h, b, found.SessionID)
 					break
 				}
 				if o.Kind == "ask" && found.RepoKey != "" && b.RepoKey == found.RepoKey {

@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"slices"
 	"testing"
 )
 
@@ -23,9 +24,13 @@ func TestManagedSettingsExample(t *testing.T) {
 		DisableAutoMode       string
 		Permissions           struct {
 			DisableBypassPermissionsMode string
-			Deny                         []string
+			Allow, Deny                  []string
 		}
-		Hooks map[string][]struct {
+		ExtraKnownMarketplaces map[string]struct {
+			Source struct{ Source, Path string }
+		}
+		EnabledPlugins map[string]bool
+		Hooks          map[string][]struct {
 			Matcher string
 			Hooks   []hook
 		}
@@ -46,6 +51,25 @@ func TestManagedSettingsExample(t *testing.T) {
 	_ = json.Unmarshal(b, &raw)
 	if _, ok := raw["allowManagedPermissionRulesOnly"]; ok {
 		t.Error("the example sets allowManagedPermissionRulesOnly; the README says it doesn't")
+	}
+	// The sister tools: a directory marketplace "rubi" at the root-owned folder `rubi-home install-hook
+	// --with-claude-plugin` fills, the plugin enabled, and one allow rule for that plugin's server only (the
+	// tools reach only the sister bound to the calling session and add no trust). managed-mcp.json is not
+	// used: it would take exclusive control of MCP servers.
+	mk := s.ExtraKnownMarketplaces["rubi"]
+	if len(s.ExtraKnownMarketplaces) != 1 || mk.Source.Source != "directory" || mk.Source.Path != "/Library/Application Support/Rubi Home/claude-plugin" {
+		t.Fatalf("extraKnownMarketplaces: %+v", s.ExtraKnownMarketplaces)
+	}
+	if len(s.EnabledPlugins) != 1 || !s.EnabledPlugins["rubi-sisters@rubi"] {
+		t.Fatalf("enabledPlugins: %+v", s.EnabledPlugins)
+	}
+	// Only the two read-only tools are allowed without asking; rubi_ask and rubi_reply (which send something
+	// out) keep Claude Code's own MCP permission prompt.
+	if want := []string{"mcp__plugin_rubi-sisters_rubi__rubi_sisters", "mcp__plugin_rubi-sisters_rubi__rubi_inbox_status"}; !slices.Equal(s.Permissions.Allow, want) {
+		t.Fatalf("permissions.allow must be exactly the read-only sister tools: %v", s.Permissions.Allow)
+	}
+	if _, ok := raw["allowedMcpServers"]; ok {
+		t.Error("the example restricts MCP servers")
 	}
 	pr := s.Hooks["PermissionRequest"]
 	if len(pr) != 1 || pr[0].Matcher != "^Bash$" || len(pr[0].Hooks) != 1 {

@@ -11,6 +11,7 @@ package main
 
 import (
 	"archive/tar"
+	"bufio"
 	"bytes"
 	"compress/gzip"
 	"context"
@@ -59,6 +60,8 @@ func main() {
 		err = keys(os.Args[2])
 	case len(os.Args) == 6 && os.Args[1] == "run":
 		err = run(os.Args[2], os.Args[3], os.Args[4], os.Args[5])
+	case len(os.Args) == 6 && os.Args[1] == "fakeclaude":
+		err = fakeClaude(os.Args[2], os.Args[3], os.Args[4], os.Args[5])
 	default:
 		err = errors.New("usage: e2e keys <dir> | e2e run <dir> <rubi> <rubi-home> <plugin>")
 	}
@@ -66,6 +69,82 @@ func main() {
 		fmt.Println("FAIL:", err)
 		os.Exit(1)
 	}
+}
+
+// fakeClaude plays one `claude` process: the hooks and the MCP server of its session are its children, which
+// is how Rubi Home tells sessions apart (by the processes the hooks come from). It takes JSON requests on
+// stdin and answers on stdout: {"op":"hook","in":{...}}, {"op":"list"}, {"op":"call","name":..,"args":{..}}.
+func fakeClaude(homeBin, helperDir, proj, session string) error {
+	var cc *mcp.ClientSession
+	defer func() {
+		if cc != nil {
+			cc.Close()
+		}
+	}()
+	sc := bufio.NewScanner(os.Stdin)
+	sc.Buffer(make([]byte, 0, 1<<20), 8<<20)
+	enc := json.NewEncoder(os.Stdout)
+	for sc.Scan() {
+		var req struct {
+			Op   string
+			In   map[string]any
+			Name string
+			Args map[string]any
+		}
+		if err := json.Unmarshal(sc.Bytes(), &req); err != nil {
+			return err
+		}
+		resp := map[string]string{}
+		if req.Op == "hook" {
+			out, err := hookEvent(homeBin, helperDir, req.In)
+			resp["out"] = out
+			if err != nil {
+				resp["err"] = err.Error()
+			}
+			_ = enc.Encode(resp)
+			continue
+		}
+		if cc == nil {
+			cmd := exec.Command(homeBin, "claude-mcp")
+			cmd.Dir = proj
+			cmd.Env = append(os.Environ(), "RUBI_HOME_DIR="+helperDir, "CLAUDE_CODE_SESSION_ID="+session)
+			c, err := mcp.NewClient(&mcp.Implementation{Name: "claude-code", Version: "e2e"}, nil).
+				Connect(context.Background(), &mcp.CommandTransport{Command: cmd}, nil)
+			if err != nil {
+				resp["err"] = "rubi-home claude-mcp: " + err.Error()
+				_ = enc.Encode(resp)
+				continue
+			}
+			cc = c
+		}
+		switch req.Op {
+		case "list":
+			t, err := cc.ListTools(context.Background(), nil)
+			if err != nil {
+				resp["err"] = err.Error()
+			} else {
+				resp["out"] = fmt.Sprint(len(t.Tools))
+			}
+		case "call":
+			res, err := cc.CallTool(context.Background(), &mcp.CallToolParams{Name: req.Name, Arguments: req.Args})
+			if err != nil {
+				resp["err"] = err.Error()
+				break
+			}
+			var b strings.Builder
+			for _, c := range res.Content {
+				if t, ok := c.(*mcp.TextContent); ok {
+					b.WriteString(t.Text)
+				}
+			}
+			resp["out"] = b.String()
+			if res.IsError {
+				resp["err"] = b.String()
+			}
+		}
+		_ = enc.Encode(resp)
+	}
+	return sc.Err()
 }
 
 func step(format string, a ...any) { fmt.Printf("  ok: "+format+"\n", a...) }
@@ -1090,6 +1169,112 @@ func run(dir, rubiBin, homeBin, plugin string) (err error) {
 	evWait = 30 * time.Second
 	fmt.Printf("  (the Bot heard back %s after the stop)\n", time.Since(restartAt).Round(time.Second))
 	step("7c a message queued before a Rubi Home restart was delivered at the next prompt, answered, and the Bot told")
+
+	// Case 7d: the sister tools inside Claude Code. A fake `claude` process (this driver, re-run as
+	// `fakeclaude`) runs the session's hooks and `rubi-home claude-mcp` as its children, as Claude Code would;
+	// Rubi Home attributes the tool calls to the session by the processes the hooks came from. rubi_sisters
+	// names the bound Bot, rubi_ask reaches the Bot as claude_ask, rubi_reply as claude_reply (in_reply_to set)
+	// and the message becomes answered; a second reply to it is refused. (Refusing a process outside every session is
+	// covered by the unit tests: here the driver itself, the parent of the fake claude, is attested too.)
+	// Rubi Home anchors a session on the process named "claude", so the fake one is a copy of this driver
+	// with that name.
+	claudeBin := filepath.Join(dir, "claude")
+	if self, err := os.ReadFile(os.Args[0]); err != nil {
+		return err
+	} else if err := os.WriteFile(claudeBin, self, 0o755); err != nil {
+		return err
+	}
+	fcCmd := exec.Command(claudeBin, "fakeclaude", homeBin, helperDir, proj, "cli-e2e")
+	fcIn, _ := fcCmd.StdinPipe()
+	fcOut, _ := fcCmd.StdoutPipe()
+	fcCmd.Stderr = os.Stderr
+	if err := fcCmd.Start(); err != nil {
+		return err
+	}
+	defer func() { fcIn.Close(); _ = fcCmd.Wait() }()
+	fcDec := json.NewDecoder(fcOut)
+	fc := func(req map[string]any) (out string, err error) {
+		b, _ := json.Marshal(req)
+		if _, err := fcIn.Write(append(b, '\n')); err != nil {
+			return "", err
+		}
+		var resp map[string]string
+		if err := fcDec.Decode(&resp); err != nil {
+			return "", err
+		}
+		if resp["err"] != "" {
+			return resp["out"], errors.New(resp["err"])
+		}
+		return resp["out"], nil
+	}
+	if _, err := ag.call("claude_code_send", map[string]any{"sister": sister, "bind_code": bindCode, "text": "e2e: tools check"}); err != nil {
+		return err
+	}
+	ups = map[string]any{"session_id": "cli-e2e", "transcript_path": filepath.Join(dir, "none.jsonl"), "cwd": proj,
+		"permission_mode": "default", "hook_event_name": "UserPromptSubmit", "prompt": "use the tools"}
+	var msgID string
+	if err := waitFor("the tools-check message at the prompt", 20*time.Second, func() (bool, error) {
+		o, err := fc(map[string]any{"op": "hook", "in": ups})
+		if err != nil || !strings.Contains(o, "e2e: tools check") {
+			return false, nil
+		}
+		for _, f := range strings.Fields(o) {
+			if strings.HasPrefix(f, "cm_") {
+				msgID = f
+			}
+		}
+		return msgID != "", nil
+	}); err != nil {
+		return err
+	}
+	if n, err := fc(map[string]any{"op": "list"}); err != nil || n != "4" {
+		return fmt.Errorf("claude-mcp tools: %q %v", n, err)
+	}
+	ccall := func(name string, args map[string]any) (string, error) {
+		return fc(map[string]any{"op": "call", "name": name, "args": args})
+	}
+	toolOut, err := ccall("rubi_sisters", nil)
+	if err != nil || !strings.Contains(toolOut, `"name":"`+sister+`"`) {
+		return fmt.Errorf("rubi_sisters didn't name the bound Bot: %s %v", toolOut, err)
+	}
+	if _, err := ccall("rubi_ask", map[string]any{"text": "e2e: tool ask, any newer x release?", "kind": "lookup"}); err != nil {
+		return err
+	}
+	toolAsk, err := eventFor("the claude_ask from rubi_ask", "claude_ask", func(d map[string]any) bool { return d["text"] == "e2e: tool ask, any newer x release?" })
+	if err != nil {
+		return err
+	}
+	if toolAsk["kind"] != "lookup" || toolAsk["session_id"] != "cli-e2e" {
+		return fmt.Errorf("tool ask: %v", toolAsk)
+	}
+	if _, err := ccall("rubi_reply", map[string]any{"message_id": msgID, "text": "e2e: answered through rubi_reply"}); err != nil {
+		return err
+	}
+	toolRep, err := eventFor("the claude_reply from rubi_reply", "claude_reply", func(d map[string]any) bool { return d["text"] == "e2e: answered through rubi_reply" })
+	if err != nil {
+		return err
+	}
+	if irt := fmt.Sprint(toolRep["in_reply_to"]); !strings.Contains(irt, msgID) {
+		return fmt.Errorf("reply in_reply_to %v, want %s", toolRep["in_reply_to"], msgID)
+	}
+	if err := stateOf(msgID, "answered"); err != nil {
+		return err
+	}
+	if toolOut, err = ccall("rubi_inbox_status", nil); err != nil || !strings.Contains(toolOut, `"owed_replies":[]`) {
+		return fmt.Errorf("rubi_inbox_status: %s %v", toolOut, err)
+	}
+	if _, err := ccall("rubi_reply", map[string]any{"message_id": msgID, "text": "twice"}); err == nil {
+		return errors.New("a second rubi_reply to the same message was accepted")
+	}
+	if _, err := ccall("rubi_reply", map[string]any{"message_id": "cm_never_delivered", "text": "x"}); err == nil {
+		return errors.New("rubi_reply accepted a message that was never delivered")
+	}
+	// The turn's final answer doesn't send the replied message again.
+	stop["stop_hook_active"], stop["last_assistant_message"] = false, "e2e: tools done"
+	if o, err := fc(map[string]any{"op": "hook", "in": stop}); err != nil || strings.Contains(o, "block") {
+		return fmt.Errorf("Stop after the tools: %q %v", o, err)
+	}
+	step("7d claude-mcp: rubi_sisters named %s, rubi_ask reached the Bot as claude_ask, rubi_reply as claude_reply (in_reply_to %s) and answered; a second reply was refused", sister, msgID)
 
 	// Case 8: "trust this session for 2 hours": the next plain commands are allowed without asking;
 	// a push still asks.

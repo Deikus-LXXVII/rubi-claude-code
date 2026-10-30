@@ -143,8 +143,80 @@ waiter is attached (`waiter`) and what to expect (`delivery`).
 A Bot can't approve commands, and messages never grant permissions. You can unbind in the plugin's page.
 Messages are injected only through hooks; Rubi never resumes a session that is open in the app.
 
-The Claude side's instructions are in [`kit/skills/rubi-sisters`](kit/skills/rubi-sisters/SKILL.md):
-copy it to `~/.claude/skills/rubi-sisters/` on the Mac.
+### The sister tools inside Claude Code
+
+Claude Code gets four real tools from the `rubi-sisters` plugin (marketplace `rubi`, embedded in the
+`rubi-home` binary, with a skill that tells Claude how to use them). Claude calls them as
+`mcp__plugin_rubi-sisters_rubi__<tool>`:
+
+| Tool | What it does |
+| :- | :- |
+| `rubi_sisters {}` | the Bot(s) bound to this session (name, since) and who sent it messages in the last 24 hours |
+| `rubi_ask {text, kind?}` | queues an ask for the sister, exactly like a ```` ```rubi-ask ```` block (kind `research`, `audit` or `lookup`, at most 2000 characters, at most 3 a minute); returns the ask's id. It arrives at the Bot as `claude_ask` |
+| `rubi_reply {message_id, text}` | answers one message that was delivered to this session in the last 24 hours, now. It arrives at the Bot as `claude_reply` with `in_reply_to` set, and the message's state becomes `answered`. It is Claude's whole answer to that message: the turn's final answer is not sent again for it (messages not replied to still get the final answer) |
+| `rubi_inbox_status {}` | messages waiting, replies still owed, whether a waiter is attached, recent states (queued, delivered, answered) |
+
+The text-block convention keeps working (the skill names it as the fallback), and the plugin needs no change
+to route these: asks and replies reach the Bot through the same `claude-sessions.next` entries. When you bind
+a Bot, unbind it or the binding follows a restarted session, the plugin tells Rubi Home with
+`claude-sessions.bound`, which is how `rubi_sisters` names her. An older Rubi Home doesn't know that
+operation: the plugin logs it once and carries on, and the tools there say so.
+
+**They add no trust.** Nothing a tool returns approves a command or changes a permission, Claude can't
+approve anything with them, and a tool call is a separate line on Rubi Home's socket that is never treated as
+an approval or a hook event. A call acts for the session it comes from; an ask from a session that isn't
+bound may still go to the Bot of its project (the same route as a text block). Consent: the managed
+settings allow only the two read-only tools (`rubi_sisters`, `rubi_inbox_status`) without a prompt;
+`rubi_ask` and `rubi_reply` send something out, so Claude Code asks you for each call as it does for any MCP
+tool. The allow rule is name-based (plugin `rubi-sisters`, server `rubi`): another marketplace's plugin of the
+same name would match it too, so lock marketplaces with the managed `strictKnownMarketplaces` setting
+([docs](https://code.claude.com/docs/en/settings-reference.md#strictknownmarketplaces)) if that matters to you.
+
+How the tools know which session calls: not from anything in the request (a process of yours could write any
+session id into it), but from the kernel. Rubi Home reads the pid of the process on the other end of its socket
+(macOS `LOCAL_PEERPID`, Linux `SO_PEERCRED`) right after accepting the connection, and finds that process's
+`claude` ancestor (the first process named `claude` within 6 levels above it, else its direct parent; never a
+shell, terminal or the desktop app above it). The first hook line of a session claims that `claude` process
+for the session; while that session keeps sending hooks another session's line from the same process is ignored.
+A claim ends with the session's SessionEnd (only when it comes from the claiming process), when the pid is
+reused, after 24 hours without a hook, or moves when the session has been silent for 10 minutes and another
+session's hook arrives from the same process. A tool call is attributed to the session that holds its caller's
+`claude` process, or refused ("this session isn't known to Rubi Home yet; try again after its next prompt"),
+also before a new `claude` has sent its first hook, even when an earlier one that crashed ran under the same
+shell. The CLI process must be named `claude`; otherwise the tools are refused (fail closed). Where the peer
+can't be identified the tools are refused too.
+
+What that does and doesn't guarantee: tool identity is the `claude` process tree as the kernel reports it, plus
+the hook lines, which are trusted as before. Any process inside session A's tree acts as A: it can use A's tools,
+end A's claim and claim the process for another session id (that is what `/clear` does). A process of yours
+outside every `claude` tree is refused unless it first claims a process of its own by sending hook lines (you
+could always forge those); it can then act as a session id no `claude` has claimed yet, but cannot take a
+process an active session holds. The tools give no approval power in any case.
+
+Install (needs the managed settings and the root-owned hook binary below):
+
+```sh
+~/.rubi-home/bin/rubi-home install-hook --with-claude-plugin
+```
+
+It copies the plugin's files to `/Library/Application Support/Rubi Home/claude-plugin` in the same
+administrator step as the binary. The file contents travel inside the script (root reads nothing you can
+write), root decodes them into a temporary folder next to the target, checks every file's sha256, makes the
+tree root-owned and renames it into place (the old folder is kept until the rename worked). `--dry-run`
+lists the files with their hashes. Then the managed settings register the marketplace (`extraKnownMarketplaces`,
+a `directory` source) and enable the plugin (`enabledPlugins`); they do not use `managed-mcp.json`, which
+would take exclusive control of your MCP servers. Restart Claude Code afterwards. The MCP server runs
+`/usr/local/bin/rubi-home claude-mcp`, so that root-owned copy must be new enough: with an older one the
+server fails to start (`/mcp` shows it as failed) until you run `install-hook` again. The plugin folder is
+root-owned; the Claude Code docs say a marketplace added from a local directory with a relative `source` is
+read in place, but they don't say so for managed `extraKnownMarketplaces`, so if Claude Code copies the plugin
+into `~/.claude/plugins` that copy is writable by you and only the source is protected. That is why
+`strictKnownMarketplaces` and the root-owned command path matter more than the folder itself.
+
+Manual check: start a Claude Code session in a project, ask "which sister do you have? use rubi_sisters"
+(it lists the tools and names her once she is bound), then have the Bot send a message and ask Claude to
+`rubi_reply` to it (approve the prompt); the Bot should receive `claude_reply` with `in_reply_to`. `/mcp` shows the `rubi`
+server of the `rubi-sisters` plugin as connected.
 
 ## Set up on a Mac
 
@@ -173,7 +245,8 @@ You need Rubi v0.12.0 or later with this plugin installed, and Claude Code v2.1.
    root can write, and afterwards the command re-checks the file and its `version`. The hash only says
    which file will be installed: if you got Rubi Home from a release, compare it with that release's
    `SHA256SUMS`. `--dry-run` shows the plan without running anything, `--to PATH` picks another target,
-   `--sudo` uses `sudo` in a terminal instead of the dialog. Run it again after each Rubi Home update:
+   `--sudo` uses `sudo` in a terminal instead of the dialog, `--with-claude-plugin` also installs the
+   sister tools' plugin (see above). Run it again after each Rubi Home update:
    every hook line carries the hook's version (self-reported, so advisory), Rubi Home logs a warning when
    this copy is older, `rubi-home status` shows its version, hash and ownership, `install-home.sh` warns
    after an upgrade, and `claude_code_sessions` reports a problem for that computer ("the Claude Code
@@ -223,7 +296,13 @@ You need Rubi v0.12.0 or later with this plugin installed, and Claude Code v2.1.
      the answers out (10-second timeout, never blocking: when Rubi Home doesn't answer they do nothing);
    - a second `Stop` hook, `claude-hook --wait` (`asyncRewake: true`, 3600-second timeout), that wakes an
      idle session when a Bot's message arrives (see [Waking an idle session](#waking-an-idle-session)).
-     Add it with `sudo` like the rest, then restart Claude Code.
+     Add it with `sudo` like the rest, then restart Claude Code;
+   - `extraKnownMarketplaces` (marketplace `rubi`, a `directory` source at
+     `/Library/Application Support/Rubi Home/claude-plugin`), `enabledPlugins` (`rubi-sisters@rubi`) and one
+     allow rules for the two read-only tools (`rubi_sisters`, `rubi_inbox_status`; `rubi_ask` and
+     `rubi_reply` still prompt), for the
+     [sister tools](#the-sister-tools-inside-claude-code); run
+     `rubi-home install-hook --with-claude-plugin` first so the folder exists.
 
 6. **Try it.** Restart Claude Code and ask it to run `rm -rf /tmp/rubi-test`. The Rubi approval link
    arrives through your Bot; approve it and the command runs. Lock Rubi and try again: it is denied.
