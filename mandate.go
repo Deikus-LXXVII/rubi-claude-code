@@ -252,6 +252,12 @@ func isDigits(s string) bool {
 
 // mandateAllows says whether a mandate for root lets command run in cwd without asking, and if not why.
 func mandateAllows(command, root, cwd string) (bool, string) {
+	return mandateAllowsBranch(command, root, cwd, "")
+}
+
+// mandateAllowsBranch is mandateAllows for a project trust: when branchPattern isn't empty, a command that
+// switches to or creates a git branch is allowed only for a name that matches the pattern (branchRule).
+func mandateAllowsBranch(command, root, cwd, branchPattern string) (bool, string) {
 	if strings.TrimSpace(command) == "" {
 		return false, "empty command"
 	}
@@ -270,7 +276,7 @@ func mandateAllows(command, root, cwd string) (bool, string) {
 		var next []string
 		isCd := false
 		for _, d := range dirs {
-			nd, cd, why := checkSegment(sg, root, d)
+			nd, cd, why := checkSegment(sg, root, d, branchPattern)
 			if why != "" {
 				return false, why
 			}
@@ -317,7 +323,7 @@ func harmlessName(n string) bool {
 }
 
 // checkSegment checks one command and returns the working directory after it (cd) and whether it was a cd.
-func checkSegment(sg segment, root, dir string) (string, bool, string) {
+func checkSegment(sg segment, root, dir, branchPattern string) (string, bool, string) {
 	ws := sg.words
 	for _, w := range ws {
 		if bad := secretIn(w.text); bad != "" {
@@ -405,7 +411,7 @@ func checkSegment(sg segment, root, dir string) (string, bool, string) {
 	if name == "cd" && wrapped {
 		return dir, true, "cd behind a wrapper runs as a program and changes nothing"
 	}
-	if why := checkArgs(name, spec, args, root, dir); why != "" {
+	if why := checkArgs(name, spec, args, root, dir, branchPattern); why != "" {
 		return dir, name == "cd", why
 	}
 	if name == "cd" {

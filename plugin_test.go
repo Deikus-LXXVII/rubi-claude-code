@@ -45,6 +45,7 @@ type fakeHost struct {
 	bound     []map[string]any
 	createFn  func(ctx context.Context, args map[string]any) (map[string]any, error) // claude-sessions.create (nil: an old Rubi Home)
 	creates   []map[string]any
+	saveErr   error // SaveState fails
 }
 
 type decided struct {
@@ -182,6 +183,9 @@ func (f *fakeHost) SaveState(v any) error {
 	b, err := json.Marshal(v)
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.saveErr != nil {
+		return f.saveErr
+	}
 	f.state = b
 	return err
 }

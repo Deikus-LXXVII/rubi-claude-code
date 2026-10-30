@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path"
 	"strings"
 	"time"
 	"unicode"
@@ -139,6 +140,33 @@ func (s *sisters) startTool(ctx context.Context, h sisterHost, in startIn) (any,
 		return nil, fmt.Errorf("at most %d session starts per hour in all", startsGlobal)
 	}
 	t := startTicket{Sister: sister, Device: d.ID, DeviceName: d.Name, Cwd: in.Cwd, Task: task}
+	// A Bot bound to a session of a trusted project starts sessions in it without asking; the helper still
+	// refuses folders it doesn't know, and the limits above held.
+	clean := path.Clean(in.Cwd) // what is checked is what is sent: no .. left to resolve somewhere else
+	if pt := s.projectCovering(ctx, h, d.ID, sister, clean, ""); pt != nil {
+		t.Cwd = clean
+		h.Audit(auditMandateAll, map[string]any{"mandate": pt.ID, "project": pt.Root, "device": d.ID, "sister": sister, "action": "claude_code_start",
+			"directory": t.Cwd, "uses": pt.Uses})
+		res, err := s.executeStart(ctx, h, t)
+		m, ok := res.(map[string]any)
+		if err != nil || !ok {
+			return res, err
+		}
+		// Rubi Home reports the folder it launched in (resolved): a symlink inside the project that leads
+		// elsewhere puts the session outside it, and nothing was approved for that.
+		if dir, _ := m["directory"].(string); !within(pt.Root, dir) && (pt.RealRoot == "" || !within(pt.RealRoot, dir)) {
+			for _, b := range s.st.bindings() {
+				if sameBot(b.Sister, sister) {
+					_, _ = s.st.unbind(sister)
+					s.tellBound(context.Background(), h, b, false)
+				}
+			}
+			h.Audit("project_trust_start_outside", map[string]any{"mandate": pt.ID, "sister": sister, "directory": dir, "root": pt.Root})
+			return nil, fmt.Errorf("the session was started in %s, which is outside the trusted project %s (a symlink?); %s was unbound from it and the trust does not cover it: ask the user", dir, pt.Root, sister)
+		}
+		m["approval"] = "none needed: " + pt.ID + ", the user's trust of " + pt.Root + " until " + s.expiryTime(trustOffer{Expires: pt.Expires}).Format("Mon 2 Jan 15:04 MST")
+		return m, nil
+	}
 	preview := map[string]any{"bot": sister, "computer": d.Name, "directory": in.Cwd, "first_message_from_bot": task,
 		"rubi_adds_this_header_before_it": fmt.Sprintf(startHeader, sister),
 		"what_it_does":                    fmt.Sprintf("Starts a NEW Claude Code session on %s in %s. Its first message is the header Rubi adds (rubi_adds_this_header_before_it; <code> is a random reference) followed by exactly the text under first_message_from_bot, from %s (a Bot; the text is not yours). Then %s is bound to the session: it can send it short messages and gets its answers and questions.", d.Name, in.Cwd, sister, sister),

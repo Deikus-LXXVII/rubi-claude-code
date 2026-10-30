@@ -44,6 +44,8 @@ type ticket struct {
 	SessionID  string `json:"session_id"`
 	Digest     string `json:"digest"`
 	Cwd        string `json:"cwd,omitempty"` // the scope of a mandate given with this approval
+	// Project is the project trust offered with this approval (the trust_project option); nil when none was.
+	Project *trustOffer `json:"project,omitempty"`
 }
 
 type homeCaller interface {
@@ -199,15 +201,16 @@ func (w *watcher) handle(ctx context.Context, d rubiplugin.HomeDevice, r request
 			err := w.h.HomeCall(ctx, d.ID, "claude.decide", answer{ID: r.ID, SessionID: r.SessionID, Digest: r.Digest, Behavior: "allow"}, nil)
 			fields := map[string]any{"mandate": m.ID, "device": d.ID, "session": r.SessionID, "request": r.ID,
 				"command": oneLine(r.Command, 300), "directory": r.Cwd, "uses": m.Uses}
+			if m.Project {
+				fields["project"] = m.Root
+			}
 			if err != nil {
 				fields["error"] = oneLine(err.Error(), 200)
 			}
 			w.h.Audit(auditMandateAll, fields)
 			return
 		}
-		if why != "" {
-			mandateNote = "your 2-hour trust for this session doesn't cover this: " + why
-		}
+		mandateNote = why
 	}
 	safe, why := classify(r.Command)
 	kind := kindRun
@@ -222,8 +225,22 @@ func (w *watcher) handle(ctx context.Context, d rubiplugin.HomeDevice, r request
 	if r.Description != "" {
 		preview["claude_says"] = r.Description
 	}
-	out, err := w.h.Submit(ctx, rubiplugin.Request{Kind: kind, Summary: "Claude Code: " + oneLine(r.Command, 100),
-		Preview: preview, Payload: ticket{Device: d.ID, DeviceName: d.Name, ID: r.ID, SessionID: r.SessionID, Digest: r.Digest, Cwd: r.Cwd}})
+	t := ticket{Device: d.ID, DeviceName: d.Name, ID: r.ID, SessionID: r.SessionID, Digest: r.Digest, Cwd: r.Cwd}
+	req := rubiplugin.Request{Kind: kind, Summary: "Claude Code: " + oneLine(r.Command, 100), Preview: preview}
+	if w.s != nil && kind == kindRun {
+		// The third option trusts the whole project; it is offered when Rubi Home says what the project is.
+		offer, why := w.s.projectOffer(ctx, w.h, d, r)
+		if offer != nil {
+			t.Project = offer
+			preview["project_trust"] = "Option \"" + w.s.trustLabel(*offer) + "\": " + w.s.trustMeaning(*offer, false)
+			req.Options = w.s.runOptions(offer)
+		} else {
+			preview["project_trust"] = "not offered: " + why
+			req.Options = w.s.runOptions(nil)
+		}
+	}
+	req.Payload = t
+	out, err := w.h.Submit(ctx, req)
 	if err != nil {
 		w.h.Logf("%s: asking about %s: %v", d.Name, r.ID, err)
 		deny("Rubi couldn't ask you (" + oneLine(err.Error(), 200) + "), so the command was denied.")

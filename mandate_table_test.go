@@ -25,7 +25,7 @@ var tableAllowed = []string{
 	"git switch -c feature", "git checkout -b feature", "git checkout main", "git branch -a -v --list", "git branch -m old new", "git branch -d merged",
 	"git stash push -m wip", "git stash list", "git stash show -p", "git stash pop", "git stash apply", "git stash", "git stash -u",
 	"git merge --no-ff feature", "git merge --ff-only main", "git merge --abort", "git merge --continue",
-	"git rebase main", "git rebase --continue", "git rebase --abort", "git cherry-pick abc123", "git cherry-pick -x abc", "git revert --no-edit HEAD",
+	"git rebase --no-update-refs main", "git rebase --continue", "git rebase --abort", "git cherry-pick abc123", "git cherry-pick -x abc", "git revert --no-edit HEAD",
 	"git rev-parse --show-toplevel", "git rev-parse --abbrev-ref HEAD", "git ls-files", "git blame -L 10,20 main.go",
 	"git grep -n -i -w -e foo", "git grep -l foo -- '*.go'", "git grep -c TODO",
 	"git worktree add wt/x -b x", "git worktree list", "git worktree move wt/x wt/y",
@@ -75,7 +75,7 @@ var tableRefused = []string{
 	// exec options ask
 	"find . -exec rm x", "find . -execdir x", "find . -ok x", "find . -okdir x", "find . -delete", "find . -fprintf /tmp/x %p", "find . -name x -exec echo",
 	"rg --pre cat foo", "rg --pre-glob '*.x' foo", "rg --hostname-bin=x foo", "git grep -O vim foo", "git grep --open-files-in-pager=vim foo",
-	"git rebase -i HEAD~3", "git rebase --exec 'make test' main", "git rebase -x ls main", "git commit -e", "git add -i", "git diff --ext-diff", "git diff --textconv", "git cat-file --textconv HEAD:a", "git merge --edit",
+	"git rebase -i HEAD~3", "git rebase main", "git rebase --update-refs --onto main a", "git rebase --update-refs main", "git rebase --no-update-refs --update-refs main", "git rebase --exec 'make test' main", "git rebase -x ls main", "git commit -e", "git add -i", "git diff --ext-diff", "git diff --textconv", "git cat-file --textconv HEAD:a", "git merge --edit",
 	"go test -exec=echo ./...", "go test -exec echo ./...", "go run -toolexec=strace .", "go vet -vettool=./x ./...", "go build -ldflags '-extld=sh' .",
 	"make --eval='all: ; ls'", "make -E x", "make -kE x", "cargo build --config x=y", "cargo build -Zx", "cargo test -Z unstable-options",
 	"npm test --script-shell=zsh", "npm run x --node-options=--require=./a.js", "pnpm test --script-shell zsh", "yarn run x --node-options x",

@@ -8,7 +8,10 @@
 # the answer and a rubi-ask come back to that Bot, also with the session in bypassPermissions; "trust
 # this session for 2 hours" auto-allows plain commands, a push still asks, revoke ends it; a Bot starts a
 # new session (claude_code_start; the helper is built with -tags rubie2e so its launcher writes the claude://
-# link to a file instead of opening the app) and is bound to it.
+# link to a file instead of opening the app) and is bound to it; "trust this project until 04:00" lets other
+# sessions of the project and the bound Bot (start, bind) run without questions, still asks outside it / for
+# push, tags and other branches, holds over a Rubi Home restart, ends on revoke and at its time (the plugin is
+# built with -tags rubie2e, whose only addition is a file that shortens the trust), and does not beat a locked Rubi.
 #
 #   RUBI_REPO=../rubi e2e/run.sh
 set -euo pipefail
@@ -26,7 +29,7 @@ printf '{"Replace":{"%s/cmd/rubi-claude-e2e/main.go":"%s/_driver/main.go"}}' "$R
   go build -race -o "$WORK/rubi" ./cmd/rubi &&
   go build -race -tags rubie2e -o "$WORK/rubi-home" ./cmd/rubi-home)  # rubie2e: the launcher writes the claude:// link to a file
 KEY=$("$WORK/e2e" keys "$WORK")
-(cd "$PLUGIN_REPO" && go build -race -ldflags "-X main.PublisherKey=$KEY" -o "$WORK/claude-code" .)
+(cd "$PLUGIN_REPO" && go build -race -tags rubie2e -ldflags "-X main.PublisherKey=$KEY" -o "$WORK/claude-code" .)
 
 rc=0
 unshare -rn bash -c 'ip link set lo up && exec "$1/e2e" run "$1" "$1/rubi" "$1/rubi-home" "$1/claude-code"' _ "$WORK" || rc=$?

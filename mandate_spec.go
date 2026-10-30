@@ -76,7 +76,7 @@ func opts(spec ...any) map[string]argKind {
 }
 
 // checkArgs checks the words after a listed program against its spec and returns why they ask, or "".
-func checkArgs(name string, top *cmdSpec, args []word, root, dir string) string {
+func checkArgs(name string, top *cmdSpec, args []word, root, dir, branchPattern string) string {
 	c := &call{root: root, dir: dir, name: name, args: args, seen: map[string]bool{}, vals: map[string][]string{}}
 	c.exec = execNames(top, nil)
 	cur := top
@@ -134,6 +134,11 @@ func checkArgs(name string, top *cmdSpec, args []word, root, dir string) string 
 					return o.text + " looks like publishing"
 				}
 			}
+		}
+	}
+	if branchPattern != "" && name == "git" {
+		if why := branchRule(c, branchPattern); why != "" {
+			return why
 		}
 	}
 	if top.build {

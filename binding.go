@@ -40,6 +40,8 @@ type session struct {
 	Title          string    `json:"title,omitempty"`
 	Cwd            string    `json:"cwd,omitempty"`
 	ProjectRoot    string    `json:"project_root,omitempty"`
+	RealCwd        string    `json:"real_cwd,omitempty"`          // Cwd with symlinks resolved (newer Rubi Homes)
+	RealRoot       string    `json:"real_project_root,omitempty"` // ProjectRoot with symlinks resolved
 	RepoKey        string    `json:"repo_key,omitempty"`
 	Branch         string    `json:"branch,omitempty"`
 	Role           string    `json:"role"`
@@ -92,6 +94,7 @@ type sisters struct {
 	hits map[string][]time.Time
 	asks map[string]askRef
 	now  func() time.Time
+	loc  *time.Location // the zone a project trust's 04:00 is in (nil: this machine's)
 	// oldHome holds the computers whose Rubi Home doesn't know opBound (logged once each).
 	oldHome map[string]bool
 }
@@ -381,6 +384,16 @@ func (s *sisters) bindTool(ctx context.Context, h sisterHost, in bindIn) (any, e
 	}
 	t := bindTicket{Sister: sister, Device: d.ID, DeviceName: d.Name, SessionID: sess.SessionID, AppSessionID: sess.AppSessionID,
 		RepoKey: sess.RepoKey, Cwd: sess.Cwd, Title: sess.Title}
+	// A Bot already bound to a session of a trusted project binds to another session of it without asking.
+	if pt := s.projectCovering(ctx, h, d.ID, sister, sess.Cwd, sess.RealCwd); pt != nil && s.allow("bindpt|"+strings.ToLower(sister), bindsUnderTrustPerHour) {
+		h.Audit(auditMandateAll, map[string]any{"mandate": pt.ID, "project": pt.Root, "device": d.ID, "sister": sister, "action": "claude_code_bind",
+			"session": sess.SessionID, "directory": sess.Cwd, "uses": pt.Uses})
+		res, err := s.executeBind(h, t)
+		if m, ok := res.(map[string]any); ok && err == nil {
+			m["approval"] = "none needed: " + pt.ID + ", the user's trust of " + pt.Root + " until " + s.expiryTime(trustOffer{Expires: pt.Expires}).Format("Mon 2 Jan 15:04 MST")
+		}
+		return res, err
+	}
 	preview := map[string]any{"bot": sister, "computer": d.Name, "project": sess.RepoKey, "directory": sess.Cwd,
 		"session": sess.SessionID, "title": sess.Title, "role": sess.Role,
 		"what_it_allows": "This Bot can send this Claude Code session short messages, which Claude reads at its next prompt or stop, and gets the session's answers and questions. It can't approve commands."}

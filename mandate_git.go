@@ -1,5 +1,10 @@
 package main
 
+import (
+	"path"
+	"strings"
+)
+
 // git for the mandate: the subcommands it allows and every option of each. Everything else (push, fetch,
 // pull, clone, remote, config, submodule, filter-branch, reset, clean, aliases ...) asks, and so do
 // -f/--force, --hard, -D, --delete, -c and the options that run an editor, a pager or another program.
@@ -38,7 +43,7 @@ var gitSpec = &cmdSpec{
 			"clear":  {deny: "it throws every stash away"},
 		}},
 		"merge": {opts: opts(kFlag, "--no-ff --ff-only --ff --abort --continue --quit --squash --no-squash --no-commit --commit --no-edit -q --quiet -v --verbose --stat -n --no-stat --allow-unrelated-histories --autostash --no-autostash --log --no-log --signoff --no-signoff --no-verify --verify --rerere-autoupdate", kValue, "-m --message -X --strategy-option", kRead, "-F --file", kExec, "-e --edit")},
-		"rebase": {opts: opts(kFlag, "--continue --abort --skip --quit --autostash --no-autostash --autosquash --no-autosquash --keep-base --root --no-ff -q --quiet -v --verbose --stat --no-stat -r --rebase-merges --update-refs --no-update-refs --fork-point --no-fork-point --signoff --committer-date-is-author-date --reapply-cherry-picks --no-reapply-cherry-picks --ignore-date --no-verify --verify", kValue, "--onto --empty -X --strategy-option",
+		"rebase": {check: rebaseCheck, opts: opts(kFlag, "--continue --abort --skip --quit --autostash --no-autostash --autosquash --no-autosquash --keep-base --root --no-ff -q --quiet -v --verbose --stat --no-stat -r --rebase-merges --update-refs --no-update-refs --fork-point --no-fork-point --signoff --committer-date-is-author-date --reapply-cherry-picks --no-reapply-cherry-picks --ignore-date --no-verify --verify", kValue, "--onto --empty -X --strategy-option",
 			kExec, "-i --interactive -x --exec --edit-todo")},
 		"cherry-pick": {opts: opts(kFlag, "-x -n --no-commit --continue --abort --skip --quit --ff --allow-empty --allow-empty-message --keep-redundant-commits -s --signoff --no-edit --rerere-autoupdate --no-rerere-autoupdate", kValue, "-m --mainline -X --strategy-option", kExec, "-e --edit")},
 		"revert":      {opts: opts(kFlag, "--no-edit -n --no-commit --continue --abort --skip --quit -s --signoff --rerere-autoupdate --no-rerere-autoupdate", kValue, "-m --mainline -X --strategy-option", kExec, "-e --edit")},
@@ -62,4 +67,102 @@ var gitSpec = &cmdSpec{
 		}},
 		"push": {deny: "it publishes your work"},
 	},
+}
+
+// rebaseCheck: git rebase --update-refs (or the rebase.updateRefs setting, which the command line can't show)
+// moves other local branches whose tips are in the replayed range, main included. So a rebase that starts
+// must say --no-update-refs; --update-refs asks; --continue, --abort, --skip and --quit go on with or end a
+// rebase that was started (and approved) already.
+func rebaseCheck(c *call) string {
+	if c.seen["--update-refs"] {
+		return "git rebase --update-refs moves other branches"
+	}
+	for _, f := range []string{"--continue", "--abort", "--skip", "--quit"} {
+		if c.seen[f] {
+			return ""
+		}
+	}
+	if !c.seen["--no-update-refs"] {
+		return "git rebase without --no-update-refs (a rebase.updateRefs setting would move other branches)"
+	}
+	return ""
+}
+
+// ---- the branch rule of a project trust ----
+
+// branchListFlags make `git branch` list branches: the operands are patterns, not names to create.
+var branchListFlags = []string{"-l", "--list", "-a", "--all", "-r", "--remotes", "--show-current", "--contains", "--no-contains", "--merged", "--no-merged", "--points-at"}
+
+// branchRule is the extra check of a project trust, run on a git command the option tables accepted: a
+// command that switches to or creates a branch is allowed only for a name that matches pattern. It reads
+// what checkArgs parsed (option values, operands), so every spelling of an option is covered. A name with
+// a wildcard, "..", or "-" (the previous branch) never matches. Commands that only list, commit, merge or
+// cherry-pick stay on their branch and are not looked at here; `git tag`, `git push` and the rest of what
+// the tables refuse never get this far.
+func branchRule(c *call, pattern string) string {
+	var names []string
+	operand := func(i int) {
+		if i < len(c.operands) {
+			names = append(names, c.operands[i].text)
+		}
+	}
+	switch c.name {
+	case "git switch": // a detached switch (--detach X) names X too: it asks unless X is in the pattern
+		names = append(append(append(names, c.vals["-c"]...), c.vals["--create"]...), c.vals["--orphan"]...)
+		if len(names) == 0 {
+			operand(0)
+		}
+	case "git checkout":
+		names = append(append(append(names, c.vals["-b"]...), c.vals["-B"]...), c.vals["--orphan"]...)
+		if len(names) == 0 {
+			operand(0)
+		}
+	case "git branch":
+		if c.seen["-m"] || c.seen["--move"] || c.seen["-c"] || c.seen["--copy"] || c.seen["-d"] || c.seen["--delete"] {
+			for i := range c.operands { // rename, copy, delete: every name is one, whatever else (-r) is given
+				operand(i)
+			}
+			break
+		}
+		for _, f := range branchListFlags {
+			if c.seen[f] {
+				return ""
+			}
+		}
+		operand(0) // create: the name, then a start point
+	case "git worktree add":
+		names = append(append(names, c.vals["-b"]...), c.vals["--orphan"]...)
+		if len(names) == 0 && !c.seen["-d"] && !c.seen["--detach"] {
+			switch len(c.operands) {
+			case 0:
+			case 1: // git makes a branch named like the directory
+				names = append(names, path.Base(c.operands[0].text))
+			default:
+				operand(1)
+			}
+		}
+	case "git stash branch":
+		operand(0)
+	case "git rebase": // rebase UPSTREAM BRANCH switches to BRANCH first
+		if c.seen["--root"] {
+			operand(0)
+		} else {
+			operand(1)
+		}
+	}
+	for _, n := range names {
+		if !branchMatches(pattern, n) {
+			return c.name + " of branch " + oneLine(n, 60) + ", which is outside the project trust's branches (" + pattern + ")"
+		}
+	}
+	return ""
+}
+
+// branchMatches: name is a plain branch name that matches the path.Match pattern.
+func branchMatches(pattern, name string) bool {
+	if name == "" || strings.ContainsAny(name, "*?[\\") || strings.Contains(name, "..") || strings.HasPrefix(name, "-") {
+		return false
+	}
+	ok, err := path.Match(pattern, name)
+	return err == nil && ok
 }

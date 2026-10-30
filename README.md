@@ -79,11 +79,66 @@ configuration sets `cdablevars` or `CDPATH`. Use the plugin's page in the Rubi p
 revoke trusts; your Bot can list and revoke them too
 (`claude_code_mandates`), but never add one.
 
+### Trust a project until 04:00
+
+A `run` approval can have a third button, **Allow and trust this project until Sat 31 Oct 2026 04:00 CET**
+(the label names the exact time and date). One approval then trusts the whole project instead of one session:
+until the next 04:00 (at most 24 hours; the approval states the time zone) Rubi allows plain, listed commands
+in **every** Claude Code session on that computer whose directory is inside the project's root: the session
+that asked, its sub-sessions and worktrees, other sessions, and sessions started later (also by a Bot). The
+root is the project's top directory as Rubi Home reports it (`project_root` in `claude_code_sessions`; for a
+folder that is not a git repository it is the folder itself). The button is offered only when Rubi Home
+reports a root, and never for a home directory or anything higher up (fewer than three path parts), a disk, a
+folder of documents, a credential path, or a folder with no git remote (`local:` key; the plugin cannot tell it
+from a plain folder) with fewer than four path parts. Where Rubi Home reports it (`real_cwd`), the session's
+real directory with symlinks resolved must also be inside the root; symlinks inside the tree are still followed
+by the commands that use them. Branch patterns that match `main`, `master`, `trunk`, `develop` and the like (or
+are `*`) are refused. At most 2000 commands; each allow is audited with the trust's id (`pt_…`).
+
+It uses the same command check as the 2-hour trust (everything above still asks), plus a **branch rule**:
+a command that switches to or creates a git branch (`git switch X`, `switch -c X`, `checkout X`,
+`checkout -b/-B X`, `branch X`, `branch -m/-c/-d`, `worktree add -b X`, `stash branch X`, `rebase UPSTREAM X`)
+is allowed only when `X` matches the trust's branch pattern (`path.Match` syntax, default `citri/*`);
+otherwise it asks. Pushes and every remote git command, `--force`, `git tag` (so releases), sudo, the network
+and installs, writes outside the root or into `.git` and credential paths ask as before. Commits, merges and rebases go
+to whatever branch the session is on, which may be `main`: the rule is about switching and creating, not about
+where the session started. A detached switch (`git switch --detach X`) names a commit and asks unless it matches.
+`git rebase` asks unless it says `--no-update-refs` (`--update-refs`, or a `rebase.updateRefs` setting Rubi
+cannot see, moves other local branches); that holds for the 2-hour trust too. While a project trust covers a
+directory, a session's 2-hour trust is held to the same branch rule.
+
+**What it gives the Bot.** A Bot bound (with its own approval) to a session inside the project may, until the
+trust ends, `claude_code_start` a session in a directory inside the root and `claude_code_bind` to another
+session inside it without a new approval (the new session is bound as usual; the input checks, the rate limits
+of 5 starts an hour and Rubi Home's own checks of the folder still apply). Each is audited with the trust's
+id. **That means the Bot can open sessions in that project with a task of its own until the trust ends, up to 20 binds and 5 starts an hour.** The bound session must be live and inside the root, and a session Rubi Home starts outside it (a symlink) unbinds the Bot. If
+those sessions run with `bypassPermissions` (a desktop app setting), Claude runs any command there without
+asking and no trust or approval matters; a trust only covers sessions that ask.
+`claude_code_send` and the wake-up never needed an approval.
+
+**Asking for it.** A Bot can ask for the trust with `claude_code_trust_project {bind_code, branch_pattern?}`
+for the project of the session it is bound to: a strong, locked approval (a tap isn't enough) that shows the
+same text. The trust is never granted by the tool itself. Only one trust is live for a computer and project
+root: a new one replaces the old (both audited). A 2-hour trust and a project trust can both exist; either may
+allow a command, and revoking one leaves the other.
+
+**Time zone.** Rubi Home doesn't report its computer's time zone, so 04:00 is in the zone of the machine Rubi
+runs on, and the approval says which. The end is computed once, when the approval is asked, and is what is
+granted; an approval answered after it grants nothing. 04:00 is found with calendar arithmetic in the zone, so
+the trust is also capped at 24 hours from the grant, so on a day of 25 hours it can end up to an hour before 04:00 on the clock.
+
+**Revoke and persistence.** The plugin's page in the panel has a "Trusted projects" section (root, computer,
+branches, commands used, end) with Revoke and Revoke all; `claude_code_mandates` lists both kinds and revokes
+`pt_…`, `md_…` or `all`. The trust is part of the plugin's saved state in Rubi (like 2-hour trusts and
+bindings): it survives a restart of Rubi Home, of the plugin and of Rubi until it ends or is revoked; ended
+ones are dropped. Nothing in it works around Rubi being locked: the allow is an answer sent through Rubi, so
+while Rubi is locked the helper denies as always.
+
 ### Sessions with bypassPermissions
 
 The example managed settings leave `bypassPermissions` allowed (a mode the Claude desktop app can set per
 session). Such a session never asks before a command, so the `PermissionRequest` hook never runs there:
-**neither Rubi approvals nor 2-hour trusts apply to it**, and Claude runs every command without you.
+**neither Rubi approvals nor trusts (2-hour or project) apply to it**, and Claude runs every command without you.
 Its session hooks still run (`SessionStart`, `UserPromptSubmit`, `Stop`, `SessionEnd`), so it shows up in
 `claude_code_sessions` (with a note), and Bots' messages, replies and asks work as in any other session.
 

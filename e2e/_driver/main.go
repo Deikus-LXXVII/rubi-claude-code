@@ -388,9 +388,14 @@ type hookResult struct {
 
 // hook runs `rubi-home claude-hook` the way Claude Code does for a Bash permission request.
 func hook(bin, helperDir, command string) <-chan hookResult {
+	return hookAs(bin, helperDir, "e2e-session", "/Users/e2e/project", command)
+}
+
+// hookAs is hook for a given session and working directory.
+func hookAs(bin, helperDir, session, cwd, command string) <-chan hookResult {
 	out := make(chan hookResult, 1)
-	in, _ := json.Marshal(map[string]any{"session_id": "e2e-session", "transcript_path": "/tmp/none.jsonl",
-		"cwd": "/Users/e2e/project", "permission_mode": "default", "hook_event_name": "PermissionRequest",
+	in, _ := json.Marshal(map[string]any{"session_id": session, "transcript_path": "/tmp/none.jsonl",
+		"cwd": cwd, "permission_mode": "default", "hook_event_name": "PermissionRequest",
 		"tool_name": "Bash", "tool_input": map[string]any{"command": command, "description": "e2e: " + command}})
 	go func() {
 		start := time.Now()
@@ -496,7 +501,7 @@ func run(dir, rubiBin, homeBin, plugin string) (err error) {
 		for _, p := range procs {
 			_ = p.Wait()
 		}
-		for _, log := range []string{"daemon.log", "rubi-home.log", "rubi-home-restarted.log"} {
+		for _, log := range []string{"daemon.log", "rubi-home.log", "rubi-home-restarted.log", "rubi-home-restarted2.log"} {
 			b, _ := os.ReadFile(filepath.Join(dir, log))
 			if bytes.Contains(b, []byte("DATA RACE")) || bytes.Contains(b, []byte("panic:")) {
 				fmt.Printf("%s:\n%s\n", log, b)
@@ -951,13 +956,19 @@ func run(dir, rubiBin, homeBin, plugin string) (err error) {
 	if err := os.WriteFile(filepath.Join(store, "local_e2e.json"), desk, 0o600); err != nil {
 		return err
 	}
-	sl, err := ag.call("claude_code_sessions", map[string]any{"repo": "e2e/proj"})
-	if err != nil {
-		return err
-	}
-	ss7, _ := sl["sessions"].([]any)
-	if len(ss7) != 1 {
-		return fmt.Errorf("claude_code_sessions: %v", sl)
+	// Rubi Home answers from its last scan of the stores (at most 3 s old) while a new one runs: an earlier
+	// list (the plugin lists sessions to offer a project trust) can predate the file, so ask again.
+	var sl map[string]any
+	var ss7 []any
+	if err := waitFor("the desktop session in claude_code_sessions", 20*time.Second, func() (bool, error) {
+		var err error
+		if sl, err = ag.call("claude_code_sessions", map[string]any{"repo": "e2e/proj"}); err != nil {
+			return false, err
+		}
+		ss7, _ = sl["sessions"].([]any)
+		return len(ss7) == 1, nil
+	}); err != nil {
+		return fmt.Errorf("claude_code_sessions: %v: %w", sl, err)
 	}
 	s7 := ss7[0].(map[string]any)
 	if s7["session_id"] != "cli-e2e" || s7["repo_key"] != "github.com/e2e/proj" || s7["role"] != "main" || s7["source"] != "desktop" {
@@ -1146,6 +1157,7 @@ func run(dir, rubiBin, homeBin, plugin string) (err error) {
 	if err := start("rubi-home-restarted", []string{"RUBI_HOME_DIR=" + helperDir}, homeBin, "run"); err != nil {
 		return err
 	}
+	homeProc = procs[len(procs)-1]
 	ups = map[string]any{"session_id": "cli-e2e", "transcript_path": filepath.Join(dir, "none.jsonl"), "cwd": proj,
 		"permission_mode": "default", "hook_event_name": "UserPromptSubmit", "prompt": "back again"}
 	if err := waitFor("the queued message after the restart", 20*time.Second, func() (bool, error) {
@@ -1345,6 +1357,342 @@ func run(dir, rubiBin, homeBin, plugin string) (err error) {
 	<-ch
 	step("8 revoked: the next command asks again")
 
+	// Case 9: one trust per project. One approval with "trust this project until 04:00" and every session of
+	// the project on this computer (also one started later) runs plain commands without questions, and so
+	// does the Bot bound to a session of it (start, bind). Outside the project, push, tags, branches outside
+	// citri/* still ask. It survives a restart of Rubi Home, ends on revoke, and at its time (a test-only
+	// hook of the rubie2e plugin build shortens it).
+	ptSub := filepath.Join(proj, "sub")
+	if err := os.MkdirAll(ptSub, 0o700); err != nil {
+		return err
+	}
+	// The sessions' own hooks (SessionStart) tell Rubi Home where they run, as Claude Code does.
+	for _, c := range []struct{ sess, cwd string }{{"pt-a", proj}, {"pt-b", ptSub}, {"pt-c", proj}, {"pt-out", dir}} {
+		if _, err := hookEvent(homeBin, helperDir, map[string]any{"session_id": c.sess, "transcript_path": filepath.Join(dir, "none4.jsonl"),
+			"cwd": c.cwd, "permission_mode": "default", "hook_event_name": "SessionStart", "source": "startup"}); err != nil {
+			return err
+		}
+	}
+	askAs := func(sess, cwd, command string) (<-chan hookResult, error) {
+		for i := 0; i < 60; i++ {
+			ch := hookAs(homeBin, helperDir, sess, cwd, command)
+			select {
+			case r := <-ch:
+				if r.Behavior == "deny" && strings.Contains(r.Message, "isn't connected") {
+					time.Sleep(500 * time.Millisecond)
+					continue
+				}
+				return nil, fmt.Errorf("%s %q answered before anyone decided: %+v", sess, command, r)
+			case <-time.After(3 * time.Second):
+				return ch, nil
+			}
+		}
+		return nil, errors.New("the plugin never started polling Rubi Home")
+	}
+	// mustAsk: the command is not allowed by itself; the user denies it.
+	mustAsk := func(sess, cwd, command string) error {
+		ch, err := askAs(sess, cwd, command)
+		if err != nil {
+			return err
+		}
+		id, url, err := approvalFor(command)
+		if err != nil {
+			return err
+		}
+		c, err := panel(url)
+		if err != nil {
+			return err
+		}
+		if _, err := c.Deny(id); err != nil {
+			return err
+		}
+		if r := <-ch; r.Behavior != "deny" {
+			return fmt.Errorf("%q after the deny: %+v", command, r)
+		}
+		return nil
+	}
+	// mustRun: the command is allowed without any question.
+	mustRun := func(sess, cwd, command string) (hookResult, error) {
+		select {
+		case r := <-hookAs(homeBin, helperDir, sess, cwd, command):
+			if r.Behavior != "allow" {
+				return r, fmt.Errorf("%s %q under the project trust: %+v", sess, command, r)
+			}
+			return r, nil
+		case <-time.After(30 * time.Second):
+			return hookResult{}, fmt.Errorf("%s %q wasn't allowed by itself", sess, command)
+		}
+	}
+	trustList := func() ([]any, error) {
+		mo, err := ag.call("claude_code_mandates", nil)
+		if err != nil {
+			return nil, err
+		}
+		l, _ := mo["project_trusts"].([]any)
+		return l, nil
+	}
+
+	// a. A session asks; the user picks "trust this project".
+	ch9, err := askAs("pt-a", proj, "make pt-first")
+	if err != nil {
+		return err
+	}
+	id9, url9, err := approvalFor("make pt-first")
+	if err != nil {
+		return err
+	}
+	pc9, err := panel(url9)
+	if err != nil {
+		return err
+	}
+	ai9, err := pc9.ApprovalInfo(id9)
+	if err != nil {
+		return err
+	}
+	var label9 string
+	for _, o := range ai9.Approval.Options {
+		if o.Key == "trust_project" {
+			label9 = o.Label
+		}
+	}
+	if len(ai9.Approval.Options) != 3 || !strings.HasPrefix(label9, "Allow and trust the project "+proj+" until ") || !strings.Contains(label9, "04:00") ||
+		!strings.Contains(string(ai9.Approval.Preview), proj) || !strings.Contains(string(ai9.Approval.Preview), "citri/*") {
+		return fmt.Errorf("the run approval should offer the project trust with the exact time, root and branches: %+v %s", ai9.Approval.Options, ai9.Approval.Preview)
+	}
+	if res, err := pc9.ApproveWithPassword(id9, "trust_project", pw); err != nil || res["state"] != "executed" {
+		return fmt.Errorf("trust_project: %v %v", res, err)
+	}
+	if r := <-ch9; r.Behavior != "allow" {
+		return fmt.Errorf("trust_project: %+v", r)
+	}
+	pts, err := trustList()
+	if err != nil || len(pts) != 1 {
+		return fmt.Errorf("project_trusts: %v %v", pts, err)
+	}
+	pt1, _ := pts[0].(map[string]any)
+	ptID := fmt.Sprint(pt1["id"])
+	if !strings.HasPrefix(ptID, "pt_") || pt1["project_root"] != proj || pt1["branches"] != "citri/*" {
+		return fmt.Errorf("the trust: %v", pt1)
+	}
+	step("9a one approval (%q) -> trust %s for %s", label9, ptID, proj)
+
+	// b. Two other sessions of the project run commands without a question; a branch inside the pattern too.
+	for _, c := range []struct{ sess, cwd, cmd string }{
+		{"pt-b", ptSub, "go vet ./... && go test ./..."},
+		{"pt-c", proj, "git add -A && git commit -m x"},
+		{"pt-b", ptSub, "git switch -c citri/e2e-branch"},
+		{"pt-a", proj, "make test"},
+	} {
+		r, err := mustRun(c.sess, c.cwd, c.cmd)
+		if err != nil {
+			return err
+		}
+		report("project", r)
+	}
+	step("9b three different sessions of the project ran plain commands, builds and a citri/* branch switch without asking")
+
+	// c. What still asks: outside the project, push, tags, other branches, force.
+	for _, c := range []struct{ sess, cwd, cmd string }{
+		{"pt-out", dir, "make pt-outside"},
+		{"pt-b", ptSub, "git push origin citri/e2e-branch"},
+		{"pt-b", ptSub, "git tag v9.9.9"},
+		{"pt-b", ptSub, "git switch main"},
+		{"pt-b", ptSub, "git checkout -b e2e-other"},
+		{"pt-b", ptSub, "rm -rf ../../outside-e2e"},
+	} {
+		if err := mustAsk(c.sess, c.cwd, c.cmd); err != nil {
+			return err
+		}
+	}
+	step("9c outside the project, push, a tag, branches outside citri/*, writes outside the root still asked (and were denied)")
+
+	// d. The Bot bound to a session of the project starts a session in it and binds to another, no approval.
+	launchFile9 := os.Getenv("RUBI_E2E_LAUNCH_FILE")
+	_ = os.WriteFile(launchFile9, nil, 0o600)
+	played9 := make(chan error, 1)
+	go func() { // the desktop app: opens the link, the new session's hook arrives
+		var link string
+		for end := time.Now().Add(40 * time.Second); time.Now().Before(end); time.Sleep(50 * time.Millisecond) {
+			if b, _ := os.ReadFile(launchFile9); strings.Contains(string(b), "\n") {
+				link = strings.TrimSpace(string(b))
+				break
+			}
+		}
+		u, err := neturl.Parse(link)
+		if err != nil || u.Scheme != "claude" || u.Query().Get("folder") != proj {
+			played9 <- fmt.Errorf("launch link %q: %v", link, err)
+			return
+		}
+		_, err = hookEvent(homeBin, helperDir, map[string]any{"session_id": "cli-pt-started", "transcript_path": filepath.Join(dir, "none3.jsonl"),
+			"cwd": proj, "permission_mode": "default", "hook_event_name": "SessionStart", "source": "startup"})
+		played9 <- err
+	}()
+	so9, err := ag.call("claude_code_start", map[string]any{"rubi_agent": "main", "rubi_agent_code": agentCode, "cwd": proj, "task": "e2e: project trust start"})
+	if err != nil {
+		return fmt.Errorf("claude_code_start under the project trust: %w", err)
+	}
+	if err := <-played9; err != nil {
+		return err
+	}
+	if so9["status"] == "awaiting_approval" || so9["started"] != true || so9["session_id"] != "cli-pt-started" || so9["bound"] != true ||
+		!strings.Contains(fmt.Sprint(so9["approval"]), ptID) {
+		return fmt.Errorf("start under the project trust: %v", so9)
+	}
+	bo9, err := ag.call("claude_code_bind", map[string]any{"rubi_agent": "main", "rubi_agent_code": agentCode, "session_id": "local_e2e"})
+	if err != nil || bo9["status"] == "awaiting_approval" || bo9["bound"] != true {
+		return fmt.Errorf("bind under the project trust: %v %v", bo9, err)
+	}
+	rebound, err := eventFor("the claude_bound event of the second bind", "claude_bound", func(d map[string]any) bool {
+		return d["session_id"] == "cli-e2e" && d["bind_code"] != bindCode
+	})
+	if err != nil {
+		return err
+	}
+	bindCode9 := fmt.Sprint(rebound["bind_code"])
+	if _, err := ag.call("claude_code_send", map[string]any{"sister": sister, "bind_code": bindCode9, "text": "e2e: send needs no approval"}); err != nil {
+		return err
+	}
+	if b, _ := os.ReadFile(launchFile9); strings.Count(string(b), "\n") != 1 {
+		return fmt.Errorf("sessions launched: %q (exactly the one under the trust)", b)
+	}
+	_ = os.WriteFile(launchFile9, nil, 0o600) // case 7e reads it as its own
+	step("9d the Bot started a session in the project and bound to another one with no approval; send needs none")
+
+	// e. A restart of Rubi Home: the trust is in the plugin's state and holds.
+	_ = homeProc.Process.Signal(os.Interrupt)
+	_ = homeProc.Wait()
+	procs = slices.DeleteFunc(procs, func(c *exec.Cmd) bool { return c == homeProc })
+	if err := start("rubi-home-restarted2", []string{"RUBI_HOME_DIR=" + helperDir}, homeBin, "run"); err != nil {
+		return err
+	}
+	homeProc = procs[len(procs)-1]
+	if err := waitFor("a command under the trust after the restart", 180*time.Second, func() (bool, error) {
+		r := <-hookAs(homeBin, helperDir, "pt-b", ptSub, "go test ./...")
+		switch {
+		case r.Behavior == "allow":
+			return true, nil
+		case r.Behavior == "deny" && (strings.Contains(r.Message, "isn't connected") || strings.Contains(r.Message, "isn't running")):
+			time.Sleep(time.Second)
+			return false, nil
+		}
+		return false, fmt.Errorf("after the restart: %+v", r)
+	}); err != nil {
+		return err
+	}
+	if pts, err = trustList(); err != nil || len(pts) != 1 || pts[0].(map[string]any)["id"] != ptID {
+		return fmt.Errorf("the trust after the restart: %v %v", pts, err)
+	}
+	step("9e after a Rubi Home restart the trust still holds (%s)", ptID)
+	// Outside the project the Bot's start still asks (after the restart, and spaced out: Rubi allows 10 plugin
+	// approvals a minute).
+	outStart := filepath.Join(dir, "starts", "outside")
+	if po, err := ag.call("claude_code_start", map[string]any{"rubi_agent": "main", "rubi_agent_code": agentCode, "cwd": outStart, "task": "x"}); err != nil || po["status"] != "awaiting_approval" {
+		return fmt.Errorf("a start outside the project should ask: %v %v", po, err)
+	} else if oc, err := panel(fmt.Sprint(po["approval_url"])); err != nil {
+		return err
+	} else if _, err := oc.Deny(fmt.Sprint(po["approval_id"])); err != nil {
+		return err
+	}
+	step("9e a start outside the project still asks")
+
+	// f. Revoke: the next command asks.
+	if mo, err := ag.call("claude_code_mandates", map[string]any{"revoke": ptID}); err != nil || fmt.Sprint(mo["revoked"]) != "1" {
+		return fmt.Errorf("revoke %s: %v %v", ptID, mo, err)
+	}
+	if err := mustAsk("pt-b", ptSub, "go test ./... && echo after-revoke"); err != nil {
+		return err
+	}
+	if pts, err = trustList(); err != nil || len(pts) != 0 {
+		return fmt.Errorf("trusts after the revoke: %v %v", pts, err)
+	}
+	step("9f revoked: the next command asks again")
+
+	// g. The Bot asks for the trust itself: strong approval (a tap is refused), and it ends at its time. The
+	// rubie2e plugin build reads a short time from a file in the plugin's data directory.
+	var dataDir string
+	_ = filepath.WalkDir(rubiHome, func(p string, d os.DirEntry, err error) error {
+		if err == nil && d.IsDir() && d.Name() == "data" && filepath.Base(filepath.Dir(p)) == "claude-code" {
+			dataDir = p
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	if dataDir == "" {
+		return errors.New("the plugin's data directory wasn't found")
+	}
+	if err := os.WriteFile(filepath.Join(dataDir, "pt-ttl"), []byte("60s"), 0o600); err != nil {
+		return err
+	}
+	to9, err := ag.call("claude_code_trust_project", map[string]any{"rubi_agent": "main", "rubi_agent_code": agentCode, "bind_code": bindCode9})
+	if err != nil || to9["status"] != "awaiting_approval" {
+		return fmt.Errorf("claude_code_trust_project should ask: %v %v", to9, err)
+	}
+	tpc, err := panel(fmt.Sprint(to9["approval_url"]))
+	if err != nil {
+		return err
+	}
+	tinfo, err := tpc.ApprovalInfo(fmt.Sprint(to9["approval_id"]))
+	if err != nil {
+		return err
+	}
+	if tinfo.Approval.Kind != "claude-code.trust_project" || tinfo.Approval.Level != "strong" || !strings.Contains(string(tinfo.Approval.Preview), proj) ||
+		!strings.Contains(string(tinfo.Approval.Preview), `"branches":"citri/*"`) {
+		return fmt.Errorf("the trust should be a strong approval naming the root and branches: %+v", tinfo.Approval)
+	}
+	if _, err := tpc.ApproveWithPasskey(fmt.Sprint(to9["approval_id"]), "trust_project", passkey.sign(origin, 0x01)); err == nil {
+		return errors.New("a tap approved a project trust")
+	}
+	if pts, err = trustList(); err != nil || len(pts) != 0 {
+		return fmt.Errorf("trusted before the approval: %v %v", pts, err)
+	}
+	if res, err := tpc.ApproveWithPassword(fmt.Sprint(to9["approval_id"]), "trust_project", pw); err != nil || res["state"] != "executed" {
+		return fmt.Errorf("trust_project (Bot): %v %v", res, err)
+	}
+	if pts, err = trustList(); err != nil || len(pts) != 1 || pts[0].(map[string]any)["id"] == ptID {
+		return fmt.Errorf("the Bot's trust: %v %v", pts, err)
+	}
+	ends, err := time.Parse(time.RFC3339Nano, fmt.Sprint(pts[0].(map[string]any)["expires"]))
+	if err != nil {
+		return fmt.Errorf("the trust's end: %v", err)
+	}
+	if _, err := mustRun("pt-c", proj, "go test ./..."); err != nil {
+		return err
+	}
+	if time.Until(ends) < 3*time.Second {
+		return fmt.Errorf("the shortened trust ended too soon to be used (%s)", time.Until(ends))
+	}
+	time.Sleep(time.Until(ends) + 2*time.Second)
+	if err := mustAsk("pt-c", proj, "go test ./... && echo after-expiry"); err != nil {
+		return err
+	}
+	_ = os.Remove(filepath.Join(dataDir, "pt-ttl"))
+	step("9g the Bot's own request (strong; a tap refused) granted the trust; after its (shortened) time the next command asked")
+
+	// h. A normal trust again, left in place to check that Rubi locked beats it (Case 4). The restarted helper
+	// forgot which sessions its hooks had seen, so pt-a tells it again (until it does, no root, no offer).
+	if _, err := hookEvent(homeBin, helperDir, map[string]any{"session_id": "pt-a", "transcript_path": filepath.Join(dir, "none4.jsonl"),
+		"cwd": proj, "permission_mode": "default", "hook_event_name": "SessionStart", "source": "resume"}); err != nil {
+		return err
+	}
+	ch9, err = askAs("pt-a", proj, "make pt-again")
+	if err != nil {
+		return err
+	}
+	if id9, url9, err = approvalFor("make pt-again"); err != nil {
+		return err
+	}
+	if pc9, err = panel(url9); err != nil {
+		return err
+	}
+	if res, err := pc9.ApproveWithPassword(id9, "trust_project", pw); err != nil || res["state"] != "executed" {
+		return fmt.Errorf("trust_project again: %v %v", res, err)
+	}
+	<-ch9
+	if _, err := mustRun("pt-b", ptSub, "go test ./..."); err != nil {
+		return err
+	}
+	step("9h a new trust is granted and holds (it stays until Case 4 locks Rubi)")
+
 	// Case 7e: a Bot starts a session where none exists. The helper of this build (-tags rubie2e) can't open
 	// the desktop app: its launcher appends the claude:// link to a file, and this driver plays the new
 	// session's SessionStart hook, as the app would. The folder is allowed by claude_start_dirs.
@@ -1467,6 +1815,12 @@ func run(dir, rubiBin, homeBin, plugin string) (err error) {
 		return fmt.Errorf("locked, later: %+v", r)
 	}
 	step("4b still locked -> deny at once (%s)", r.Took)
+	r = <-hookAs(homeBin, helperDir, "pt-b", ptSub, "go test ./...")
+	report("locked+pt", r)
+	if r.Behavior != "deny" {
+		return fmt.Errorf("locked, with a project trust: %+v", r)
+	}
+	step("4c Rubi locked: a command under a live project trust is denied too (%s)", r.Took)
 
 	fmt.Println("\nHook outputs:")
 	for _, l := range results {
