@@ -1137,6 +1137,52 @@ func run(dir, rubiBin, homeBin, plugin string) (err error) {
 	}
 	step("7b the Bot got claude_message delivered and answered, and the reply; claude_code_status works")
 
+	// Case 7b2: the documented local path. A script runs `rubi-home claude-send` for the idle session (with
+	// its waiter attached): the waiter wakes it (exit 2, the text, framed as a local process), the Stop with
+	// an answer ends the turn, and --wait-reply prints that answer. The Bot hears nothing of it.
+	delete(stop, "last_assistant_message")
+	wch = waiter(homeBin, helperDir, stop)
+	time.Sleep(1500 * time.Millisecond) // let the waiter connect
+	sendCmd := exec.Command(homeBin, "claude-send", "--session", "cli-e2e", "--from", "Citri-script", "--wait-reply", "40")
+	sendCmd.Env = append(os.Environ(), "RUBI_HOME_DIR="+helperDir)
+	sendCmd.Stdin = strings.NewReader("e2e: local script asks for the status\n")
+	var sendOut, sendErr bytes.Buffer
+	sendCmd.Stdout, sendCmd.Stderr = &sendOut, &sendErr
+	if err := sendCmd.Start(); err != nil {
+		return err
+	}
+	sendDone := make(chan error, 1)
+	go func() { sendDone <- sendCmd.Wait() }()
+	select {
+	case w := <-wch:
+		if w.Code != 2 || !strings.Contains(w.Stderr, "e2e: local script asks for the status") ||
+			!strings.Contains(w.Stderr, "local process on this computer") || strings.Contains(w.Stderr, "sister") || strings.TrimSpace(w.Stdout) != "" {
+			return fmt.Errorf("the waiter should exit 2 with the local message on stderr: %+v", w)
+		}
+		step("7b2 rubi-home claude-send woke the idle session in %s: exit 2, the text, framed as a local process", w.Took.Round(100*time.Millisecond))
+	case <-time.After(15 * time.Second):
+		return fmt.Errorf("the waiter wasn't woken by claude-send (send stderr: %s)", sendErr.String())
+	}
+	stop["last_assistant_message"] = "Local answer: status is green."
+	if o, err := hookEvent(homeBin, helperDir, stop); err != nil || strings.Contains(o, "block") {
+		return fmt.Errorf("Stop after the local wake: %q %v", o, err)
+	}
+	select {
+	case err := <-sendDone:
+		if err != nil || strings.TrimSpace(sendOut.String()) != "Local answer: status is green." {
+			return fmt.Errorf("claude-send --wait-reply: %v stdout=%q stderr=%q", err, sendOut.String(), sendErr.String())
+		}
+	case <-time.After(30 * time.Second):
+		return fmt.Errorf("claude-send --wait-reply didn't return (stderr: %s)", sendErr.String())
+	}
+	savedWait := evWait
+	evWait = 4 * time.Second
+	if _, err := eventFor("a claude_reply that must not exist", "claude_reply", func(d map[string]any) bool { return strings.Contains(fmt.Sprint(d["text"]), "Local answer") }); err == nil {
+		return errors.New("a reply to a local sender reached the Bot")
+	}
+	evWait = savedWait
+	step("7b2 --wait-reply printed the answer (%q); the Bot got no reply for it", strings.TrimSpace(sendOut.String()))
+
 	// Case 7c: a message queued for a session with no waiter survives a restart of Rubi Home, and the next
 	// prompt delivers it.
 	delete(stop, "last_assistant_message")

@@ -242,6 +242,11 @@ waiter is attached (`waiter`) and what to expect (`delivery`).
 A Bot can't approve commands, and messages never grant permissions. You can unbind in the plugin's page.
 Messages are injected only through hooks; Rubi never resumes a session that is open in the app.
 
+A local script (not a Bot) can use the same waiter through Rubi Home's `rubi-home claude-send`, which queues
+a message for a session and prints its answer (see Rubi's `docs/design/rubi-home.md`). Its messages are framed
+as coming from a local process, not a Bot, and the answers to them stay in Rubi Home: this plugin ignores
+anything addressed to a local sender (`local:<name>`), so no Bot ever receives them.
+
 ### The sister tools inside Claude Code
 
 Claude Code gets four real tools from the `rubi-sisters` plugin (marketplace `rubi`, embedded in the
