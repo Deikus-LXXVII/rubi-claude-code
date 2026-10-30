@@ -16,6 +16,7 @@ func TestManagedSettingsExample(t *testing.T) {
 		Type, Command, OnFailure string
 		Args                     []string
 		Timeout                  int
+		AsyncRewake              bool
 	}
 	var s struct {
 		AllowManagedHooksOnly bool
@@ -60,13 +61,19 @@ func TestManagedSettingsExample(t *testing.T) {
 	// Code: a short timeout and no onFailure (rubi-home prints nothing when it can't reach the helper).
 	for _, ev := range []string{"SessionStart", "UserPromptSubmit", "Stop", "SessionEnd"} {
 		hs := s.Hooks[ev]
-		if len(hs) != 1 || len(hs[0].Hooks) != 1 {
+		if len(hs) != 1 || len(hs[0].Hooks) != 1+btoi(ev == "Stop") {
 			t.Fatalf("%s: %+v", ev, hs)
 		}
 		if h := hs[0].Hooks[0]; h.Command != "/usr/local/bin/rubi-home" || len(h.Args) != 1 || h.Args[0] != "claude-hook" ||
 			h.Timeout == 0 || h.Timeout > 15 || h.OnFailure != "" {
 			t.Fatalf("%s hook: %+v", ev, h)
 		}
+	}
+	// The second Stop hook is the waiter: it runs in the background (asyncRewake) and wakes an idle
+	// session when a message arrives, so its timeout is long; it never blocks Claude Code.
+	if h := s.Hooks["Stop"][0].Hooks[1]; h.Type != "command" || h.Command != "/usr/local/bin/rubi-home" ||
+		len(h.Args) != 2 || h.Args[0] != "claude-hook" || h.Args[1] != "--wait" || !h.AsyncRewake || h.Timeout != 3600 || h.OnFailure != "" {
+		t.Fatalf("Stop waiter hook: %+v", h)
 	}
 	if cc := s.Hooks["ConfigChange"]; len(cc) != 1 || len(cc[0].Hooks) != 1 {
 		t.Fatalf("ConfigChange: %+v", cc)
@@ -83,4 +90,11 @@ func TestManagedSettingsExample(t *testing.T) {
 			t.Errorf("deny rule %s is missing", rule)
 		}
 	}
+}
+
+func btoi(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }

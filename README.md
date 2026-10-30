@@ -116,6 +116,30 @@ them, it doesn't run Claude).
    `claude_ask` event, also from the project's sub-sessions. The Bot answers with `claude_code_send` and
    `reply_to_ask`.
 
+5. `claude_code_status` shows how the bound session stands (busy or idle, messages waiting, when a
+   message to it would be read). Each message also reports where it stands as a `claude_message` event
+   `{id, session_id, state, at}`, sent to the Bot that sent it: `delivered` (Claude has it), `answered`
+   (the answer went back as `claude_reply`), or `expired` (24 hours unread). `queued` is the `claude_code_send` result itself (`message_id`), so it isn't repeated as an
+   event. Every event may wake the Bot's agent, so there are only these few.
+
+### Waking an idle session
+
+Hooks fire only when Claude Code runs a turn, so a session waiting for you would read a message only
+when you next prompt it. The optional waiter hook fixes that: a second `Stop` hook,
+`rubi-home claude-hook --wait` with `asyncRewake: true` and `timeout: 3600`, runs in the background while
+the session is idle and stays connected to Rubi Home. When a message arrives it writes it to stderr and
+exits 2, which makes Claude Code wake the session with the message as a system reminder; Claude answers
+and the answer goes back to the Bot as usual. Typing a prompt, ending the session, a newer waiter for the
+same session or the hook's time limit (it gives up 30 seconds before the timeout) end the waiter without
+delivering anything, so nothing is delivered twice. It never blocks Claude Code: it runs in the
+background, prints nothing on stdout and every failure is exit 0. Rubi Home saves queued messages to
+`claude-queue.json` in its folder, so a restart keeps them (24 hours at most).
+
+The hook is in [`examples/managed-settings.json`](examples/managed-settings.json). The managed settings
+file is owned by root, so adding it needs an admin (`sudo`), and without it (or with an older Rubi Home)
+everything still works, only an idle session waits for your next prompt. `claude_code_send` says whether a
+waiter is attached (`waiter`) and what to expect (`delivery`).
+
 A Bot can't approve commands, and messages never grant permissions. You can unbind in the plugin's page.
 Messages are injected only through hooks; Rubi never resumes a session that is open in the app.
 
@@ -175,10 +199,24 @@ You need Rubi v0.12.0 or later with this plugin installed, and Claude Code v2.1.
      directory, the hook binary and Rubi Home's files;
    - a `ConfigChange` hook that keeps settings edits from applying to a running session;
    - `SessionStart`, `UserPromptSubmit`, `Stop` and `SessionEnd` hooks that bring Bots' messages in and
-     the answers out (10-second timeout, never blocking: when Rubi Home doesn't answer they do nothing).
+     the answers out (10-second timeout, never blocking: when Rubi Home doesn't answer they do nothing);
+   - a second `Stop` hook, `claude-hook --wait` (`asyncRewake: true`, 3600-second timeout), that wakes an
+     idle session when a Bot's message arrives (see [Waking an idle session](#waking-an-idle-session)).
+     Add it with `sudo` like the rest, then restart Claude Code.
 
 6. **Try it.** Restart Claude Code and ask it to run `rm -rf /tmp/rubi-test`. The Rubi approval link
    arrives through your Bot; approve it and the command runs. Lock Rubi and try again: it is denied.
+
+Check the waiter by hand (after adding the second `Stop` hook and restarting Claude Code):
+
+1. In the desktop app, let a session go idle (bound to a Bot).
+2. From the Bot, send it a message with `claude_code_send`; the result should say `waiter: true`.
+3. Within seconds the session should resume with the message as a system reminder and answer; the Bot
+   gets `claude_message` `delivered`, then the `claude_reply` and `answered`.
+4. Also check that typing a prompt in an idle session ends the waiter: the message is delivered once.
+
+Claude Code's documentation doesn't promise that a `Stop` hook may use `asyncRewake`, or say what happens
+to a running background hook when you send a new prompt, so this check is worth doing once.
 
 To turn it off, remove the hooks (or the file) from the managed settings. Without them, Claude Code
 asks in its own prompt again.

@@ -491,3 +491,113 @@ func TestSessionListAsksComputersAtOnce(t *testing.T) {
 		}
 	}
 }
+
+func TestStatusRouting(t *testing.T) {
+	f, s, _ := boundFixture(t)
+	ctx := context.Background()
+	at := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+	n := len(f.events)
+	s.route(ctx, f, mac, outMsg{ID: "msg_1", Kind: "status", SessionID: "cli-1", To: "citri", State: "delivered", At: at})
+	s.route(ctx, f, mac, outMsg{ID: "msg_2", Kind: "status", SessionID: "cli-1", To: "Mallory", State: "delivered", At: at}) // not the bound Bot
+	s.route(ctx, f, mac, outMsg{ID: "msg_3", Kind: "status", SessionID: "cli-3", To: "Citri", State: "queued", At: at})      // unbound session
+	s.route(ctx, f, mac, outMsg{ID: "msg_4", Kind: "mystery", SessionID: "cli-1", To: "Citri", State: "x", At: at})          // unknown kind
+	got := f.events[n:]
+	if len(got) != 1 || got[0]["_type"] != eventMessage || got[0]["_agent"] != "Citri" || got[0]["id"] != "msg_1" ||
+		got[0]["state"] != "delivered" || got[0]["session_id"] != "cli-1" || got[0]["at"] != "2026-10-30T12:00:00Z" {
+		t.Fatalf("status events: %+v", got)
+	}
+	// The sister is unbound: statuses for her go nowhere, quietly.
+	if _, err := s.st.unbind("Citri"); err != nil {
+		t.Fatal(err)
+	}
+	n = len(f.events)
+	s.route(ctx, f, mac, outMsg{ID: "msg_1", Kind: "status", SessionID: "cli-1", To: "Citri", State: "answered", At: at})
+	if len(f.events) != n {
+		t.Fatalf("status for an unbound sister was emitted: %+v", f.events[n:])
+	}
+}
+
+func TestStatusTool(t *testing.T) {
+	f, s, code := boundFixture(t)
+	ctx := context.Background()
+	now := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { return now }
+	set := func(state string, waiting int) {
+		f.mu.Lock()
+		f.sessions[0].State, f.sessions[0].Waiting, f.sessions[0].LastActivity = state, waiting, now.Add(-time.Hour)
+		f.mu.Unlock()
+	}
+	call := func() map[string]any {
+		t.Helper()
+		r, err := s.statusTool(ctx, f, statusIn{Sister: "Citri", BindCode: code, VerifiedAgent: "Citri"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r.(map[string]any)
+	}
+	set("busy", 2)
+	r := call()
+	if r["state"] != "busy" || r["waiting"] != 2 || r["eta"] != "at its next stop" || r["session_id"] != "cli-1" || r["device"] != mac.ID {
+		t.Fatalf("busy: %+v", r)
+	}
+	set("idle", 0)
+	r = call()
+	if r["waiter"] != false || r["state"] != "idle" || !strings.Contains(r["eta"].(string), "idle since") || r["last_activity"] != "2026-10-30T11:00:00Z" {
+		t.Fatalf("idle: %+v", r)
+	}
+	f.mu.Lock()
+	f.sessions[0].Waiter = true
+	f.mu.Unlock()
+	if r = call(); r["waiter"] != true || r["eta"] != "within seconds (a waiter is attached)" {
+		t.Fatalf("idle with a waiter: %+v", r)
+	}
+	if got := etaText(session{State: "idle"}, false); !strings.HasPrefix(got, "when the user next prompts it") {
+		t.Fatal(got)
+	}
+	set("ended", 0)
+	if _, err := s.statusTool(ctx, f, statusIn{Sister: "Citri", BindCode: code}); err == nil || !strings.Contains(err.Error(), "ended") {
+		t.Fatalf("ended: %v", err)
+	}
+	set("idle", 0)
+	for name, in := range map[string]statusIn{
+		"wrong code":   {Sister: "Citri", BindCode: "bc_wrong"},
+		"other Bot":    {Sister: "Citri", BindCode: code, VerifiedAgent: "Mallory"},
+		"unknown name": {Sister: "Nobody", BindCode: code},
+	} {
+		if _, err := s.statusTool(ctx, f, in); err == nil {
+			t.Errorf("%s: status went through", name)
+		}
+	}
+}
+
+func TestSendUsesWaiterFields(t *testing.T) {
+	f, s, code := boundFixture(t)
+	ctx := context.Background()
+	send := func() map[string]any {
+		t.Helper()
+		r, err := s.sendTool(ctx, f, sendIn{Sister: "Citri", BindCode: code, Text: "hi"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r.(map[string]any)
+	}
+	// Older Rubi Home: no new fields, the hint comes from the session list.
+	r := send()
+	if _, has := r["waiter"]; has || !strings.Contains(r["delivery"].(string), "next prompts it") {
+		t.Fatalf("old home: %+v", r)
+	}
+	f.sendExtra = map[string]any{"session_state": "idle", "waiter": true}
+	r = send()
+	if r["waiter"] != true || r["session_state"] != "idle" || !strings.Contains(r["delivery"].(string), "within seconds") {
+		t.Fatalf("waiter: %+v", r)
+	}
+	f.sendExtra = map[string]any{"session_state": "idle", "waiter": false}
+	if r = send(); r["waiter"] != false || !strings.Contains(r["delivery"].(string), "next prompts it") {
+		t.Fatalf("no waiter: %+v", r)
+	}
+	// The send result's state wins over the (older) session list.
+	f.sendExtra = map[string]any{"session_state": "busy", "waiter": false}
+	if r = send(); r["session_state"] != "busy" || !strings.Contains(r["delivery"].(string), "next stop") {
+		t.Fatalf("busy: %+v", r)
+	}
+}

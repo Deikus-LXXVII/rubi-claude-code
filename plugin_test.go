@@ -29,6 +29,7 @@ type fakeHost struct {
 	sessions  []session       // claude-sessions.list answers
 	listHang  bool            // claude-sessions.list never answers (until ctx ends)
 	hangOn    map[string]bool // claude-sessions.list never answers on these computers
+	sendExtra map[string]any  // merged into the claude-sessions.send answer (newer Rubi Home fields)
 	outs      []outMsg        // claude-sessions.next answers, one per call
 	ops       []string        // every op called
 	sent      []map[string]any
@@ -97,7 +98,13 @@ func (f *fakeHost) HomeCall(ctx context.Context, device, op string, args, out an
 		f.mu.Lock()
 		f.sent = append(f.sent, m)
 		f.mu.Unlock()
-		b, _ := json.Marshal(map[string]any{"queued": true, "id": "msg_1", "waiting": 1})
+		f.mu.Lock()
+		ans := map[string]any{"queued": true, "id": "msg_1", "waiting": 1}
+		for k, v := range f.sendExtra {
+			ans[k] = v
+		}
+		f.mu.Unlock()
+		b, _ := json.Marshal(ans)
 		return json.Unmarshal(b, out)
 	}
 	return errors.New("unexpected op " + op)
@@ -372,6 +379,12 @@ func TestManifest(t *testing.T) {
 	ev, ok := m.Event(eventNeeded)
 	if !ok || len(ev.Untrusted) == 0 {
 		t.Fatalf("event: %+v", ev)
+	}
+	// Rubi refuses an event the manifest doesn't declare.
+	for _, typ := range []string{eventBound, eventReply, eventAsk, eventMessage} {
+		if _, ok := m.Event(typ); !ok {
+			t.Errorf("event %s isn't declared in the manifest", typ)
+		}
 	}
 }
 

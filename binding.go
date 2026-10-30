@@ -24,8 +24,10 @@ const (
 	eventBound      = "claude_bound"
 	eventReply      = "claude_reply"
 	eventAsk        = "claude_ask"
+	eventMessage    = "claude_message"
 	maxSendText     = 4000
 	sendsPerHour    = 30
+	statusPerHour   = 120 // each claude_code_status lists the sessions on the computer
 	asksPerHour     = 10
 	askRemember     = 2 * time.Hour
 	bypassPermsNote = "This session runs with bypassPermissions: Claude Code doesn't ask before commands, so Rubi approvals and 2-hour trusts don't apply to it. Its messages, replies and asks still work."
@@ -48,6 +50,7 @@ type session struct {
 	State          string    `json:"state"`
 	LastActivity   time.Time `json:"last_activity,omitzero"`
 	Waiting        int       `json:"waiting,omitempty"`
+	Waiter         bool      `json:"waiter,omitempty"` // a waiter hook is attached (newer Rubi Home)
 }
 
 // outMsg is what a session says (home.ClaudeOut).
@@ -59,6 +62,7 @@ type outMsg struct {
 	To        string    `json:"to,omitempty"`
 	InReplyTo []string  `json:"in_reply_to,omitempty"`
 	AskKind   string    `json:"ask_kind,omitempty"`
+	State     string    `json:"state,omitempty"` // kind "status": queued, delivered, answered or expired
 	Text      string    `json:"text"`
 	Truncated bool      `json:"truncated,omitempty"`
 	At        time.Time `json:"at"`
@@ -407,13 +411,23 @@ func (s *sisters) sendTool(ctx context.Context, h sisterHost, in sendIn) (any, e
 		Queued  bool   `json:"queued"`
 		ID      string `json:"id"`
 		Waiting int    `json:"waiting"`
+		// Newer Rubi Home says how the session stands and whether a waiter is attached; an older one
+		// leaves both out and the hint comes from the session list.
+		SessionState string `json:"session_state"`
+		Waiter       *bool  `json:"waiter"`
 	}
 	if err := h.HomeCall(ctx, b.Device, "claude-sessions.send", map[string]any{"session_id": target, "from": b.Sister, "text": text}, &res); err != nil {
 		return nil, err
 	}
 	h.Audit("message_sent", map[string]any{"sister": b.Sister, "session": target, "message": res.ID, "chars": len([]rune(text))})
+	if res.SessionState != "" {
+		sess.State = res.SessionState
+	}
 	out := map[string]any{"queued": res.Queued, "message_id": res.ID, "waiting": res.Waiting,
-		"session_state": sess.State, "delivery": deliveryHint(sess, s.now())}
+		"session_state": sess.State, "delivery": deliveryHint(sess, res.Waiter, s.now())}
+	if res.Waiter != nil {
+		out["waiter"] = *res.Waiter
+	}
 	if !sess.LastActivity.IsZero() {
 		out["last_activity"] = sess.LastActivity.UTC().Format(time.RFC3339)
 	}
@@ -421,9 +435,10 @@ func (s *sisters) sendTool(ctx context.Context, h sisterHost, in sendIn) (any, e
 }
 
 // deliveryHint says when Claude is likely to read a queued message, from the session's state: a busy
-// session reads it at its next stop, an idle one only when the user prompts it again.
-func deliveryHint(sess session, now time.Time) string {
-	const answer = " Its answer comes as a claude_reply event."
+// session reads it at its next stop, an idle one with a waiter attached is woken within seconds, an idle
+// one without only when the user prompts it again. waiter is nil when Rubi Home doesn't say.
+func deliveryHint(sess session, waiter *bool, now time.Time) string {
+	const answer = " Its answer comes as a claude_reply event; delivery states come as claude_message events."
 	switch sess.State {
 	case "busy":
 		return "The session is working: Claude reads it at its next stop, usually within minutes." + answer
@@ -432,9 +447,65 @@ func deliveryHint(sess session, now time.Time) string {
 		if !sess.LastActivity.IsZero() {
 			since = fmt.Sprintf(" (idle for %s)", now.Sub(sess.LastActivity).Round(time.Minute))
 		}
+		if waiter != nil && *waiter {
+			return "The session is idle" + since + " with a waiter attached: Claude is woken within seconds." + answer
+		}
 		return "The session is idle" + since + ": Claude reads it only when the user next prompts it, which may be hours. Don't wait on it." + answer
 	}
 	return "Claude reads it when the session next stops or gets a prompt; Rubi doesn't know when that will be." + answer
+}
+
+// etaText is deliveryHint's short form for claude_code_status.
+func etaText(sess session, waiter bool) string {
+	switch sess.State {
+	case "busy":
+		return "at its next stop"
+	case "idle":
+		if waiter {
+			return "within seconds (a waiter is attached)"
+		}
+		since := ""
+		if !sess.LastActivity.IsZero() {
+			since = " (idle since " + sess.LastActivity.Local().Format("15:04") + ")"
+		}
+		return "when the user next prompts it" + since
+	}
+	return "unknown: Rubi hasn't seen this session's hooks"
+}
+
+type statusIn struct {
+	Sister        string `json:"sister"`
+	BindCode      string `json:"bind_code"`
+	VerifiedAgent string `json:"rubi_verified_agent,omitempty" jsonschema:"set by Rubi; don't pass it"`
+}
+
+// statusTool says how the bound session stands and when a message to it would be read.
+func (s *sisters) statusTool(ctx context.Context, h sisterHost, in statusIn) (any, error) {
+	if err := notOtherBot(in.Sister, in.VerifiedAgent); err != nil {
+		return nil, err
+	}
+	b, ok := s.st.bindingOf(in.Sister, in.BindCode)
+	if !ok {
+		return nil, errors.New("not bound: bind to a session first (claude_code_bind), then pass the bind_code you got")
+	}
+	if !s.allow("status|"+b.Sister, statusPerHour) {
+		return nil, fmt.Errorf("at most %d status checks an hour; the claude_message events say when a message is delivered and answered", statusPerHour)
+	}
+	sess, err := s.current(ctx, h, b)
+	if err != nil {
+		return nil, err
+	}
+	if sess.State == "ended" {
+		return nil, errors.New("that Claude Code session has ended; bind to a live one (claude_code_sessions)")
+	}
+	// An older Rubi Home leaves the waiter flag out of the list, which reads as no waiter.
+	waiter := sess.Waiter
+	out := map[string]any{"session_id": sess.SessionID, "device": b.Device, "state": sess.State,
+		"waiting": sess.Waiting, "waiter": waiter, "eta": etaText(sess, waiter)}
+	if !sess.LastActivity.IsZero() {
+		out["last_activity"] = sess.LastActivity.UTC().Format(time.RFC3339)
+	}
+	return out, nil
 }
 
 // ---- what sessions say ----
@@ -517,11 +588,23 @@ func (s *sisters) route(ctx context.Context, h sisterHost, d rubiplugin.HomeDevi
 			}
 		}
 	}
+	if target == nil && o.Kind == "status" {
+		return // the sender isn't bound to that session any more: nobody to tell
+	}
 	if target == nil {
 		h.Logf("%s: %s from unbound session %s dropped", d.Name, o.Kind, o.SessionID)
 		return
 	}
 	switch o.Kind {
+	case "status":
+		// "queued" is skipped: the send result already said so, and every event may wake the Bot's agent.
+		if !sameBot(o.To, target.Sister) || o.ID == "" || o.State == "" || o.State == "queued" {
+			return
+		}
+		if _, err := h.EmitTo(target.Sister, eventMessage, map[string]any{"id": o.ID, "session_id": o.SessionID,
+			"state": o.State, "at": o.At.UTC().Format(time.RFC3339)}); err != nil {
+			h.Logf("message state to %s: %v", target.Sister, err)
+		}
 	case "reply":
 		if !sameBot(o.To, target.Sister) {
 			h.Logf("%s: reply for %s from a session bound to %s dropped", d.Name, o.To, target.Sister)

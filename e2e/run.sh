@@ -31,6 +31,7 @@ unshare -rn bash -c 'ip link set lo up && exec "$1/e2e" run "$1" "$1/rubi" "$1/r
 if [ $rc != 0 ]; then
   echo "--- daemon.log (tail)"; tail -40 "$WORK/daemon.log" 2>/dev/null || true
   echo "--- rubi-home.log (tail)"; tail -40 "$WORK/rubi-home.log" 2>/dev/null || true
+  echo "--- rubi-home-restarted.log (tail)"; tail -40 "$WORK/rubi-home-restarted.log" 2>/dev/null || true
   echo "kept $WORK for inspection"
   exit $rc
 fi

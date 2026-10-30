@@ -56,6 +56,7 @@ func manifest() rubiplugin.Manifest {
 			{Type: eventNeeded, Untrusted: []string{"command", "directory", "claude_says", "computer"}},
 			{Type: eventBound, Untrusted: []string{"title", "directory", "project"}},
 			{Type: eventReply, Untrusted: []string{"text", "computer"}},
+			{Type: eventMessage},
 			{Type: eventAsk, Untrusted: []string{"text", "kind", "title", "directory", "computer"}},
 		},
 		Panel: "view",
@@ -114,8 +115,12 @@ func main() {
 		func(ctx context.Context, h *rubiplugin.Host, in unbindIn) (any, error) {
 			return sis.unbindTool(ctx, h, in)
 		})
-	rubiplugin.AddTool(p, "claude_code_send", "Send a short message (at most 4000 characters) to the Claude Code session you are bound to; Claude reads it at its next stop or prompt and its answer comes as a claude_reply event. For findings, answers to its claude_ask and small asks, not bulky tasks.",
+	rubiplugin.AddTool(p, "claude_code_send", "Send a short message (at most 4000 characters) to the Claude Code session you are bound to; Claude reads it at its next stop or prompt (an idle session with a waiter hook is woken within seconds) and its answer comes as a claude_reply event; its delivery states come as claude_message events. For findings, answers to its claude_ask and small asks, not bulky tasks.",
 		func(ctx context.Context, h *rubiplugin.Host, in sendIn) (any, error) { return sis.sendTool(ctx, h, in) })
+	rubiplugin.AddTool(p, "claude_code_status", "How the Claude Code session you are bound to stands (busy, idle) and when a message to it would be read. Messages' own states (delivered, answered, expired) arrive as claude_message events.",
+		func(ctx context.Context, h *rubiplugin.Host, in statusIn) (any, error) {
+			return sis.statusTool(ctx, h, in)
+		})
 	rubiplugin.AddTool(p, "claude_code_mandates", "List the 2-hour trusts the user gave Claude Code sessions (what Rubi allows by itself), or revoke one (revoke: its id, or \"all\"). Revoking needs no approval.",
 		func(_ context.Context, h *rubiplugin.Host, in mandatesIn) (any, error) {
 			return sis.mandatesTool(h, in)

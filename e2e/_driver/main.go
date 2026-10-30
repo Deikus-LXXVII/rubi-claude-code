@@ -35,6 +35,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -349,6 +350,36 @@ func hookEvent(bin, helperDir string, in map[string]any) (string, error) {
 	return strings.TrimSpace(string(out)), err
 }
 
+type waitResult struct {
+	Code           int
+	Stdout, Stderr string
+	Took           time.Duration
+}
+
+// waiter runs `rubi-home claude-hook --wait` the way Claude Code runs an asyncRewake Stop hook: in the
+// background, with the Stop input on stdin. Exit 2 with the message on stderr wakes the session.
+func waiter(bin, helperDir string, in map[string]any) <-chan waitResult {
+	out := make(chan waitResult, 1)
+	b, _ := json.Marshal(in)
+	go func() {
+		start := time.Now()
+		cmd := exec.Command(bin, "claude-hook", "--wait")
+		cmd.Env = append(os.Environ(), "RUBI_HOME_DIR="+helperDir)
+		cmd.Stdin = bytes.NewReader(b)
+		var so, se bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &so, &se
+		err := cmd.Run()
+		code := 0
+		if ee, ok := err.(*exec.ExitError); ok {
+			code = ee.ExitCode()
+		} else if err != nil {
+			code = -1
+		}
+		out <- waitResult{code, so.String(), se.String(), time.Since(start)}
+	}()
+	return out
+}
+
 func run(dir, rubiBin, homeBin, plugin string) (err error) {
 	for _, d := range []string{dir} {
 		if !strings.HasPrefix(filepath.Clean(d), os.TempDir()) {
@@ -384,7 +415,7 @@ func run(dir, rubiBin, homeBin, plugin string) (err error) {
 		for _, p := range procs {
 			_ = p.Wait()
 		}
-		for _, log := range []string{"daemon.log", "rubi-home.log"} {
+		for _, log := range []string{"daemon.log", "rubi-home.log", "rubi-home-restarted.log"} {
 			b, _ := os.ReadFile(filepath.Join(dir, log))
 			if bytes.Contains(b, []byte("DATA RACE")) || bytes.Contains(b, []byte("panic:")) {
 				fmt.Printf("%s:\n%s\n", log, b)
@@ -431,6 +462,7 @@ func run(dir, rubiBin, homeBin, plugin string) (err error) {
 	if err := start("rubi-home", []string{"RUBI_HOME_DIR=" + helperDir}, homeBin, "run"); err != nil {
 		return err
 	}
+	homeProc := procs[len(procs)-1]
 	if err := waitFor("the helper's socket", 10*time.Second, func() (bool, error) {
 		_, err := os.Stat(home.ClaudeSocketPath(helperDir))
 		return err == nil, nil
@@ -781,9 +813,10 @@ func run(dir, rubiBin, homeBin, plugin string) (err error) {
 	step("6 quick-tap on a non-safe command -> rejected (%q), request stayed pending, then deny", err6.Error())
 
 	// The Bot reads its events with the code from its webhook.
+	evWait := 30 * time.Second
 	eventFor := func(what, typ string, match func(d map[string]any) bool) (map[string]any, error) {
 		var found map[string]any
-		err := waitFor(what, 30*time.Second, func() (bool, error) {
+		err := waitFor(what, evWait, func() (bool, error) {
 			wh.mu.Lock()
 			code, name := wh.code, wh.agent
 			wh.mu.Unlock()
@@ -958,6 +991,105 @@ func run(dir, rubiBin, homeBin, plugin string) (err error) {
 		return err
 	}
 	step("7 in bypassPermissions too, UserPromptSubmit brings the message in and Stop sends the answer back")
+
+	// Case 7b: the session is idle (its last Stop is played) and a waiter hook is attached, as Claude
+	// Code's background Stop hook would be. A message wakes it within seconds, the Bot is told it was
+	// delivered, and the answer at the next Stop comes back with "answered".
+	stop["permission_mode"], stop["stop_hook_active"] = "default", false
+	delete(stop, "last_assistant_message")
+	wch := waiter(homeBin, helperDir, stop)
+	time.Sleep(1500 * time.Millisecond) // let the waiter connect
+	sres, err := ag.call("claude_code_send", map[string]any{"sister": sister, "bind_code": bindCode, "text": "e2e: wake up, audit x.go"})
+	if err != nil {
+		return err
+	}
+	if sres["waiter"] != true || sres["session_state"] != "idle" || !strings.Contains(fmt.Sprint(sres["delivery"]), "within seconds") {
+		return fmt.Errorf("send to an idle session with a waiter: %v", sres)
+	}
+	wakeID := fmt.Sprint(sres["message_id"])
+	select {
+	case w := <-wch:
+		if w.Code != 2 || !strings.Contains(w.Stderr, "e2e: wake up, audit x.go") || strings.TrimSpace(w.Stdout) != "" {
+			return fmt.Errorf("the waiter should exit 2 with the message on stderr: %+v", w)
+		}
+		step("7b an idle session's waiter woke in %s: exit 2, the message on stderr", w.Took.Round(100*time.Millisecond))
+	case <-time.After(10 * time.Second):
+		return errors.New("the waiter wasn't woken by a message to an idle session")
+	}
+	stateOf := func(id, state string) error {
+		_, err := eventFor("claude_message "+state+" for "+id, "claude_message", func(d map[string]any) bool { return d["id"] == id && d["state"] == state })
+		return err
+	}
+	for _, st := range []string{"delivered"} {
+		if err := stateOf(wakeID, st); err != nil {
+			return err
+		}
+	}
+	stat, err := ag.call("claude_code_status", map[string]any{"sister": sister, "bind_code": bindCode})
+	if err != nil || stat["session_id"] != "cli-e2e" || stat["eta"] == nil || stat["waiter"] == nil {
+		return fmt.Errorf("claude_code_status: %v %v", stat, err)
+	}
+	if _, err := ag.call("claude_code_status", map[string]any{"sister": sister, "bind_code": "bc_wrong"}); err == nil {
+		return errors.New("claude_code_status with a wrong bind code went through")
+	}
+	stop["last_assistant_message"] = "Woken: audit of x.go done, all clean."
+	if o, err := hookEvent(homeBin, helperDir, stop); err != nil || strings.Contains(o, "block") {
+		return fmt.Errorf("Stop after the wake: %q %v", o, err)
+	}
+	if _, err := eventFor("the claude_reply to the woken session", "claude_reply", func(d map[string]any) bool { return strings.Contains(fmt.Sprint(d["text"]), "Woken: audit") }); err != nil {
+		return err
+	}
+	if err := stateOf(wakeID, "answered"); err != nil {
+		return err
+	}
+	step("7b the Bot got claude_message delivered and answered, and the reply; claude_code_status works")
+
+	// Case 7c: a message queued for a session with no waiter survives a restart of Rubi Home, and the next
+	// prompt delivers it.
+	delete(stop, "last_assistant_message")
+	sres, err = ag.call("claude_code_send", map[string]any{"sister": sister, "bind_code": bindCode, "text": "e2e: survive the restart"})
+	if err != nil {
+		return err
+	}
+	if sres["waiter"] != false {
+		return fmt.Errorf("no waiter is attached, yet: %v", sres)
+	}
+	keepID := fmt.Sprint(sres["message_id"])
+	_ = homeProc.Process.Signal(os.Interrupt)
+	_ = homeProc.Wait()
+	procs = slices.DeleteFunc(procs, func(c *exec.Cmd) bool { return c == homeProc })
+	if fi, err := os.Stat(filepath.Join(helperDir, "claude-queue.json")); err != nil || fi.Mode().Perm() != 0o600 {
+		return fmt.Errorf("the queue wasn't saved on stop: %v %v", fi, err)
+	}
+	if err := start("rubi-home-restarted", []string{"RUBI_HOME_DIR=" + helperDir}, homeBin, "run"); err != nil {
+		return err
+	}
+	ups = map[string]any{"session_id": "cli-e2e", "transcript_path": filepath.Join(dir, "none.jsonl"), "cwd": proj,
+		"permission_mode": "default", "hook_event_name": "UserPromptSubmit", "prompt": "back again"}
+	if err := waitFor("the queued message after the restart", 20*time.Second, func() (bool, error) {
+		o, err := hookEvent(homeBin, helperDir, ups)
+		return err == nil && strings.Contains(o, "e2e: survive the restart"), nil
+	}); err != nil {
+		return err
+	}
+	// The plugin's poll of the restarted helper recovers with its own backoff: allow for it.
+	evWait = 120 * time.Second
+	restartAt := time.Now()
+	stop["last_assistant_message"] = "Restart survived."
+	if o, err := hookEvent(homeBin, helperDir, stop); err != nil || strings.Contains(o, "block") {
+		return fmt.Errorf("Stop after the restart: %q %v", o, err)
+	}
+	if _, err := eventFor("the claude_reply after the restart", "claude_reply", func(d map[string]any) bool { return d["text"] == "Restart survived." }); err != nil {
+		return err
+	}
+	for _, st := range []string{"delivered", "answered"} {
+		if err := stateOf(keepID, st); err != nil {
+			return err
+		}
+	}
+	evWait = 30 * time.Second
+	fmt.Printf("  (the Bot heard back %s after the stop)\n", time.Since(restartAt).Round(time.Second))
+	step("7c a message queued before a Rubi Home restart was delivered at the next prompt, answered, and the Bot told")
 
 	// Case 8: "trust this session for 2 hours": the next plain commands are allowed without asking;
 	// a push still asks.
