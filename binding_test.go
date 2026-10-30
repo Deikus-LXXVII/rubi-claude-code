@@ -418,3 +418,41 @@ func TestSisterNameIgnoresCase(t *testing.T) {
 		t.Fatalf("unbind by another case: %v %+v", err, s.st.bindings())
 	}
 }
+
+// bindAs binds bot to a session through the approval, as the user would approve it.
+func bindAs(t *testing.T, f *fakeHost, s *sisters, bot, sessionID string) {
+	t.Helper()
+	if _, err := s.bindTool(context.Background(), f, bindIn{VerifiedAgent: bot, SessionID: sessionID}); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(f.submits[len(f.submits)-1].Payload)
+	var tk bindTicket
+	_ = json.Unmarshal(raw, &tk)
+	if _, err := s.executeBind(f, tk); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestAskFromUnboundSessionPicksOneBinding: an ask from an unbound session of a project with several
+// bound sessions goes to the Bot of its parent session, else to the Bot of the main session, not to
+// whichever binding happens to be last.
+func TestAskFromUnboundSessionPicksOneBinding(t *testing.T) {
+	f, s, _ := boundFixture(t) // Citri: the main session local_a
+	ctx := context.Background()
+	later := time.Now().Add(time.Hour)
+	s.now = func() time.Time { return later }
+	bindAs(t, f, s, "Vega", "local_b") // Vega: the sub-session, bound later
+	orphan := session{SessionID: "cli-5", Title: "loose", Cwd: "/Users/v/rubi/tmp", RepoKey: "github.com/v/rubi", Role: "sub", Source: "transcript", State: "busy"}
+	child := session{SessionID: "cli-6", Title: "child of sub", Cwd: "/Users/v/rubi/.claude/worktrees/y", RepoKey: "github.com/v/rubi", Role: "sub", Parent: "local_b", Source: "transcript", State: "busy"}
+	f.mu.Lock()
+	f.sessions = append(f.sessions, orphan, child)
+	f.mu.Unlock()
+
+	n := len(f.events)
+	s.route(ctx, f, mac, outMsg{ID: "a1", Kind: "ask", SessionID: "cli-5", AskKind: "research", Text: "q1"})
+	s.route(ctx, f, mac, outMsg{ID: "a2", Kind: "ask", SessionID: "cli-6", AskKind: "research", Text: "q2"})
+	got := f.events[n:]
+	if len(got) != 2 || got[0]["_agent"] != "Citri" || got[1]["_agent"] != "Vega" {
+		t.Fatalf("asks went to: %+v", got)
+	}
+}

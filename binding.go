@@ -431,6 +431,44 @@ func deliveryHint(sess session, now time.Time) string {
 
 // ---- what sessions say ----
 
+// askBinding picks which of the project's bindings gets an ask from an unbound session: the one bound
+// to the asking session's parent, else one bound to a main session, else the oldest.
+func askBinding(ctx context.Context, h sisterHost, device string, asker session, cands []binding) binding {
+	if len(cands) == 1 {
+		return cands[0]
+	}
+	role := map[string]string{}
+	if all, err := listSessions(ctx, h, "", true); err == nil {
+		for _, ds := range all {
+			if ds.device.ID != device {
+				continue
+			}
+			for _, x := range ds.list {
+				role[x.SessionID] = x.Role
+				if x.AppSessionID != "" {
+					role[x.AppSessionID] = x.Role
+				}
+			}
+		}
+	}
+	score := func(b binding) int {
+		if asker.Parent != "" && (b.AppSessionID == asker.Parent || b.SessionID == asker.Parent) {
+			return 2
+		}
+		if role[b.SessionID] == "main" || b.AppSessionID != "" && role[b.AppSessionID] == "main" {
+			return 1
+		}
+		return 0
+	}
+	best := cands[0]
+	for _, b := range cands[1:] {
+		if sb, sbest := score(b), score(best); sb > sbest || sb == sbest && b.Since.Before(best.Since) {
+			best = b
+		}
+	}
+	return best
+}
+
 // route sends a session's reply or ask to the Bot bound to it (or, for an ask from a sub-session, to
 // the Bot bound to a session of the same project). Nothing bound: nothing goes out.
 func (s *sisters) route(ctx context.Context, h sisterHost, d rubiplugin.HomeDevice, o outMsg) {
@@ -447,6 +485,7 @@ func (s *sisters) route(ctx context.Context, h sisterHost, d rubiplugin.HomeDevi
 		_, found, err := findSession(ctx, h, d.ID, o.SessionID)
 		if err == nil {
 			sess = found
+			var sameProject []binding
 			for _, b := range s.st.bindings() {
 				if b.Device != d.ID {
 					continue
@@ -458,8 +497,14 @@ func (s *sisters) route(ctx context.Context, h sisterHost, d rubiplugin.HomeDevi
 					break
 				}
 				if o.Kind == "ask" && found.RepoKey != "" && b.RepoKey == found.RepoKey {
-					b := b
-					target = &b
+					sameProject = append(sameProject, b)
+				}
+			}
+			if target == nil && len(sameProject) > 0 {
+				b := askBinding(ctx, h, d.ID, found, sameProject)
+				target = &b
+				if len(sameProject) > 1 {
+					h.Logf("%s: ask from %s matches %d bindings of %s; it goes to %s", d.Name, found.SessionID, len(sameProject), found.RepoKey, b.Sister)
 				}
 			}
 		}
