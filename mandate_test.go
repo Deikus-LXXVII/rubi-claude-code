@@ -197,3 +197,98 @@ func TestMandateNeverAllowsPushRandom(t *testing.T) {
 		}
 	}
 }
+
+// TestMandateWritesAndRunsOnlyInside: the escapes the 2026-10-30 audit found (each was allowed by
+// v0.2.1) now ask, and the everyday in-project form of the same commands is still allowed.
+func TestMandateWritesAndRunsOnlyInside(t *testing.T) {
+	allowed := []string{
+		"sort -u notes.txt",
+		"sort -o sorted.txt notes.txt",
+		"sort -k2 -t, data.csv > sorted.csv",
+		"uniq -c words.txt",
+		"uniq words.txt out/uniq.txt",
+		"xxd bin.dat | head",
+		"xxd -r dump.hex out.bin",
+		"tree -L 2",
+		"tree -o tree.txt",
+		"go build -o bin/app ./cmd/app",
+		"go test -coverprofile=cover.out ./...",
+		"go test -run 'TestA/sub' -count=1 ./...",
+		"go env GOPATH",
+		"go clean -testcache",
+		"find . -name '*.go' -print0",
+		"git worktree add wt/feat -b feat",
+		"git grep -n foo",
+		"make test V=1",
+		"make -C sub build",
+		"cargo build",
+		"cargo test --target-dir target/ci",
+		"npm run build",
+		"pytest -q tests --basetemp=tmp/pytest",
+		"cp -t build a.txt b.txt",
+		"echo x >> notes.md",
+		"cat .git/config",
+		"cd internal && go test ./...",
+	}
+	for _, c := range allowed {
+		if ok, why := mandateAllows(c, root, root); !ok {
+			t.Errorf("%q: refused (%s), want allowed", c, why)
+		}
+	}
+	refused := []string{
+		// writes outside the directory
+		"sort -o /Users/v/.zshrc notes.txt",
+		"sort --output=/tmp/x notes.txt",
+		"sort -uo /tmp/x notes.txt",
+		"sort -T /tmp notes.txt",
+		"uniq notes.txt /Users/v/.zprofile",
+		"uniq -f 1 notes.txt /tmp/out",
+		"xxd -r dump.hex /Users/v/bin/tool",
+		"xxd in.bin ../out.hex",
+		"tree -o /tmp/out.txt",
+		"go build -o /usr/local/bin/rubi-home ./cmd/x",
+		"go build -o=../bin/x .",
+		"go test -coverprofile=/tmp/c.out ./...",
+		"go test -cpuprofile /tmp/cpu.out ./...",
+		"find . -fprint0 /Users/v/x",
+		"git worktree add /tmp/elsewhere",
+		"git worktree add ../sibling -b x",
+		"git worktree move wt /tmp/wt",
+		"cargo build --target-dir /tmp/t",
+		"npm run build --prefix ../other",
+		"pytest --basetemp=/Users/v/Documents",
+		"pytest --cov-report=html:/tmp/cov",
+		"pytest -o cache_dir=/tmp/c",
+		"cp --target-directory=/tmp a.txt",
+		"cp -t/tmp a.txt",
+		"go clean -modcache",
+		"go env -w GOFLAGS=-mod=mod",
+		// git's own files: a hook or config there runs at the next git command
+		"tee .git/hooks/pre-commit",
+		"chmod 755 .git/hooks/pre-commit",
+		"echo x > .git/hooks/pre-commit",
+		"cp evil .git/hooks/post-checkout",
+		"echo '[core]' >> .git/config",
+		"go build -o .git/hooks/pre-commit ./cmd/x",
+		// options that run another program or text
+		"git grep --open-files-in-pager=vim foo",
+		"git grep -Ovim foo",
+		"git grep -O foo",
+		"go test -exec=echo ./...",
+		"go run -toolexec=strace .",
+		"cargo build --config 'target.x.runner=zsh'",
+		"cargo build -Zunstable-options",
+		"npm test --script-shell=zsh",
+		"make --eval='all: ; ls'",
+		"make -E 'all: ; ls'",
+		"make CC='cc; ls'",
+		"make SHELL=zsh",
+		"sort --compress-program=gzip notes.txt",
+		"rg --hostname-bin=x foo",
+	}
+	for _, c := range refused {
+		if ok, _ := mandateAllows(c, root, root); ok {
+			t.Errorf("%q: allowed, want refused", c)
+		}
+	}
+}

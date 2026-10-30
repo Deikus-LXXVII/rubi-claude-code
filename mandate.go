@@ -9,8 +9,10 @@ package main
 //
 // Some things always ask, whatever the mandate: pushing or any git command not on the list, --force,
 // sudo and other ways to run a command as someone else or through a shell (eval, sh -c, xargs,
-// substitutions, backticks), the network (curl, ssh, installs, publishing), writing or deleting outside
-// the session's directory, and paths that hold credentials. The check reads only the command line:
+// substitutions, backticks), options that name another program to run (git grep -O, go -exec, make
+// --eval), the network (curl, ssh, installs, publishing), writing or deleting outside the session's
+// directory or into git's own files (a hook there runs at the next commit), and paths that hold
+// credentials. The check reads only the command line:
 // a build, test or script it runs (make, go test, npm run) can do anything you can, so a mandate trusts
 // the project's own code.
 
@@ -270,8 +272,10 @@ func checkSegment(sg segment, root, dir string) (string, string) {
 		if bad := secretPath(rd.target.text); bad != "" {
 			return dir, "touches a credential path (" + bad + ")"
 		}
-		if rd.op != "<" && !devNull(rd.target.text) && !inside(root, dir, rd.target) {
-			return dir, "writes outside the trusted directory (" + rd.target.text + ")"
+		if rd.op != "<" && !devNull(rd.target.text) {
+			if why := writeCheck(root, dir, rd.target); why != "" {
+				return dir, why
+			}
 		}
 	}
 	// NAME=value in front of a command.
@@ -355,45 +359,56 @@ type argRule func(args []word, root, dir string) string
 // programs on the mandate's list, with what each may do.
 var programs = map[string]argRule{
 	// read-only and harmless
-	"ls": noRule, "cat": noRule, "head": noRule, "tail": noRule, "wc": noRule, "grep": noRule, "sort": noRule,
-	"uniq": noRule, "diff": noRule, "cmp": noRule, "jq": noRule, "echo": noRule, "printf": noRule, "pwd": noRule,
+	"ls": noRule, "cat": noRule, "head": noRule, "tail": noRule, "wc": noRule, "grep": noRule,
+	"diff": noRule, "cmp": noRule, "jq": noRule, "echo": noRule, "printf": noRule, "pwd": noRule,
 	"which": noRule, "file": noRule, "stat": noRule, "du": noRule, "date": noRule, "true": noRule, "false": noRule,
 	"test": noRule, "basename": noRule, "dirname": noRule, "realpath": noRule, "readlink": noRule, "tr": noRule,
-	"cut": noRule, "shasum": noRule, "sha256sum": noRule, "md5": noRule, "xxd": noRule, "tree": noRule,
-	"rg":   forbidOpts("--pre", "--pre-glob"),
-	"find": forbidOpts("-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprintf", "-fls"),
+	"cut": noRule, "shasum": noRule, "sha256sum": noRule, "md5": noRule,
+	// read, but an option or operand names a file they write
+	"sort": sortRule, "uniq": outputOperand("-f", "-s", "-w"), "xxd": outputOperand("-c", "-cols", "-g", "-groupsize", "-l", "-len", "-o", "-offset", "-s", "-seek", "-n", "-name"),
+	"tree": treeRule,
+	"rg":   forbidOpts("--pre", "--pre-glob", "--hostname-bin"),
+	"find": forbidOpts("-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprint0", "-fprintf", "-fls"),
 	// writing: every path inside the directory
 	"mkdir": pathsInside, "touch": pathsInside, "cp": pathsInside, "mv": pathsInside, "ln": pathsInside,
 	"chmod": pathsInside, "tee": pathsInside, "rm": removeInside, "rmdir": removeInside,
-	"cd": pathsInside,
-	// builds and tests
-	"go":            noDownloads(subcommands("build", "test", "vet", "fmt", "run", "list", "env", "version", "mod", "work", "doc", "generate", "tool", "clean")),
+	"cd": cdRule,
+	// builds and tests: they run the project's own code, but every path on the command line stays inside
+	// the directory (outside git's own files) and no option names another program to run
+	"go":            noOutside(goRule(noDownloads(subcommands("build", "test", "vet", "fmt", "run", "list", "env", "version", "mod", "work", "doc", "generate", "tool", "clean")))),
 	"gofmt":         pathsInside,
-	"make":          makeRule,
-	"cargo":         noPublish(subcommands("build", "test", "check", "fmt", "clippy", "run", "doc", "bench", "tree", "metadata", "clean")),
-	"npm":           noPublish(subcommands("test", "run", "ls", "outdated", "version")),
-	"pnpm":          noPublish(subcommands("test", "run", "ls", "outdated")),
-	"yarn":          noPublish(subcommands("test", "run")),
-	"swift":         subcommands("build", "test", "run"),
-	"pytest":        noRule,
+	"make":          noOutside(makeRule),
+	"cargo":         noOutside(forbidThen([]string{"--config", "-Z"}, noPublish(subcommands("build", "test", "check", "fmt", "clippy", "run", "doc", "bench", "tree", "metadata", "clean")))),
+	"npm":           noOutside(forbidThen(npmExec, noPublish(subcommands("test", "run", "ls", "outdated", "version")))),
+	"pnpm":          noOutside(forbidThen(npmExec, noPublish(subcommands("test", "run", "ls", "outdated")))),
+	"yarn":          noOutside(forbidThen(npmExec, noPublish(subcommands("test", "run")))),
+	"swift":         noOutside(subcommands("build", "test", "run")),
+	"pytest":        noOutside(noRule),
 	"git":           gitRule,
-	"golangci-lint": noRule, "staticcheck": noRule,
+	"golangci-lint": noOutside(noRule), "staticcheck": noOutside(noRule),
 }
 
 func noRule([]word, string, string) string { return "" }
 
-func forbidOpts(opts ...string) argRule {
-	return func(args []word, _, _ string) string {
+// forbidOpts refuses the named options, alone or as -opt=value (a two-letter one also glued, -Zx).
+func forbidOpts(opts ...string) argRule { return forbidThen(opts, noRule) }
+
+// forbidThen refuses opts, then applies r.
+func forbidThen(opts []string, r argRule) argRule {
+	return func(args []word, root, dir string) string {
 		for _, a := range args {
 			for _, o := range opts {
-				if a.text == o || strings.HasPrefix(a.text, o+"=") {
+				if a.text == o || strings.HasPrefix(a.text, o+"=") || len(o) == 2 && o[1] != '-' && strings.HasPrefix(a.text, o) {
 					return "option " + o + " runs or changes things"
 				}
 			}
 		}
-		return ""
+		return r(args, root, dir)
 	}
 }
+
+// npmExec are npm, pnpm and yarn options that name a program or code to run.
+var npmExec = []string{"--script-shell", "--node-options"}
 
 func subcommands(allowed ...string) argRule {
 	return func(args []word, root, dir string) string {
@@ -458,6 +473,17 @@ func makeRule(args []word, root, dir string) string {
 	for i := 0; i < len(args); i++ {
 		a := args[i].text
 		switch {
+		case a == "--eval" || strings.HasPrefix(a, "--eval=") || strings.HasPrefix(a, "-E"):
+			return "make --eval runs the text it is given"
+		case !strings.HasPrefix(a, "-") && strings.Contains(a, "="):
+			// VAR=value overrides a variable the Makefile may run (CC, SHELL): a plain value only.
+			name, val, _ := strings.Cut(a, "=")
+			if n := strings.ToUpper(strings.TrimSuffix(strings.TrimSuffix(name, ":"), "+")); n == "SHELL" || n == ".SHELLFLAGS" || n == "MAKEFLAGS" || n == "MFLAGS" || n == "MAKESHELL" {
+				return "make " + name + "= changes how recipes run"
+			}
+			if strings.ContainsAny(val, " \t;|&<>()$`'\"\\") {
+				return "make " + name + "= with a command-like value"
+			}
 		case a == "-C" || a == "-f" || a == "--directory" || a == "--file" || a == "--makefile":
 			if i+1 >= len(args) || !inside(root, dir, args[i+1]) {
 				return "make outside the trusted directory"
@@ -473,10 +499,220 @@ func makeRule(args []word, root, dir string) string {
 func pathsInside(args []word, root, dir string) string {
 	for _, a := range args {
 		if strings.HasPrefix(a.text, "-") {
+			// --target-directory=DIR, -tDIR: a path glued to an option.
+			if v := optionValue(a.text); v != "" && pathish(v) {
+				if why := writeCheck(root, dir, word{text: v}); why != "" {
+					return why
+				}
+			}
 			continue
 		}
-		if !inside(root, dir, a) {
-			return "writes outside the trusted directory (" + a.text + ")"
+		if why := writeCheck(root, dir, a); why != "" {
+			return why
+		}
+	}
+	return ""
+}
+
+// cdRule: cd stays in the directory.
+func cdRule(args []word, root, dir string) string {
+	for _, a := range args {
+		if !strings.HasPrefix(a.text, "-") && !inside(root, dir, a) {
+			return "goes outside the trusted directory (" + a.text + ")"
+		}
+	}
+	return ""
+}
+
+// writeCheck says why a write to the path w names is refused: outside the directory, or into git's own
+// files (a hook or config written there runs at the next git command).
+func writeCheck(root, dir string, w word) string {
+	if !inside(root, dir, w) {
+		return "writes outside the trusted directory (" + w.text + ")"
+	}
+	if inGitDir(dir, w) {
+		return "writes into git's own files (" + w.text + ")"
+	}
+	return ""
+}
+
+func inGitDir(dir string, w word) bool {
+	for _, part := range strings.Split(resolve(dir, globPrefix(w)), "/") {
+		if part == ".git" {
+			return true
+		}
+	}
+	return false
+}
+
+// optionValue is the value glued to an option: after = (--out=x), or after the letter (-ox).
+func optionValue(a string) string {
+	if _, v, ok := strings.Cut(a, "="); ok {
+		return v
+	}
+	if len(a) > 2 && a[0] == '-' && a[1] != '-' {
+		return a[2:]
+	}
+	return ""
+}
+
+// pathish: s may name a place outside the working directory.
+func pathish(s string) bool {
+	if strings.HasPrefix(s, "/") || strings.HasPrefix(s, "~") {
+		return true
+	}
+	for _, part := range strings.Split(s, "/") {
+		if part == ".." || part == ".git" {
+			return true
+		}
+	}
+	return false
+}
+
+// noOutside wraps a build or test tool's rule: no word on its command line, nor a value inside one
+// (-o=/x, cache_dir=/x, html:/x, a,b), names a place outside the directory or in git's own files. These
+// tools write outputs, caches and reports wherever they are told to.
+func noOutside(r argRule) argRule {
+	return func(args []word, root, dir string) string {
+		for _, a := range args {
+			for _, piece := range strings.FieldsFunc(a.text, func(c rune) bool { return c == '=' || c == ':' || c == ',' }) {
+				p := strings.TrimLeft(piece, "-")
+				if len(piece) > 2 && piece[0] == '-' && piece[1] != '-' && !pathish(p) {
+					p = piece[2:] // -o/x
+				}
+				if pathish(p) {
+					if why := writeCheck(root, dir, word{text: p, glob: a.glob}); why != "" {
+						return why
+					}
+				}
+			}
+		}
+		return r(args, root, dir)
+	}
+}
+
+// goRule refuses go options that run another program (-exec, -toolexec), go env -w/-u (writes Go's own
+// settings file) and go clean of the shared caches.
+func goRule(r argRule) argRule {
+	return func(args []word, root, dir string) string {
+		sub := ""
+		for _, a := range args {
+			t := a.text
+			name, _, _ := strings.Cut(strings.TrimLeft(t, "-"), "=")
+			if strings.HasPrefix(t, "-") {
+				switch name {
+				case "exec", "toolexec":
+					return "go -" + name + " runs another program"
+				case "w", "u":
+					if sub == "env" {
+						return "go env -" + name + " changes Go's settings"
+					}
+				case "cache", "modcache", "fuzzcache":
+					if sub == "clean" {
+						return "go clean -" + name + " deletes outside the trusted directory"
+					}
+				}
+				continue
+			}
+			if sub == "" {
+				sub = t
+			}
+		}
+		return r(args, root, dir)
+	}
+}
+
+// sortRule: sort reads anything, but -o/--output and -T/--temporary-directory write, and
+// --compress-program runs a program.
+func sortRule(args []word, root, dir string) string {
+	for i := 0; i < len(args); i++ {
+		t := args[i].text
+		if strings.HasPrefix(t, "--compress-program") {
+			return "sort --compress-program runs another program"
+		}
+		var target string
+		has := false
+		switch {
+		case t == "--output" || t == "--temporary-directory":
+			has = true
+			if i+1 < len(args) {
+				target = args[i+1].text
+				i++
+			}
+		case strings.HasPrefix(t, "--output=") || strings.HasPrefix(t, "--temporary-directory="):
+			has, target = true, t[strings.Index(t, "=")+1:]
+		case len(t) > 1 && t[0] == '-' && t[1] != '-':
+			// a short cluster: -o FILE, -oFILE, -uo FILE (o or T takes the rest or the next word)
+			if j := strings.IndexAny(t[1:], "oT"); j >= 0 {
+				has = true
+				if rest := t[j+2:]; rest != "" {
+					target = rest
+				} else if i+1 < len(args) {
+					target = args[i+1].text
+					i++
+				}
+			}
+		}
+		if has {
+			if target == "" {
+				return "sort output without a file"
+			}
+			if why := writeCheck(root, dir, word{text: target}); why != "" {
+				return why
+			}
+		}
+	}
+	return ""
+}
+
+// outputOperand is for uniq and xxd: [INPUT [OUTPUT]], where the second operand is written. valued are
+// the options that take a separate value.
+func outputOperand(valued ...string) argRule {
+	return func(args []word, root, dir string) string {
+		n := 0
+		for i := 0; i < len(args); i++ {
+			t := args[i].text
+			if strings.HasPrefix(t, "-") && t != "-" {
+				for _, v := range valued {
+					if t == v {
+						i++
+					}
+				}
+				continue
+			}
+			n++
+			if n >= 2 {
+				if why := writeCheck(root, dir, args[i]); why != "" {
+					return why
+				}
+			}
+		}
+		return ""
+	}
+}
+
+// treeRule: tree -o FILE writes FILE.
+func treeRule(args []word, root, dir string) string {
+	for i := 0; i < len(args); i++ {
+		t := args[i].text
+		target, has := "", false
+		switch {
+		case t == "-o":
+			has = true
+			if i+1 < len(args) {
+				target = args[i+1].text
+				i++
+			}
+		case strings.HasPrefix(t, "-o"):
+			has, target = true, t[2:]
+		}
+		if has {
+			if target == "" {
+				return "tree -o without a file"
+			}
+			if why := writeCheck(root, dir, word{text: target}); why != "" {
+				return why
+			}
 		}
 	}
 	return ""
@@ -512,10 +748,11 @@ var gitAllowed = map[string]bool{"status": true, "diff": true, "log": true, "sho
 
 var gitForbidden = []string{"--force", "-f", "--force-with-lease", "--exec", "-x", "--exec-path", "--upload-pack",
 	"--receive-pack", "--ext-diff", "--textconv", "--output", "-o", "--hard", "--merge", "--keep", "-D", "--delete",
-	"--discard-changes", "--git-dir", "--work-tree", "-c", "--config-env"}
+	"--discard-changes", "--git-dir", "--work-tree", "-c", "--config-env",
+	"-O", "--open-files-in-pager"} // git grep -O<program> runs it on the matches
 
 // gitForbiddenShort are one-letter git options that force, delete or run things (also inside -xyz).
-const gitForbiddenShort = "fDxoc"
+const gitForbiddenShort = "fDxocO"
 
 func gitRule(args []word, root, dir string) string {
 	i := 0
@@ -567,6 +804,23 @@ func gitRule(args []word, root, dir string) string {
 	case "worktree":
 		if len(rest) > 0 && (rest[0].text == "remove" || rest[0].text == "prune") {
 			return "git worktree " + rest[0].text + " always asks"
+		}
+		if len(rest) > 0 && (rest[0].text == "add" || rest[0].text == "move") {
+			// every operand (the new worktree's path, a branch, a commit) as a path: a branch name is a
+			// relative path inside, so only real places outside are refused
+			for j := 1; j < len(rest); j++ {
+				t := rest[j].text
+				if t == "-b" || t == "-B" || t == "--reason" {
+					j++
+					continue
+				}
+				if strings.HasPrefix(t, "-") {
+					continue
+				}
+				if why := writeCheck(root, dir, rest[j]); why != "" {
+					return "git worktree " + rest[0].text + " " + why
+				}
+			}
 		}
 	case "stash":
 		if len(rest) > 0 && (rest[0].text == "drop" || rest[0].text == "clear") {
