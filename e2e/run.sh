@@ -11,7 +11,11 @@
 # link to a file instead of opening the app) and is bound to it; "trust this project until 04:00" lets other
 # sessions of the project and the bound Bot (start, bind) run without questions, still asks outside it / for
 # push, tags and other branches, holds over a Rubi Home restart, ends on revoke and at its time (the plugin is
-# built with -tags rubie2e, whose only addition is a file that shortens the trust), and does not beat a locked Rubi.
+# built with -tags rubie2e, whose only additions are files that shorten the trust and move the plugin's clock),
+# and does not beat a locked Rubi. "Trust this project until I revoke it" (no end time) holds over a Rubi Home
+# restart and 25 hours and 40 days later (the fake clock), still asks for push, tags, other branches, a rebase
+# without --no-update-refs and anything outside the root, ends at once on revoke, a Bot can ask for it
+# (claude_code_trust_project until=revoked), and a locked Rubi beats it too.
 #
 #   RUBI_REPO=../rubi e2e/run.sh
 set -euo pipefail

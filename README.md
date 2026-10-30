@@ -83,6 +83,8 @@ revoke trusts; your Bot can list and revoke them too
 
 ### Trust a project until 04:00
 
+(There is also a version [without an end time](#trust-a-project-until-i-revoke-it).)
+
 A `run` approval can have a third button, **Allow and trust this project until Sat 31 Oct 2026 04:00 CET**
 (the label names the exact time and date). One approval then trusts the whole project instead of one session:
 until the next 04:00 (at most 24 hours; the approval states the time zone) Rubi allows plain, listed commands
@@ -130,11 +132,42 @@ granted; an approval answered after it grants nothing. 04:00 is found with calen
 the trust is also capped at 24 hours from the grant, so on a day of 25 hours it can end up to an hour before 04:00 on the clock.
 
 **Revoke and persistence.** The plugin's page in the panel has a "Trusted projects" section (root, computer,
-branches, commands used, end) with Revoke and Revoke all; `claude_code_mandates` lists both kinds and revokes
+branches, commands used, when it was granted, end or "UNTIL REVOKED") with Revoke and Revoke all; `claude_code_mandates` lists both kinds and revokes
 `pt_…`, `md_…` or `all`. The trust is part of the plugin's saved state in Rubi (like 2-hour trusts and
 bindings): it survives a restart of Rubi Home, of the plugin and of Rubi until it ends or is revoked; ended
 ones are dropped. Nothing in it works around Rubi being locked: the allow is an answer sent through Rubi, so
 while Rubi is locked the helper denies as always.
+
+### Trust a project until I revoke it
+
+A fourth button on `run` approvals, **Allow and trust the project /path/to/project until I revoke it**, gives the
+same project trust **without an end time**. The 04:00 button stays the default and the first choice; nothing
+chooses the unlimited one for you. The Bot can ask for it too: `claude_code_trust_project {bind_code,
+branch_pattern?, until?}` with `until` `"0400"` (the default) or `"revoked"`; the approval is strong and locked
+as before, carries only the one option for the mode asked, and says **UNTIL REVOKED — no end time** in capitals.
+
+- **How long.** Until you revoke it in the panel or with `claude_code_mandates`, or Rubi is locked. It stays
+  on across restarts of Rubi Home, of the plugin and of Rubi, and across days, weeks and months. While Rubi is
+  locked nothing is allowed (the allow is an answer sent through Rubi, and the helper denies when Rubi isn't
+  polling), and the trust is there again when you unlock. It is never dropped by the plugin's clean-up; the
+  list of 20 trusts evicts the oldest *timed* one when full and refuses a new grant when all 20 are unlimited.
+- **No count limit.** A 04:00 trust ends after 2000 commands. An unlimited one has no cap, because a cap would
+  end it by surprise; every allow is still counted and audited with the trust's `pt_…` id, so the audit log is the
+  control. The panel and `claude_code_mandates` show the count and **when it was granted** (`granted_ago`, for
+  example "3 d 4 h ago").
+- **Everything else is the same.** The same command check, the branch rule, the same always-ask list (push and
+  every remote git command, `--force`, sudo, network commands and installs, `git tag`, writes outside the root or
+  into `.git`, credential paths, branches outside the pattern, `git rebase` without `--no-update-refs`), the
+  same root rules, and the same rate limits for the Bot (20 binds, 5 starts, 5 trust requests an hour).
+- **Replacement.** There is one live `pt_…` per computer and root; a new grant, of either mode, replaces the old
+  one (both audited with their modes). Choosing "until 04:00" later replaces an unlimited trust with a timed one.
+- **The risk, plainly.** Nothing ends it by itself, so it can outlive what you remember about it. While it
+  stands, every Claude Code session in the project may run plain, listed commands without asking (builds and
+  tests run the project's own code with your rights, which Claude may have just written), the Bot bound to a
+  session of the project may open and bind sessions in it without asking, and those sessions run with the
+  Claude desktop app's permission settings: if those skip permission prompts (`bypassPermissions`), their
+  commands never ask and no trust matters. Look at the plugin's page now and then and revoke what you no longer
+  need.
 
 ### Sessions with bypassPermissions
 

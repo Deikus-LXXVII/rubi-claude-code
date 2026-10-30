@@ -501,7 +501,7 @@ func run(dir, rubiBin, homeBin, plugin string) (err error) {
 		for _, p := range procs {
 			_ = p.Wait()
 		}
-		for _, log := range []string{"daemon.log", "rubi-home.log", "rubi-home-restarted.log", "rubi-home-restarted2.log"} {
+		for _, log := range []string{"daemon.log", "rubi-home.log", "rubi-home-restarted.log", "rubi-home-restarted2.log", "rubi-home-restarted3.log"} {
 			b, _ := os.ReadFile(filepath.Join(dir, log))
 			if bytes.Contains(b, []byte("DATA RACE")) || bytes.Contains(b, []byte("panic:")) {
 				fmt.Printf("%s:\n%s\n", log, b)
@@ -687,6 +687,12 @@ func run(dir, rubiBin, homeBin, plugin string) (err error) {
 				return false, err
 			}
 			evs, err := ag.call("rubi_events", map[string]any{"agent": name, "code": code})
+			if err != nil && strings.Contains(err.Error(), "wrong or expired") { // a long run outlives a code: ask for a new one
+				wh.mu.Lock()
+				wh.code = ""
+				wh.mu.Unlock()
+				return false, nil
+			}
 			if err != nil {
 				return false, err
 			}
@@ -915,6 +921,12 @@ func run(dir, rubiBin, homeBin, plugin string) (err error) {
 				return false, err
 			}
 			evs, err := ag.call("rubi_events", map[string]any{"agent": name, "code": code})
+			if err != nil && strings.Contains(err.Error(), "wrong or expired") { // a long run outlives a code: ask for a new one
+				wh.mu.Lock()
+				wh.code = ""
+				wh.mu.Unlock()
+				return false, nil
+			}
 			if err != nil {
 				return false, err
 			}
@@ -1525,7 +1537,7 @@ func run(dir, rubiBin, homeBin, plugin string) (err error) {
 			label9 = o.Label
 		}
 	}
-	if len(ai9.Approval.Options) != 3 || !strings.HasPrefix(label9, "Allow and trust the project "+proj+" until ") || !strings.Contains(label9, "04:00") ||
+	if len(ai9.Approval.Options) != 4 || !strings.HasPrefix(label9, "Allow and trust the project "+proj+" until ") || !strings.Contains(label9, "04:00") ||
 		!strings.Contains(string(ai9.Approval.Preview), proj) || !strings.Contains(string(ai9.Approval.Preview), "citri/*") {
 		return fmt.Errorf("the run approval should offer the project trust with the exact time, root and branches: %+v %s", ai9.Approval.Options, ai9.Approval.Preview)
 	}
@@ -1738,8 +1750,8 @@ func run(dir, rubiBin, homeBin, plugin string) (err error) {
 	_ = os.Remove(filepath.Join(dataDir, "pt-ttl"))
 	step("9g the Bot's own request (strong; a tap refused) granted the trust; after its (shortened) time the next command asked")
 
-	// h. A normal trust again, left in place to check that Rubi locked beats it (Case 4). The restarted helper
-	// forgot which sessions its hooks had seen, so pt-a tells it again (until it does, no root, no offer).
+	// h. "Until I revoke it" (B11): the fourth option of a run approval. The restarted helper forgot which
+	// sessions its hooks had seen, so pt-a tells it again (until it does, no root, no offer).
 	if _, err := hookEvent(homeBin, helperDir, map[string]any{"session_id": "pt-a", "transcript_path": filepath.Join(dir, "none4.jsonl"),
 		"cwd": proj, "permission_mode": "default", "hook_event_name": "SessionStart", "source": "resume"}); err != nil {
 		return err
@@ -1754,14 +1766,189 @@ func run(dir, rubiBin, homeBin, plugin string) (err error) {
 	if pc9, err = panel(url9); err != nil {
 		return err
 	}
-	if res, err := pc9.ApproveWithPassword(id9, "trust_project", pw); err != nil || res["state"] != "executed" {
-		return fmt.Errorf("trust_project again: %v %v", res, err)
+	if ai9, err = pc9.ApprovalInfo(id9); err != nil {
+		return err
 	}
-	<-ch9
+	var foreverLabel string
+	foreverMeaning := string(ai9.Approval.Preview) // the options' Meaning texts aren't in the panel's option list; the preview repeats the text
+	for _, o := range ai9.Approval.Options {
+		if o.Key == "trust_project_until_revoked" {
+			foreverLabel = o.Label
+		}
+	}
+	if len(ai9.Approval.Options) != 4 || foreverLabel != "Allow and trust the project "+proj+" until I revoke it" ||
+		!strings.Contains(foreverMeaning, "UNTIL REVOKED — no end time") || !strings.Contains(foreverMeaning, "across restarts") || !strings.Contains(foreverMeaning, "bypassPermissions") {
+		return fmt.Errorf("the run approval should offer the trust until revoked, naming that it has no end: %+v", ai9.Approval.Options)
+	}
+	if res, err := pc9.ApproveWithPassword(id9, "trust_project_until_revoked", pw); err != nil || res["state"] != "executed" {
+		return fmt.Errorf("trust_project_until_revoked: %v %v", res, err)
+	}
+	if r := <-ch9; r.Behavior != "allow" {
+		return fmt.Errorf("trust_project_until_revoked: %+v", r)
+	}
+	foreverOf := func() (map[string]any, error) {
+		l, err := trustList()
+		if err != nil {
+			return nil, err
+		}
+		if len(l) != 1 {
+			return nil, fmt.Errorf("project_trusts: %v", l)
+		}
+		m, _ := l[0].(map[string]any)
+		if m["until"] != "revoked" || m["expires"] != nil || m["project_root"] != proj || !strings.HasPrefix(fmt.Sprint(m["id"]), "pt_") {
+			return nil, fmt.Errorf("the trust should be unlimited: %v", m)
+		}
+		return m, nil
+	}
+	fm, err := foreverOf()
+	if err != nil {
+		return err
+	}
+	foreverID := fmt.Sprint(fm["id"])
 	if _, err := mustRun("pt-b", ptSub, "go test ./..."); err != nil {
 		return err
 	}
-	step("9h a new trust is granted and holds (it stays until Case 4 locks Rubi)")
+	step("9h one approval (%q) -> trust %s with no end time", foreverLabel, foreverID)
+
+	// i. It survives a restart of Rubi Home.
+	_ = homeProc.Process.Signal(os.Interrupt)
+	_ = homeProc.Wait()
+	procs = slices.DeleteFunc(procs, func(c *exec.Cmd) bool { return c == homeProc })
+	if err := start("rubi-home-restarted3", []string{"RUBI_HOME_DIR=" + helperDir}, homeBin, "run"); err != nil {
+		return err
+	}
+	homeProc = procs[len(procs)-1]
+	if err := waitFor("a command under the unlimited trust after the restart", 180*time.Second, func() (bool, error) {
+		r := <-hookAs(homeBin, helperDir, "pt-b", ptSub, "go test ./...")
+		switch {
+		case r.Behavior == "allow":
+			return true, nil
+		case r.Behavior == "deny" && (strings.Contains(r.Message, "isn't connected") || strings.Contains(r.Message, "isn't running")):
+			time.Sleep(time.Second)
+			return false, nil
+		}
+		return false, fmt.Errorf("after the restart: %+v", r)
+	}); err != nil {
+		return err
+	}
+	if fm, err = foreverOf(); err != nil || fmt.Sprint(fm["id"]) != foreverID {
+		return fmt.Errorf("the unlimited trust after the restart: %v %v", fm, err)
+	}
+	step("9i after a Rubi Home restart the trust until revoked still holds (%s)", foreverID)
+
+	// j. Days later (the rubie2e plugin build adds the contents of the file clock-offset to its clock): a day
+	// and an hour, then forty days. It still allows, shows its age, and the always-ask list is unchanged.
+	for _, c := range []struct{ offset, age string }{{"25h", "1 d "}, {"960h", "40 d "}} {
+		if err := os.WriteFile(filepath.Join(dataDir, "clock-offset"), []byte(c.offset), 0o600); err != nil {
+			return err
+		}
+		if _, err := mustRun("pt-c", proj, "go vet ./... && go test ./..."); err != nil {
+			return err
+		}
+		if fm, err = foreverOf(); err != nil || !strings.HasPrefix(fmt.Sprint(fm["granted_ago"]), c.age) {
+			return fmt.Errorf("after %s the trust should be valid and show its age (%q...): %v %v", c.offset, c.age, fm, err)
+		}
+		step("9j %s later the trust until revoked still allows (granted %v)", c.offset, fm["granted_ago"])
+	}
+	for _, c := range []struct{ sess, cwd, cmd string }{
+		{"pt-b", ptSub, "git push origin citri/e2e-branch"},
+		{"pt-b", ptSub, "git tag v9.9.8"},
+		{"pt-b", ptSub, "git switch main"},
+		{"pt-b", ptSub, "git rebase main"},
+		{"pt-out", dir, "make pt-outside-again"},
+	} {
+		if err := mustAsk(c.sess, c.cwd, c.cmd); err != nil {
+			return err
+		}
+	}
+	step("9k 40 days later push, a tag, a foreign branch, a rebase without --no-update-refs and a command outside the root still ask")
+
+	// l. Revoke: the next command asks at once (the clock is still 40 days ahead).
+	if mo, err := ag.call("claude_code_mandates", map[string]any{"revoke": foreverID}); err != nil || fmt.Sprint(mo["revoked"]) != "1" {
+		return fmt.Errorf("revoke %s: %v %v", foreverID, mo, err)
+	}
+	if err := mustAsk("pt-b", ptSub, "go test ./... && echo after-revoke-forever"); err != nil {
+		return err
+	}
+	if pts, err = trustList(); err != nil || len(pts) != 0 {
+		return fmt.Errorf("trusts after the revoke: %v %v", pts, err)
+	}
+	_ = os.Remove(filepath.Join(dataDir, "clock-offset"))
+	step("9l revoked: the next command asks again")
+
+	// m. The Bot asks for it with until=revoked (strong; a tap is refused), and it replaces a 04:00 trust. It
+	// is left in place so that Case 4 can check that a locked Rubi beats it.
+	time.Sleep(65 * time.Second) // Rubi allows 10 plugin approvals a minute
+	to := func(args map[string]any) (map[string]any, error) {
+		// The code from the start of the run may have expired by now: find a valid one (as approvalFor does).
+		var fresh string
+		if err := waitFor("a valid agent code", 30*time.Second, func() (bool, error) {
+			wh.mu.Lock()
+			code := wh.code
+			wh.mu.Unlock()
+			if code == "" {
+				_, _ = ag.call("rubi_verify", map[string]any{"agent": sister}) // "a code was sent a moment ago" is fine
+				time.Sleep(300 * time.Millisecond)
+				return false, nil
+			}
+			evs, err := ag.call("rubi_events", map[string]any{"agent": sister, "code": code})
+			if err != nil && strings.Contains(err.Error(), "wrong or expired") || err == nil && evs["needs_code"] == true {
+				wh.mu.Lock()
+				wh.code = ""
+				wh.mu.Unlock()
+				return false, nil
+			}
+			fresh = code
+			return true, err
+		}); err != nil {
+			return nil, err
+		}
+		agentCode = fresh // the cases after this one use it too
+		args["rubi_agent"], args["rubi_agent_code"], args["bind_code"] = "main", fresh, bindCode9
+		return ag.call("claude_code_trust_project", args)
+	}
+	if bad, err := to(map[string]any{"until": "forever"}); err == nil && bad["status"] == "awaiting_approval" {
+		return fmt.Errorf("an unknown until was accepted: %v", bad)
+	}
+	if tt, err := to(map[string]any{}); err != nil || tt["status"] != "awaiting_approval" {
+		return fmt.Errorf("a 04:00 trust request: %v %v", tt, err)
+	} else if tc, err := panel(fmt.Sprint(tt["approval_url"])); err != nil {
+		return err
+	} else if res, err := tc.ApproveWithPassword(fmt.Sprint(tt["approval_id"]), "trust_project", pw); err != nil || res["state"] != "executed" {
+		return fmt.Errorf("04:00 trust (Bot): %v %v", res, err)
+	}
+	fo, err := to(map[string]any{"until": "revoked"})
+	if err != nil || fo["status"] != "awaiting_approval" {
+		return fmt.Errorf("claude_code_trust_project until=revoked should ask: %v %v", fo, err)
+	}
+	fpc, err := panel(fmt.Sprint(fo["approval_url"]))
+	if err != nil {
+		return err
+	}
+	finfo, err := fpc.ApprovalInfo(fmt.Sprint(fo["approval_id"]))
+	if err != nil {
+		return err
+	}
+	if finfo.Approval.Kind != "claude-code.trust_project" || finfo.Approval.Level != "strong" || len(finfo.Approval.Options) != 1 || finfo.Approval.Options[0].Key != "trust_project_until_revoked" ||
+		!strings.Contains(string(finfo.Approval.Preview), "UNTIL REVOKED") || !strings.Contains(string(finfo.Approval.Preview), proj) || !strings.Contains(string(finfo.Approval.Preview), "replaces") {
+		return fmt.Errorf("the request should be a strong approval that says it has no end and what it replaces: %+v %s", finfo.Approval, finfo.Approval.Preview)
+	}
+	if _, err := fpc.ApproveWithPasskey(fmt.Sprint(fo["approval_id"]), "trust_project_until_revoked", passkey.sign(origin, 0x01)); err == nil {
+		return errors.New("a tap approved a project trust until revoked")
+	}
+	if l, err := trustList(); err != nil || len(l) != 1 || l[0].(map[string]any)["until"] == "revoked" {
+		return fmt.Errorf("unlimited before the approval: %v %v", l, err)
+	}
+	if res, err := fpc.ApproveWithPassword(fmt.Sprint(fo["approval_id"]), "trust_project_until_revoked", pw); err != nil || res["state"] != "executed" {
+		return fmt.Errorf("trust_project until revoked (Bot): %v %v", res, err)
+	}
+	if fm, err = foreverOf(); err != nil {
+		return err
+	}
+	if _, err := mustRun("pt-b", ptSub, "go test ./..."); err != nil {
+		return err
+	}
+	step("9m the Bot's own request (until=revoked; strong, a tap refused) replaced the 04:00 trust with one that has no end (%v)", fm["id"])
 
 	// Case 7e: a Bot starts a session where none exists. The helper of this build (-tags rubie2e) can't open
 	// the desktop app: its launcher appends the claude:// link to a file, and this driver plays the new
@@ -1890,7 +2077,7 @@ func run(dir, rubiBin, homeBin, plugin string) (err error) {
 	if r.Behavior != "deny" {
 		return fmt.Errorf("locked, with a project trust: %+v", r)
 	}
-	step("4c Rubi locked: a command under a live project trust is denied too (%s)", r.Took)
+	step("4c Rubi locked: a command under a live project trust until revoked is denied too (%s)", r.Took)
 
 	fmt.Println("\nHook outputs:")
 	for _, l := range results {

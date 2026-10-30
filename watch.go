@@ -46,6 +46,8 @@ type ticket struct {
 	Cwd        string `json:"cwd,omitempty"` // the scope of a mandate given with this approval
 	// Project is the project trust offered with this approval (the trust_project option); nil when none was.
 	Project *trustOffer `json:"project,omitempty"`
+	// Forever is the same trust until revoked (the trust_project_until_revoked option); nil when none was offered.
+	Forever *trustOffer `json:"project_until_revoked,omitempty"`
 }
 
 type homeCaller interface {
@@ -232,7 +234,10 @@ func (w *watcher) handle(ctx context.Context, d rubiplugin.HomeDevice, r request
 		offer, why := w.s.projectOffer(ctx, w.h, d, r)
 		if offer != nil {
 			t.Project = offer
+			f := offer.forever()
+			t.Forever = &f
 			preview["project_trust"] = "Option \"" + w.s.trustLabel(*offer) + "\": " + w.s.trustMeaning(*offer, false)
+			preview["project_trust_until_revoked"] = "Option \"" + w.s.trustLabel(f) + "\": " + w.s.trustMeaning(f, false)
 			req.Options = w.s.runOptions(offer)
 		} else {
 			preview["project_trust"] = "not offered: " + why

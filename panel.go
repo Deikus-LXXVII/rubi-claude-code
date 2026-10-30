@@ -22,8 +22,15 @@ func mandateView(m mandate, now time.Time) map[string]any {
 }
 
 func projectView(p projectTrust, now time.Time) map[string]any {
-	return map[string]any{"id": p.ID, "computer": firstNonEmpty(p.DeviceName, p.Device), "project_root": p.Root, "branches": p.BranchPattern,
-		"expires": p.Expires, "minutes_left": int(p.Expires.Sub(now).Minutes()), "uses": p.Uses, "max_uses": p.MaxUses}
+	v := map[string]any{"id": p.ID, "computer": firstNonEmpty(p.DeviceName, p.Device), "project_root": p.Root, "branches": p.BranchPattern,
+		"uses": p.Uses, "granted": p.Issued, "granted_ago": ageText(p.Issued, now)}
+	if p.Unlimited {
+		v["until"] = untilRevoked
+		v["note"] = "UNTIL REVOKED — no end time; no limit on the number of commands"
+		return v
+	}
+	v["expires"], v["minutes_left"], v["max_uses"] = p.Expires, int(p.Expires.Sub(now).Minutes()), p.MaxUses
+	return v
 }
 
 func (s *sisters) mandatesTool(h sisterHost, in mandatesIn) (any, error) {
@@ -111,9 +118,15 @@ func (s *sisters) panel(ctx context.Context, h sisterHost, op string, args json.
 	}
 	var pitems []map[string]any
 	for _, p := range s.st.projects(now) {
+		title := fmt.Sprintf("%s — %s", firstNonEmpty(p.DeviceName, p.Device), p.Root)
+		detail := fmt.Sprintf("Branches %s · %d of %d commands · until %s (%d min left) · granted %s", p.BranchPattern, p.Uses, p.MaxUses, s.expiryTime(trustOffer{Expires: p.Expires}).Format("Mon 2 Jan 15:04 MST"), int(p.Expires.Sub(now).Minutes()), ageText(p.Issued, now))
+		if p.Unlimited {
+			title = "UNTIL REVOKED — " + title
+			detail = fmt.Sprintf("UNTIL REVOKED — no end time, stays on across restarts and days · Branches %s · %d commands used (no limit) · granted %s", p.BranchPattern, p.Uses, ageText(p.Issued, now))
+		}
 		pitems = append(pitems, map[string]any{
-			"title":   fmt.Sprintf("%s — %s", firstNonEmpty(p.DeviceName, p.Device), p.Root),
-			"detail":  fmt.Sprintf("Branches %s · %d of %d commands · until %s (%d min left)", p.BranchPattern, p.Uses, p.MaxUses, s.expiryTime(trustOffer{Expires: p.Expires}).Format("Mon 2 Jan 15:04 MST"), int(p.Expires.Sub(now).Minutes())),
+			"title":   title,
+			"detail":  detail,
 			"actions": []map[string]any{{"label": "Revoke", "op": "revoke", "args": map[string]any{"id": p.ID}, "danger": true}},
 		})
 	}
@@ -134,7 +147,7 @@ func (s *sisters) panel(ctx context.Context, h sisterHost, op string, args json.
 		"note": "Sessions running with bypassPermissions never ask, so approvals and trusts here don't apply to them (their messages to and from Bots still work).",
 		"sections": []map[string]any{
 			{"title": "Trusted sessions (2 hours)", "note": "Rubi allows these sessions' plain, listed commands by itself, including builds and tests that run the project's own code; push, --force, sudo, network commands, credential paths and writing outside the directory or into .git still ask.", "empty": "None.", "items": mitems},
-			{"title": "Trusted projects (until 04:00)", "note": "Every Claude Code session on that computer inside the project: Rubi allows plain, listed commands by itself, including builds and tests that run the project's own code, and a Bot bound to a session of the project can start and bind sessions in it. Push and every remote git command, --force, sudo, network commands, tags, credential paths, writing outside the project and branches outside the pattern still ask.", "empty": "None.", "items": pitems},
+			{"title": "Trusted projects (until 04:00, or until revoked)", "note": "A trust marked UNTIL REVOKED has no end time and no command limit: it stays on across restarts and days until you revoke it here (or with claude_code_mandates). Every Claude Code session on that computer inside the project: Rubi allows plain, listed commands by itself, including builds and tests that run the project's own code, and a Bot bound to a session of the project can start and bind sessions in it. Push and every remote git command, --force, sudo, network commands, tags, credential paths, writing outside the project and branches outside the pattern still ask.", "empty": "None.", "items": pitems},
 			{"title": "Session names", "note": nameNote, "empty": "No sessions.", "items": nameItems},
 			{"title": "Bots bound to sessions", "note": "Each Bot talks only to its session.", "empty": "None.", "items": bitems},
 		}}, nil

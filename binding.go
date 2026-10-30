@@ -110,7 +110,7 @@ type askRef struct {
 }
 
 func newSisters(st *store) *sisters {
-	return &sisters{st: st, hits: map[string][]time.Time{}, asks: map[string]askRef{}, now: time.Now}
+	return &sisters{st: st, hits: map[string][]time.Time{}, asks: map[string]askRef{}, now: wallClock}
 }
 
 // tellBound tells Rubi Home on b's computer that b's sister is bound (or no longer bound) to b's session. It
@@ -401,7 +401,7 @@ func (s *sisters) bindTool(ctx context.Context, h sisterHost, in bindIn) (any, e
 			"session": sess.SessionID, "directory": sess.Cwd, "uses": pt.Uses})
 		res, err := s.executeBind(h, t)
 		if m, ok := res.(map[string]any); ok && err == nil {
-			m["approval"] = "none needed: " + pt.ID + ", the user's trust of " + pt.Root + " until " + s.expiryTime(trustOffer{Expires: pt.Expires}).Format("Mon 2 Jan 15:04 MST")
+			m["approval"] = "none needed: " + pt.ID + ", the user's trust of " + pt.Root + " " + s.trustEnd(*pt)
 		}
 		return res, err
 	}
@@ -800,4 +800,16 @@ func firstNonEmpty(xs ...string) string {
 		}
 	}
 	return ""
+}
+
+// clockHook lets the end-to-end test move Rubi's clock (rubie2e builds only; nil in a release).
+var clockHook func(now time.Time) time.Time
+
+// wallClock is the plugin's clock.
+func wallClock() time.Time {
+	t := time.Now()
+	if clockHook != nil {
+		t = clockHook(t)
+	}
+	return t
 }
