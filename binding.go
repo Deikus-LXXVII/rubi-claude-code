@@ -118,7 +118,42 @@ func (s *sisters) allow(key string, n int) bool {
 type deviceSessions struct {
 	device rubiplugin.HomeDevice
 	list   []session
+	hook   *hookInfo
 	err    error
+}
+
+// hookInfo is the last Claude Code hook binary Rubi Home saw on a computer (claude-sessions.list "hook";
+// absent from older Rubi Homes).
+type hookInfo struct {
+	Version     string `json:"version"`
+	Path        string `json:"path"`
+	Protocol    int    `json:"protocol"`
+	Stale       bool   `json:"stale"`
+	Refused     bool   `json:"refused"`
+	Legacy      bool   `json:"legacy"`
+	HomeVersion string `json:"home_version"`
+}
+
+// hookProblem is the problem text for a computer whose hook binary is out of date, "" when it is fine or
+// unknown.
+func hookProblem(device string, h *hookInfo) string {
+	if h == nil || (!h.Stale && !h.Refused) {
+		return ""
+	}
+	home := oneLine(h.HomeVersion, 40)
+	if home == "" {
+		home = "newer"
+	}
+	var is string
+	switch {
+	case h.Refused:
+		is = fmt.Sprintf("%s, a protocol (%d) Rubi Home %s refuses, so its approvals are denied", oneLine(h.Version, 40), h.Protocol, home)
+	case h.Legacy || h.Version == "":
+		is = fmt.Sprintf("an old one without version information (Rubi Home %s)", home)
+	default:
+		is = fmt.Sprintf("%s (Rubi Home %s)", oneLine(h.Version, 40), home)
+	}
+	return fmt.Sprintf("the Claude Code hook binary on %s is %s: run `~/.rubi-home/bin/rubi-home install-hook` there", device, is)
 }
 
 // listTimeout bounds one computer's session list, so a stuck Rubi Home shows up as a problem in the
@@ -140,6 +175,7 @@ func listSessions(ctx context.Context, h sisterHost, repo string, archived bool)
 			defer wg.Done()
 			var res struct {
 				Sessions []session `json:"sessions"`
+				Hook     *hookInfo `json:"hook"`
 			}
 			dctx, cancel := context.WithTimeout(ctx, listTimeout)
 			defer cancel()
@@ -147,7 +183,7 @@ func listSessions(ctx context.Context, h sisterHost, repo string, archived bool)
 			if err != nil && dctx.Err() != nil && ctx.Err() == nil {
 				err = fmt.Errorf("no session list within %s (Rubi Home may be stuck reading a project's disk)", listTimeout)
 			}
-			out[i] = deviceSessions{d, res.Sessions, err}
+			out[i] = deviceSessions{d, res.Sessions, res.Hook, err}
 		}()
 	}
 	wg.Wait()
@@ -214,6 +250,9 @@ func (s *sisters) sessionsTool(ctx context.Context, h sisterHost, in sessionsIn)
 		if ds.err != nil {
 			problems = append(problems, ds.device.Name+": "+oneLine(ds.err.Error(), 200))
 			continue
+		}
+		if p := hookProblem(ds.device.Name, ds.hook); p != "" {
+			problems = append(problems, p)
 		}
 		for _, x := range ds.list {
 			it := map[string]any{"device": ds.device.ID, "computer": ds.device.Name, "session_id": x.SessionID,

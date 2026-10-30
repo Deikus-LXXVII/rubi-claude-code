@@ -27,6 +27,7 @@ type fakeHost struct {
 	events    []map[string]any
 	decideFn  func(device string, a answer) error
 	sessions  []session       // claude-sessions.list answers
+	listHook  map[string]any  // "hook" in the claude-sessions.list answer (newer Rubi Homes)
 	listHang  bool            // claude-sessions.list never answers (until ctx ends)
 	hangOn    map[string]bool // claude-sessions.list never answers on these computers
 	sendExtra map[string]any  // merged into the claude-sessions.send answer (newer Rubi Home fields)
@@ -90,7 +91,11 @@ func (f *fakeHost) HomeCall(ctx context.Context, device, op string, args, out an
 			return errors.New("Rubi Home didn't answer")
 		}
 		f.mu.Lock()
-		b, _ := json.Marshal(map[string]any{"sessions": f.sessions})
+		ans := map[string]any{"sessions": f.sessions}
+		if f.listHook != nil {
+			ans["hook"] = f.listHook
+		}
+		b, _ := json.Marshal(ans)
 		f.mu.Unlock()
 		return json.Unmarshal(b, out)
 	case "claude-sessions.send":

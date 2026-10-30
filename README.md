@@ -159,14 +159,35 @@ You need Rubi v0.12.0 or later with this plugin installed, and Claude Code v2.1.
 
    It installs `~/.rubi-home/bin/rubi-home`, starts it at login and prints a pairing code.
 
-2. **Put the hook's binary where Claude can't replace it** (owned by root):
+2. **Put the hook's binary where Claude can't replace it** (owned by root). Rubi Home installs itself
+   as `~/.rubi-home/bin/rubi-home` and updates itself, but Claude Code must run a copy no process of yours
+   can swap, so this one is installed by you, with an administrator prompt:
+
+   ```sh
+   ~/.rubi-home/bin/rubi-home install-hook
+   ```
+
+   It shows the binary's sha256 and the exact script, then asks macOS for an administrator password. As
+   root the script copies the file once, checks that copy against the shown hash and only then moves it to
+   `/usr/local/bin/rubi-home` (root-owned, mode 0755); it refuses a target whose directories anyone but
+   root can write, and afterwards the command re-checks the file and its `version`. The hash only says
+   which file will be installed: if you got Rubi Home from a release, compare it with that release's
+   `SHA256SUMS`. `--dry-run` shows the plan without running anything, `--to PATH` picks another target,
+   `--sudo` uses `sudo` in a terminal instead of the dialog. Run it again after each Rubi Home update:
+   every hook line carries the hook's version (self-reported, so advisory), Rubi Home logs a warning when
+   this copy is older, `rubi-home status` shows its version, hash and ownership, `install-home.sh` warns
+   after an upgrade, and `claude_code_sessions` reports a problem for that computer ("the Claude Code
+   hook binary on ... is v...: run `~/.rubi-home/bin/rubi-home install-hook` there"). A hook that speaks a
+   protocol Rubi Home doesn't know is denied (events are ignored) until it is updated; a hook from before
+   v0.13 still works but is reported as old.
+
+   Manual fallback, if the dialog is not an option:
 
    ```sh
    sudo install -o root -g wheel -m 755 ~/.rubi-home/bin/rubi-home /usr/local/bin/rubi-home
    ```
 
-   Repeat after each Rubi Home update. `claude-hook` only talks to the running helper; it reads no
-   configuration and writes nothing.
+   `claude-hook` only talks to the running helper; it reads no configuration and writes nothing.
 
 3. **Pair it with Rubi.** Run `rubi-home pair` if the code has expired, then in the Rubi panel open
    Settings > Rubi Home > Add a home computer, paste the code and approve. Check that the fingerprint

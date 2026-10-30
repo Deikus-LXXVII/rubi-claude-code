@@ -332,6 +332,52 @@ func TestSessionsToolStuckComputer(t *testing.T) {
 	}
 }
 
+// A computer whose Claude Code hook binary is older than its Rubi Home (or speaks a refused protocol) gets a
+// problem that names the fix; a current or unknown hook gets none.
+func TestSessionsToolStaleHookProblem(t *testing.T) {
+	f, s, _ := boundFixture(t)
+	probs := func() []string {
+		out, err := s.sessionsTool(context.Background(), f, sessionsIn{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out.(map[string]any)["problems"].([]string)
+	}
+	if p := probs(); len(p) != 0 {
+		t.Fatalf("no hook info: %v", p)
+	}
+	f.mu.Lock()
+	f.listHook = map[string]any{"version": "v0.13.0", "path": "/usr/local/bin/rubi-home", "protocol": 1, "stale": false, "home_version": "v0.13.0"}
+	f.mu.Unlock()
+	if p := probs(); len(p) != 0 {
+		t.Fatalf("current hook: %v", p)
+	}
+	for _, tc := range []struct {
+		hook map[string]any
+		want []string
+	}{
+		{map[string]any{"version": "v0.12.1", "protocol": 1, "stale": true, "home_version": "v0.13.0"},
+			[]string{"hook binary on ", " is v0.12.1 (Rubi Home v0.13.0): run `~/.rubi-home/bin/rubi-home install-hook` there"}},
+		{map[string]any{"version": "", "protocol": 0, "stale": true, "legacy": true, "home_version": "v0.13.0"},
+			[]string{"an old one without version information (Rubi Home v0.13.0)", "install-hook"}},
+		{map[string]any{"version": "v0.20.0", "protocol": 2, "refused": true, "home_version": "v0.13.0"},
+			[]string{"v0.20.0", "protocol (2)", "denied", "install-hook"}},
+	} {
+		f.mu.Lock()
+		f.listHook = tc.hook
+		f.mu.Unlock()
+		p := probs()
+		if len(p) != 1 {
+			t.Fatalf("%v: %v", tc.hook, p)
+		}
+		for _, w := range tc.want {
+			if !strings.Contains(p[0], w) {
+				t.Errorf("problem %q lacks %q", p[0], w)
+			}
+		}
+	}
+}
+
 // TestBindUndoneWhenTheCodeCantBeDelivered: when the addressed claude_bound event can't reach the
 // sister, the binding isn't made (or the earlier one stays) and the error carries no code.
 func TestBindUndoneWhenTheCodeCantBeDelivered(t *testing.T) {
