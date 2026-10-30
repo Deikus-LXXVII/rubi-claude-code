@@ -296,3 +296,21 @@ func TestWatcherPollsSessionsSeparately(t *testing.T) {
 		t.Fatalf("ops: %v", f.ops)
 	}
 }
+
+// A computer whose Rubi Home doesn't answer the list becomes a problem in the answer, in time.
+func TestSessionsToolStuckComputer(t *testing.T) {
+	old := listTimeout
+	listTimeout = 50 * time.Millisecond
+	defer func() { listTimeout = old }()
+	f, s, _ := boundFixture(t)
+	f.listHang = true
+	start := time.Now()
+	out, err := s.sessionsTool(context.Background(), f, sessionsIn{})
+	if err != nil || time.Since(start) > 2*time.Second {
+		t.Fatalf("err %v after %s", err, time.Since(start))
+	}
+	probs := out.(map[string]any)["problems"].([]string)
+	if len(probs) != 1 || !strings.Contains(probs[0], "no session list within") {
+		t.Fatalf("problems: %v", probs)
+	}
+}

@@ -117,6 +117,10 @@ type deviceSessions struct {
 	err    error
 }
 
+// listTimeout bounds one computer's session list, so a stuck Rubi Home shows up as a problem in the
+// answer before the MCP client gives up on the whole tool call (about 60 seconds).
+var listTimeout = 40 * time.Second
+
 func listSessions(ctx context.Context, h sisterHost, repo string, archived bool) ([]deviceSessions, error) {
 	devs, err := h.HomeDevices()
 	if err != nil {
@@ -127,7 +131,12 @@ func listSessions(ctx context.Context, h sisterHost, repo string, archived bool)
 		var res struct {
 			Sessions []session `json:"sessions"`
 		}
-		err := h.HomeCall(ctx, d.ID, "claude-sessions.list", map[string]any{"repo": repo, "include_archived": archived}, &res)
+		dctx, cancel := context.WithTimeout(ctx, listTimeout)
+		err := h.HomeCall(dctx, d.ID, "claude-sessions.list", map[string]any{"repo": repo, "include_archived": archived}, &res)
+		if err != nil && dctx.Err() != nil && ctx.Err() == nil {
+			err = fmt.Errorf("no session list within %s (Rubi Home may be stuck reading a project's disk)", listTimeout)
+		}
+		cancel()
 		out = append(out, deviceSessions{d, res.Sessions, err})
 	}
 	return out, nil
