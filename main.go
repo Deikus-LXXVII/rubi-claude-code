@@ -61,6 +61,8 @@ func manifest() rubiplugin.Manifest {
 			{Kind: kindTrustProject, Title: "Let a Bot's project be trusted until 04:00", DefaultLevel: rubiplugin.Strong, Locked: true,
 				Options: []rubiplugin.Option{{Key: optionTrustProject, Label: "Trust this project until 04:00",
 					Meaning: "Until the next 04:00 (at most 24 hours; the approval names the exact time, date, time zone, the project directory, the computer and the branches) Rubi allows the plain, listed commands of every Claude Code session on that computer inside the project, and lets the Bot start and bind sessions in it without a new approval; a session it starts runs with the Claude desktop app's permission settings, and if those skip permission prompts its commands never ask. Commits go to the branch a session is on, which may be main. Push and every remote git command, --force, sudo, network commands, installs, tags, credential paths, writing outside the project and branches outside the pattern still ask"}}},
+			{Kind: kindRename, Title: "Let a Bot name a Claude Code session", DefaultLevel: rubiplugin.Tap, Locked: true,
+				Options: []rubiplugin.Option{{Key: "rename", Label: "Rename", Meaning: "Gives (or removes) the session's name in Rubi. It is a label shown in session lists and usable instead of the session's id; it changes nothing in Claude Code or the desktop app"}}},
 			{Kind: kindStart, Title: "Let a Bot start a new Claude Code session", DefaultLevel: rubiplugin.Strong, Locked: true,
 				Options: []rubiplugin.Option{{Key: "start", Label: "Start", Meaning: "Starts a new Claude Code session on your computer with the Bot's task as its first message, and binds the Bot to it. The session runs with the Claude desktop app's permission settings: if those skip permission prompts, Claude can run any command there without asking, and Rubi approvals don't apply to it"}}},
 		},
@@ -128,18 +130,29 @@ func main() {
 		}
 		return sis.executeStart(ctx, h, t)
 	})
-	p.OnPanel = func(_ context.Context, h *rubiplugin.Host, op string, args json.RawMessage) (any, error) {
-		return sis.panel(h, op, args)
+	p.OnExecute(kindRename, func(ctx context.Context, h *rubiplugin.Host, _ string, payload json.RawMessage) (any, error) {
+		var t renameTicket
+		if err := json.Unmarshal(payload, &t); err != nil {
+			return nil, fmt.Errorf("bad payload")
+		}
+		return sis.executeRename(ctx, h, t, "bot", "user approved", nil)
+	})
+	p.OnPanel = func(ctx context.Context, h *rubiplugin.Host, op string, args json.RawMessage) (any, error) {
+		return sis.panel(ctx, h, op, args)
 	}
 	rubiplugin.AddTool(p, "claude_code_sessions", "List the Claude Code sessions on the user's computers (desktop app and terminal), with project (git remote), main or sub-session, state and which Bot each is bound to. Use it to find the session responsible for your project before claude_code_bind.",
 		func(ctx context.Context, h *rubiplugin.Host, in sessionsIn) (any, error) {
 			return sis.sessionsTool(ctx, h, in)
 		})
-	rubiplugin.AddTool(p, "claude_code_bind", "Ask the user (one strong approval) to bind you to one Claude Code session, usually the main session of your project. After that you can message it with claude_code_send and you get its answers (claude_reply) and questions (claude_ask). Binding again replaces your binding.",
+	rubiplugin.AddTool(p, "claude_code_bind", "Ask the user (one strong approval) to bind you to one Claude Code session (session_id, or name of a named session), usually the main session of your project. After that you can message it with claude_code_send and you get its answers (claude_reply) and questions (claude_ask). Binding again replaces your binding.",
 		func(ctx context.Context, h *rubiplugin.Host, in bindIn) (any, error) { return sis.bindTool(ctx, h, in) })
 	rubiplugin.AddTool(p, "claude_code_start", "Ask the user (one strong approval) to start a NEW Claude Code session on their computer in a project directory, with your task as its first message, when no session exists for your project. On approval you are bound to the new session automatically (claude_bound event with your bind_code) and can use claude_code_send. The directory must be one of the user's existing Claude Code projects (see claude_code_sessions) or a folder they allowed. The session may run without permission prompts; keep the task small and specific. At most 5 requests an hour.",
 		func(ctx context.Context, h *rubiplugin.Host, in startIn) (any, error) {
 			return sis.startTool(ctx, h, in)
+		})
+	rubiplugin.AddTool(p, "claude_code_rename", "Give a Claude Code session a name in Rubi (an alias: Claude Code itself is not changed), or remove it (clear). The name shows in claude_code_sessions and claude_code_bind accepts it instead of session_id. 1 to 64 plain characters, unique on the computer ignoring case, not like an id. Without session_id or session_name it names the session you are bound to, which needs no approval; any other session needs a tap from the user (none inside a project the user trusts if you are bound inside it).",
+		func(ctx context.Context, h *rubiplugin.Host, in renameIn) (any, error) {
+			return sis.renameTool(ctx, h, in)
 		})
 	rubiplugin.AddTool(p, "claude_code_trust_project", "Ask the user (one strong approval) to trust the whole project of the Claude Code session you are bound to until the next 04:00 (at most 24 hours). While it lasts Rubi allows the plain, listed commands of every Claude Code session inside the project without asking, and you can claude_code_start sessions in it and claude_code_bind to its other sessions without a new approval (a session you start runs with the desktop app's permission settings: if those skip prompts, its commands never ask; commits, merges and rebases go to the branch it is on, maybe main). Push and every remote operation, --force, sudo, the network, installs, tags, writes outside the project and branches outside branch_pattern (default citri/*) still ask. Needs your bind_code.",
 		func(ctx context.Context, h *rubiplugin.Host, in trustIn) (any, error) {

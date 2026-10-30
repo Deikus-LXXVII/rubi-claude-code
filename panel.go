@@ -5,7 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
+
+	"github.com/Deikus-LXXVII/rubi/sdk/rubiplugin"
 )
 
 type mandatesIn struct {
@@ -46,10 +50,14 @@ func (s *sisters) mandatesTool(h sisterHost, in mandatesIn) (any, error) {
 }
 
 // panel is the plugin's page: the live mandates and the bindings, with buttons to end them.
-func (s *sisters) panel(h sisterHost, op string, args json.RawMessage) (any, error) {
+func (s *sisters) panel(ctx context.Context, h sisterHost, op string, args json.RawMessage) (any, error) {
 	var a struct {
-		ID     string `json:"id"`
-		Sister string `json:"sister"`
+		ID        string  `json:"id"`
+		Sister    string  `json:"sister"`
+		Device    string  `json:"device"`
+		SessionID string  `json:"session_id"`
+		Name      *string `json:"name"`
+		Forget    string  `json:"forget"`
 	}
 	if len(args) > 0 && string(args) != "null" {
 		if err := json.Unmarshal(args, &a); err != nil {
@@ -83,6 +91,8 @@ func (s *sisters) panel(h sisterHost, op string, args json.RawMessage) (any, err
 			}
 		}
 		return map[string]any{"unbound": ok}, nil
+	case "rename":
+		return s.panelRename(ctx, h, a.Device, a.SessionID, a.Name, a.Forget)
 	default:
 		return nil, fmt.Errorf("unknown op %q", op)
 	}
@@ -119,11 +129,175 @@ func (s *sisters) panel(h sisterHost, op string, args json.RawMessage) (any, err
 			"actions": []map[string]any{{"label": "Unbind", "op": "unbind", "args": map[string]any{"sister": b.Sister}, "danger": true, "confirm": "Unbind " + b.Sister + "?"}},
 		})
 	}
+	nameItems, nameNote := s.nameItems(ctx, h)
 	return map[string]any{"title": "Claude Code", "refresh": 30,
 		"note": "Sessions running with bypassPermissions never ask, so approvals and trusts here don't apply to them (their messages to and from Bots still work).",
 		"sections": []map[string]any{
 			{"title": "Trusted sessions (2 hours)", "note": "Rubi allows these sessions' plain, listed commands by itself, including builds and tests that run the project's own code; push, --force, sudo, network commands, credential paths and writing outside the directory or into .git still ask.", "empty": "None.", "items": mitems},
 			{"title": "Trusted projects (until 04:00)", "note": "Every Claude Code session on that computer inside the project: Rubi allows plain, listed commands by itself, including builds and tests that run the project's own code, and a Bot bound to a session of the project can start and bind sessions in it. Push and every remote git command, --force, sudo, network commands, tags, credential paths, writing outside the project and branches outside the pattern still ask.", "empty": "None.", "items": pitems},
+			{"title": "Session names", "note": nameNote, "empty": "No sessions.", "items": nameItems},
 			{"title": "Bots bound to sessions", "note": "Each Bot talks only to its session.", "empty": "None.", "items": bitems},
 		}}, nil
+}
+
+// panelRename is the user's own rename (or clear) from the panel: no approval, the page is the user's. name
+// nil means the panel did not send one (a Rubi too old to ask for it), which must not read as "clear".
+func (s *sisters) panelRename(ctx context.Context, h sisterHost, device, sessionID string, name *string, forget string) (any, error) {
+	if forget != "" {
+		ok, err := s.st.clearAliasExact(device, forget)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			h.Audit(auditRenamed, map[string]any{"device": device, "old": oneLine(forget, maxNameRunes), "new": "", "by": "user", "approval": "panel (session gone)"})
+		}
+		return map[string]any{"cleared": ok}, nil
+	}
+	if name == nil {
+		return nil, errors.New("this Rubi's panel can't ask for a name; update Rubi")
+	}
+	if sessionID == "" {
+		return nil, errors.New("no session")
+	}
+	ctx, cancel := context.WithTimeout(ctx, panelListTimeout)
+	defer cancel()
+	d, sess, all, err := lookupSession(ctx, h, device, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	t := renameTicket{Device: d.ID, DeviceName: d.Name, SessionID: sess.SessionID, AppSessionID: sess.AppSessionID}
+	if strings.TrimSpace(*name) == "" {
+		t.Clear = true
+	} else {
+		if t.Name, err = checkAliasName(*name); err != nil {
+			return nil, err
+		}
+		if err := freeName(t.Name, all, d.ID); err != nil {
+			return nil, err
+		}
+	}
+	return s.executeRename(ctx, h, t, "user", "panel", all)
+}
+
+const maxNameItems = 60
+
+// nameItems lists the live sessions, each with a button to name it, and the names whose session isn't
+// listed. A computer that doesn't answer in time is said in the note, not waited for.
+func (s *sisters) nameItems(ctx context.Context, h sisterHost) ([]map[string]any, string) {
+	note := "A name is a label kept in Rubi: it shows in session lists and a Bot can use it instead of the session's id. Claude Code itself isn't changed (rename there with /rename). 1 to 64 plain characters, unique on a computer. Clear the box to remove a name."
+	ctx, cancel := context.WithTimeout(ctx, panelListTimeout)
+	defer cancel()
+	all, err := s.nameSessions(ctx, h)
+	if err != nil {
+		return nil, note + " Couldn't read the sessions: " + oneLine(err.Error(), 120)
+	}
+	type row struct {
+		d rubiplugin.HomeDevice
+		x session
+	}
+	var rows []row
+	listed := map[string]bool{}
+	for _, ds := range all {
+		if ds.err != nil {
+			note += " " + ds.device.Name + " didn't answer."
+			continue
+		}
+		listed[ds.device.ID] = !ds.partial // a name is called orphaned only against a whole list
+		for _, x := range ds.list {
+			if x.Archived || x.State == "ended" {
+				if _, ok := s.st.aliasFor(ds.device.ID, x); !ok {
+					continue
+				}
+			}
+			rows = append(rows, row{ds.device, x})
+		}
+	}
+	slices.SortStableFunc(rows, func(a, b row) int {
+		_, an := s.st.aliasFor(a.d.ID, a.x)
+		_, bn := s.st.aliasFor(b.d.ID, b.x)
+		switch {
+		case an != bn && an:
+			return -1
+		case an != bn:
+			return 1
+		}
+		return b.x.LastActivity.Compare(a.x.LastActivity)
+	})
+	// Which names have a session is decided over all the rows, not only the ones shown.
+	seen := map[string]bool{}
+	for _, r := range rows {
+		if a, ok := s.st.aliasFor(r.d.ID, r.x); ok {
+			seen[a.Device+"|"+foldName(a.Name)] = true
+		}
+	}
+	var items []map[string]any
+	for _, r := range rows {
+		if len(items) >= maxNameItems {
+			note += fmt.Sprintf(" Showing %d of %d sessions: the named ones and the most recent.", maxNameItems, len(rows))
+			break
+		}
+		a, named := s.st.aliasFor(r.d.ID, r.x)
+		cur := ""
+		if named {
+			cur = a.Name
+		}
+		args := map[string]any{"device": r.d.ID, "session_id": firstNonEmpty(r.x.AppSessionID, r.x.SessionID)}
+		actions := []map[string]any{{"label": ifElse(named, "Rename", "Name"), "op": "rename", "args": args,
+			"prompt": map[string]any{"arg": "name", "label": "Name for this session (up to 64 characters; leave empty to remove the name)", "value": cur}}}
+		if named {
+			actions = append(actions, map[string]any{"label": "Clear name", "op": "rename", "args": map[string]any{"device": r.d.ID, "session_id": args["session_id"], "name": ""}, "danger": true})
+		}
+		items = append(items, map[string]any{
+			"title":   firstNonEmpty(cur, oneLine(r.x.Title, 80), r.x.Cwd, r.x.SessionID),
+			"detail":  oneLine(fmt.Sprintf("%s · %s · %s · %s%s", firstNonEmpty(r.d.Name, r.d.ID), firstNonEmpty(r.x.RepoKey, r.x.Cwd), r.x.Role, r.x.State, ifElse(named, " · title: "+r.x.Title, "")), 300),
+			"actions": actions})
+	}
+	for _, a := range s.st.aliases() {
+		if seen[a.Device+"|"+foldName(a.Name)] || !listed[a.Device] {
+			continue
+		}
+		items = append(items, map[string]any{"title": a.Name,
+			"detail":  fmt.Sprintf("%s · its session isn't listed (last seen %s)", firstNonEmpty(a.DeviceName, a.Device), a.Seen.Format(time.DateOnly)),
+			"actions": []map[string]any{{"label": "Remove name", "op": "rename", "args": map[string]any{"device": a.Device, "forget": a.Name}, "danger": true}}})
+	}
+	return items, note
+}
+
+func ifElse(c bool, a, b string) string {
+	if c {
+		return a
+	}
+	return b
+}
+
+// nameSessions is the full session list (archived included) the name page shows. The page reloads itself every
+// 30 seconds, so the last list is reused for nameListReuse; a rename or a clear drops it.
+func (s *sisters) nameSessions(ctx context.Context, h sisterHost) ([]deviceSessions, error) {
+	s.mu.Lock()
+	if s.nameList != nil && s.now().Sub(s.nameListAt) < nameListReuse {
+		all := s.nameList
+		s.mu.Unlock()
+		return all, nil
+	}
+	s.mu.Unlock()
+	all, err := listSessions(ctx, h, "", true)
+	if err != nil {
+		return nil, err
+	}
+	ok := true
+	for _, ds := range all {
+		ok = ok && ds.err == nil
+	}
+	if ok { // a computer that didn't answer is not cached: the page asks again soon
+		s.mu.Lock()
+		s.nameList, s.nameListAt = all, s.now()
+		s.mu.Unlock()
+	}
+	return all, nil
+}
+
+func (s *sisters) dropNameList() {
+	s.mu.Lock()
+	s.nameList = nil
+	s.mu.Unlock()
 }

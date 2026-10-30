@@ -36,6 +36,8 @@ Code runs without asking (its read-only set, or allow rules in managed settings)
   ask for Face ID or Touch ID, which Rubi accepts too. A tap never approves a `run` command.
 - `claude-code.bind` (passkey or password, can't be lowered): lets one Bot talk to one Claude Code
   session; see [Bots and sessions](#bots-and-sessions).
+- `claude-code.rename` (a passkey **tap**, can't be lowered): lets a Bot name a session other than its own;
+  see [Naming sessions](#naming-sessions).
 - Its approvals count toward Rubi's limit of 30 approved actions per hour, shared with your other actions.
 
 The approval link reaches you through your Bot: subscribe it to the plugin's `approval_needed` event (Rubi
@@ -176,6 +178,56 @@ them, it doesn't run Claude).
    `{id, session_id, state, at}`, sent to the Bot that sent it: `delivered` (Claude has it), `answered`
    (the answer went back as `claude_reply`), or `expired` (24 hours unread). `queued` is the `claude_code_send` result itself (`message_id`), so it isn't repeated as an
    event. Every event may wake the Bot's agent, so there are only these few.
+
+### Naming sessions
+
+Give a session a name that you and your Bots can use instead of its id.
+
+- **It is an alias kept in Rubi, not Claude Code's own session name.** Claude Code documents `/rename`,
+  `--name`/`-n` and the session picker (and the desktop app lets you click a title), but all of them work from
+  inside Claude Code; there is no documented way for another process to rename a session, and the files where
+  the name lives (`~/.claude/sessions/<pid>.json`, the desktop app's session store) are not documented, so the
+  plugin does not touch them. A name set here does not show in Claude Code or in the desktop app (use `/rename`
+  there as well if you want that). The alias is saved in the plugin's encrypted state, per computer and
+  session, and follows the session when the desktop app restarts it under a new id.
+- **Rules.** 1 to 64 characters, trimmed; only letters, numbers, punctuation, symbols and the ordinary space
+  (no control, zero-width, bidirectional or other invisible characters, no combining marks or variation
+  selectors, no look-alike blanks such as Hangul fillers or the braille blank, no special spaces, no two spaces in
+  a row; write accents precomposed, as "é", because the plugin has no Unicode normalization); not like an id (no `local_` prefix, UUID,
+  8 or more hexadecimal characters only, a Rubi id such as `pt_...`, or the id of a session on that computer);
+  unique on a computer, ignoring case (compared after upper- then lower-casing). A name is refused, never repaired, so what you approved is what is
+  stored. Letters of other scripts that look alike are not detected: the approval also shows the session's
+  title, directory and id.
+- **Where it shows.** `claude_code_sessions` lists `name` next to `title`; `claude_code_status` and the bind
+  result include it. `claude_code_bind` takes `name` instead of `session_id`; an unknown name, a name used on
+  two computers (pass `device`) or a name whose session has gone is a clear error. `claude_code_send`,
+  `claude_code_status` and `claude_code_start` take no session (they act on the bound session or start a new
+  one), so there is nothing to resolve in them.
+- **`claude_code_rename {session_id | session_name, device?, name | clear}`.** Without a session it names the
+  session the Bot is bound to, which needs **no approval** (audited as `session_renamed`; the result shows
+  `previous_name`). A name the user set in the panel (or a Bot set with the user's tap) is the user's: replacing
+  or clearing it needs a tap even on the Bot's own session or under a trust. Any other session
+  needs a passkey **tap** from you, unless a live project trust (`pt_...`, see
+  [Trust a project until 04:00](#trust-a-project-until-0400)) covers the session's directory and the Bot is
+  bound to a session inside the same root: then it needs none (audited like the trust's other shortcuts). Tap,
+  not Strong, because a name is a reversible label inside Rubi that changes nothing in Claude Code; Strong stays
+  for what gives a Bot reach (bind, start, trust). At most 20 renames an hour per Bot, 500 names in all.
+- **In the panel.** The plugin's page has a "Session names" list (it reuses the last session list for 5
+  minutes, so its 30-second reload doesn't re-read every session; a rename shows at once): **Name** / **Rename**
+  asks for the name in a box the panel draws, titled "Claude Code asks:",
+  **Clear name** removes it, and a name whose session is gone has **Remove name**. You may rename any session
+  there directly; the same rules apply. It needs a Rubi whose panel can ask for text (the action's
+  `prompt`); an older panel gets an error instead of clearing a name by accident.
+- **Expiry.** A name is dropped when its session has not been seen for 30 days and a *whole* list of its
+  computer's sessions (archived ones included) lacks it, or when its computer has not been paired for 30 days.
+  Rubi Home's list is not always whole: it is cut at 200 sessions, a scan may reach its caps (2000 desktop
+  files, 200 transcripts from the last 30 days) or not finish, and an old scan is served while a new one runs.
+  Home says so with `truncated: true` (and `total` when it cut the list); the plugin never drops a name on such a
+  list (an older Rubi Home that doesn't say it is treated as whole, so update it), and binding by a name whose
+  session is missing from one uses the saved ids and the directory, project and title from when the session was
+  last seen, with a note in the approval. The sweep reads the archived sessions too, which is heavier, so it runs
+  only when names exist and at most every 10 minutes (on `claude_code_sessions` without a `repo`, a rename or a
+  bind by name).
 
 ### Starting a session when none exists
 

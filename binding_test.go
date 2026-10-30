@@ -225,7 +225,7 @@ func TestPanel(t *testing.T) {
 	f, s, _ := boundFixture(t)
 	now := time.Now()
 	_ = s.st.issue(mandate{ID: "md_x", Device: mac.ID, SessionID: "s", Cwd: "/p", Expires: now.Add(time.Hour), MaxUses: 5}, now)
-	v, err := s.panel(f, "view", nil)
+	v, err := s.panel(context.Background(), f, "view", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,10 +233,10 @@ func TestPanel(t *testing.T) {
 	if !strings.Contains(string(b), "md_x") || !strings.Contains(string(b), "Citri") {
 		t.Fatalf("view: %s", b)
 	}
-	if _, err := s.panel(f, "revoke", json.RawMessage(`{"id":"md_x"}`)); err != nil || len(s.st.mandates(now)) != 0 {
+	if _, err := s.panel(context.Background(), f, "revoke", json.RawMessage(`{"id":"md_x"}`)); err != nil || len(s.st.mandates(now)) != 0 {
 		t.Fatal("revoke from the panel failed")
 	}
-	if _, err := s.panel(f, "unbind", json.RawMessage(`{"sister":"Citri"}`)); err != nil || len(s.st.bindings()) != 0 {
+	if _, err := s.panel(context.Background(), f, "unbind", json.RawMessage(`{"sister":"Citri"}`)); err != nil || len(s.st.bindings()) != 0 {
 		t.Fatal("unbind from the panel failed")
 	}
 	// Unbinding what isn't bound changes nothing, so the audit log doesn't claim a removal.
@@ -244,7 +244,7 @@ func TestPanel(t *testing.T) {
 		return len(slices.DeleteFunc(slices.Clone(f.audits), func(a string) bool { return a != "binding_removed" }))
 	}
 	n := removed()
-	if v, err := s.panel(f, "unbind", json.RawMessage(`{"sister":"Citri"}`)); err != nil || v.(map[string]any)["unbound"] != false || removed() != n {
+	if v, err := s.panel(context.Background(), f, "unbind", json.RawMessage(`{"sister":"Citri"}`)); err != nil || v.(map[string]any)["unbound"] != false || removed() != n {
 		t.Fatalf("unbinding nothing: %v %v, removals %d -> %d", v, err, n, removed())
 	}
 }

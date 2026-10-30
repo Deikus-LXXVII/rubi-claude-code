@@ -45,7 +45,10 @@ type fakeHost struct {
 	bound     []map[string]any
 	createFn  func(ctx context.Context, args map[string]any) (map[string]any, error) // claude-sessions.create (nil: an old Rubi Home)
 	creates   []map[string]any
-	saveErr   error // SaveState fails
+	saveErr   error  // SaveState fails
+	listCut   bool   // claude-sessions.list says truncated
+	listCalls int    // claude-sessions.list calls
+	listArch  []bool // include_archived of each claude-sessions.list call
 }
 
 type decided struct {
@@ -99,7 +102,15 @@ func (f *fakeHost) HomeCall(ctx context.Context, device, op string, args, out an
 			return errors.New("Rubi Home didn't answer")
 		}
 		f.mu.Lock()
+		f.listCalls++
+		if m, ok := args.(map[string]any); ok {
+			arch, _ := m["include_archived"].(bool)
+			f.listArch = append(f.listArch, arch)
+		}
 		ans := map[string]any{"sessions": f.sessions}
+		if f.listCut {
+			ans["truncated"] = true
+		}
 		if f.listHook != nil {
 			ans["hook"] = f.listHook
 		}

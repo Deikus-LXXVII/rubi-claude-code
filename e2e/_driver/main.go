@@ -1085,6 +1085,30 @@ func run(dir, rubiBin, homeBin, plugin string) (err error) {
 	}
 	step("7 in bypassPermissions too, UserPromptSubmit brings the message in and Stop sends the answer back")
 
+	// Case 7a: the Bot names the session it is bound to (no approval); claude_code_sessions shows the name; a
+	// forged caller and a bad name are refused; clearing it removes it.
+	if _, err := ag.call("claude_code_rename", map[string]any{"rubi_agent": sister, "rubi_verified_agent": sister, "name": "E2E core"}); err == nil {
+		return errors.New("a rename without a proof went through")
+	}
+	if _, err := ag.call("claude_code_rename", map[string]any{"rubi_agent": sister, "rubi_agent_code": agentCode, "name": "bad\u200bname"}); err == nil {
+		return errors.New("a name with an invisible character was accepted")
+	}
+	rn, err := ag.call("claude_code_rename", map[string]any{"rubi_agent": sister, "rubi_agent_code": agentCode, "name": "E2E core"})
+	if err != nil || rn["renamed"] != true || rn["status"] == "awaiting_approval" {
+		return fmt.Errorf("renaming the Bot's own session: %v %v", rn, err)
+	}
+	sl7, err := ag.call("claude_code_sessions", map[string]any{"repo": "e2e/proj"})
+	if err != nil {
+		return err
+	}
+	if l, _ := sl7["sessions"].([]any); len(l) != 1 || l[0].(map[string]any)["name"] != "E2E core" {
+		return fmt.Errorf("claude_code_sessions after the rename: %v", sl7)
+	}
+	if cl, err := ag.call("claude_code_rename", map[string]any{"rubi_agent": sister, "rubi_agent_code": agentCode, "clear": true}); err != nil || cl["cleared"] != true {
+		return fmt.Errorf("clearing the name: %v %v", cl, err)
+	}
+	step("7 the Bot names its own session without an approval (forged caller and invisible characters refused), claude_code_sessions shows the name, clear removes it")
+
 	// Case 7b: the session is idle (its last Stop is played) and a waiter hook is attached, as Claude
 	// Code's background Stop hook would be. A message wakes it within seconds, the Bot is told it was
 	// delivered, and the answer at the next Stop comes back with "answered".

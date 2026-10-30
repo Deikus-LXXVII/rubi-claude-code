@@ -47,7 +47,7 @@ func TestRubiHomeIsToldAboutBindings(t *testing.T) {
 	f.mu.Lock()
 	f.bound = nil
 	f.mu.Unlock()
-	if _, err := s.panel(f, "unbind", json.RawMessage(`{"sister":"citri"}`)); err != nil {
+	if _, err := s.panel(context.Background(), f, "unbind", json.RawMessage(`{"sister":"citri"}`)); err != nil {
 		t.Fatal(err)
 	}
 	if got := boundCalls(f); !slices.Equal(got, []string{"Citri|cli-2|unbound"}) {
@@ -57,7 +57,7 @@ func TestRubiHomeIsToldAboutBindings(t *testing.T) {
 	f.mu.Lock()
 	f.bound = nil
 	f.mu.Unlock()
-	_, _ = s.panel(f, "unbind", json.RawMessage(`{"sister":"Citri"}`))
+	_, _ = s.panel(context.Background(), f, "unbind", json.RawMessage(`{"sister":"Citri"}`))
 	if got := boundCalls(f); len(got) != 0 {
 		t.Fatalf("%v", got)
 	}

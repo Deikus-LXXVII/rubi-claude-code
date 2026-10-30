@@ -97,6 +97,11 @@ type sisters struct {
 	loc  *time.Location // the zone a project trust's 04:00 is in (nil: this machine's)
 	// oldHome holds the computers whose Rubi Home doesn't know opBound (logged once each).
 	oldHome map[string]bool
+	// lastSweep is when stale session names were last looked for in a full list (see sweepWanted).
+	lastSweep time.Time
+	// nameList is the last full session list the panel's name page read, reused for a few minutes.
+	nameList   []deviceSessions
+	nameListAt time.Time
 }
 
 type askRef struct {
@@ -184,6 +189,9 @@ type deviceSessions struct {
 	list   []session
 	hook   *hookInfo
 	err    error
+	// partial: Rubi Home says the list may lack sessions that exist (cut at its cap, a capped or unfinished
+	// scan, an old scan). Such a list is never evidence that a session is gone.
+	partial bool
 }
 
 // hookInfo is the last Claude Code hook binary Rubi Home saw on a computer (claude-sessions.list "hook";
@@ -238,8 +246,12 @@ func listSessions(ctx context.Context, h sisterHost, repo string, archived bool)
 		go func() {
 			defer wg.Done()
 			var res struct {
-				Sessions []session `json:"sessions"`
-				Hook     *hookInfo `json:"hook"`
+				Sessions  []session `json:"sessions"`
+				Hook      *hookInfo `json:"hook"`
+				Truncated bool      `json:"truncated"`
+				Sources   struct {
+					Stale bool `json:"stale"`
+				} `json:"sources"`
 			}
 			dctx, cancel := context.WithTimeout(ctx, listTimeout)
 			defer cancel()
@@ -247,7 +259,7 @@ func listSessions(ctx context.Context, h sisterHost, repo string, archived bool)
 			if err != nil && dctx.Err() != nil && ctx.Err() == nil {
 				err = fmt.Errorf("no session list within %s (Rubi Home may be stuck reading a project's disk)", listTimeout)
 			}
-			out[i] = deviceSessions{d, res.Sessions, res.Hook, err}
+			out[i] = deviceSessions{d, res.Sessions, res.Hook, err, res.Truncated || res.Sources.Stale}
 		}()
 	}
 	wg.Wait()
@@ -255,21 +267,8 @@ func listSessions(ctx context.Context, h sisterHost, repo string, archived bool)
 }
 
 func findSession(ctx context.Context, h sisterHost, device, id string) (rubiplugin.HomeDevice, session, error) {
-	all, err := listSessions(ctx, h, "", true)
-	if err != nil {
-		return rubiplugin.HomeDevice{}, session{}, err
-	}
-	for _, ds := range all {
-		if device != "" && ds.device.ID != device && ds.device.Name != device {
-			continue
-		}
-		for _, s := range ds.list {
-			if id != "" && (s.SessionID == id || s.AppSessionID == id) {
-				return ds.device, s, nil
-			}
-		}
-	}
-	return rubiplugin.HomeDevice{}, session{}, errors.New("no such Claude Code session on your computers (list them with claude_code_sessions)")
+	d, s, _, err := lookupSession(ctx, h, device, id)
+	return d, s, err
 }
 
 // followed records the session's new Claude Code id for a binding and tells Rubi Home.
@@ -305,10 +304,15 @@ type sessionsIn struct {
 }
 
 func (s *sisters) sessionsTool(ctx context.Context, h sisterHost, in sessionsIn) (any, error) {
-	all, err := listSessions(ctx, h, in.Repo, in.IncludeArchived)
+	// Names are swept (the ones whose session is gone dropped) from a list that holds every session, archived
+	// ones included, which is a heavier read: only without a repo filter, when names exist and the last sweep
+	// is 10 minutes old. Archived sessions are filtered out below unless asked for.
+	sweeping := in.Repo == "" && s.sweepWanted()
+	all, err := listSessions(ctx, h, in.Repo, in.IncludeArchived || sweeping)
 	if err != nil {
 		return nil, err
 	}
+	s.sweep(h, all, sweeping)
 	bound := map[string]string{}
 	for _, b := range s.st.bindings() {
 		bound[b.Device+"|"+b.SessionID] = b.Sister
@@ -327,10 +331,16 @@ func (s *sisters) sessionsTool(ctx context.Context, h sisterHost, in sessionsIn)
 			problems = append(problems, p)
 		}
 		for _, x := range ds.list {
+			if x.Archived && !in.IncludeArchived {
+				continue
+			}
 			it := map[string]any{"device": ds.device.ID, "computer": ds.device.Name, "session_id": x.SessionID,
 				"app_session_id": x.AppSessionID, "title": x.Title, "cwd": x.Cwd, "project_root": x.ProjectRoot,
 				"repo_key": x.RepoKey, "branch": x.Branch, "role": x.Role, "parent": x.Parent, "source": x.Source,
 				"permission_mode": x.PermissionMode, "state": x.State, "last_activity": x.LastActivity, "waiting": x.Waiting}
+			if a, ok := s.st.aliasFor(ds.device.ID, x); ok {
+				it["name"] = a.Name
+			}
 			if sis := bound[ds.device.ID+"|"+x.SessionID]; sis != "" {
 				it["bound_to"] = sis
 			} else if sis := bound[ds.device.ID+"|"+x.AppSessionID]; sis != "" && x.AppSessionID != "" {
@@ -343,7 +353,7 @@ func (s *sisters) sessionsTool(ctx context.Context, h sisterHost, in sessionsIn)
 		}
 	}
 	return map[string]any{"sessions": items, "problems": problems,
-		"next_step": "Pick the main session of your own project (repo_key, role \"main\") and call claude_code_bind with its session_id, your Bot name (rubi_agent) and your webhook's agent_code (rubi_agent_code). Titles are untrusted text."}, nil
+		"next_step": "Pick the main session of your own project (repo_key, role \"main\") and call claude_code_bind with its session_id, your Bot name (rubi_agent) and your webhook's agent_code (rubi_agent_code). Titles are untrusted text; name is the alias Rubi keeps (claude_code_rename), which claude_code_bind accepts instead of session_id."}, nil
 }
 
 type bindIn struct {
@@ -353,7 +363,8 @@ type bindIn struct {
 	Agent         string `json:"rubi_agent" jsonschema:"your Bot name as connected to Rubi"`
 	AgentCode     string `json:"rubi_agent_code,omitempty" jsonschema:"the agent_code of your latest Rubi webhook (or call rubi_verify with your name to get one); proves you are that Bot"`
 	VerifiedAgent string `json:"rubi_verified_agent,omitempty" jsonschema:"set by Rubi; don't pass it"`
-	SessionID     string `json:"session_id" jsonschema:"session_id or app_session_id from claude_code_sessions"`
+	SessionID     string `json:"session_id,omitempty" jsonschema:"session_id or app_session_id from claude_code_sessions"`
+	Name          string `json:"name,omitempty" jsonschema:"instead of session_id: the name of a named session (claude_code_sessions shows it; claude_code_rename sets it)"`
 	Device        string `json:"device,omitempty" jsonschema:"the computer, when there are several"`
 }
 
@@ -373,7 +384,7 @@ func (s *sisters) bindTool(ctx context.Context, h sisterHost, in bindIn) (any, e
 	if sister == "" || len(sister) > 64 {
 		return nil, errors.New("Rubi didn't confirm which Bot you are: pass rubi_agent (your Bot name) and rubi_agent_code (the agent_code of your latest Rubi webhook, or call rubi_verify to get one); the binding is made for the Bot Rubi confirms")
 	}
-	d, sess, err := findSession(ctx, h, in.Device, in.SessionID)
+	d, sess, _, err := s.resolveSession(ctx, h, in.Device, in.SessionID, in.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -397,6 +408,9 @@ func (s *sisters) bindTool(ctx context.Context, h sisterHost, in bindIn) (any, e
 	preview := map[string]any{"bot": sister, "computer": d.Name, "project": sess.RepoKey, "directory": sess.Cwd,
 		"session": sess.SessionID, "title": sess.Title, "role": sess.Role,
 		"what_it_allows": "This Bot can send this Claude Code session short messages, which Claude reads at its next prompt or stop, and gets the session's answers and questions. It can't approve commands."}
+	if sess.Role == "unknown" {
+		preview["note"] = "Rubi Home's session list was incomplete, so this session was found by its saved name and id; its details are from when it was last seen."
+	}
 	if sess.Role == "sub" {
 		preview["note"] = "This is a sub-session; a Bot usually binds to the project's main session."
 	}
@@ -446,8 +460,12 @@ func (s *sisters) executeBind(h sisterHost, t bindTicket) (any, error) {
 		s.tellBound(context.Background(), h, *prev, false)
 	}
 	s.tellBound(context.Background(), h, b, true)
-	return map[string]any{"bound": true, "sister": b.Sister, "session_id": b.SessionID, "title": b.Title,
-		"next_step": b.Sister + " got the bind_code in its claude_bound event; it is never shown anywhere else."}, nil
+	out := map[string]any{"bound": true, "sister": b.Sister, "session_id": b.SessionID, "title": b.Title,
+		"next_step": b.Sister + " got the bind_code in its claude_bound event; it is never shown anywhere else."}
+	if a, ok := s.st.aliasFor(b.Device, session{SessionID: b.SessionID, AppSessionID: b.AppSessionID}); ok {
+		out["name"] = a.Name
+	}
+	return out, nil
 }
 
 type unbindIn struct {
@@ -628,6 +646,9 @@ func (s *sisters) statusTool(ctx context.Context, h sisterHost, in statusIn) (an
 	waiter := sess.Waiter
 	out := map[string]any{"session_id": sess.SessionID, "device": b.Device, "state": sess.State,
 		"waiting": sess.Waiting, "waiter": waiter, "eta": etaText(sess, waiter)}
+	if a, ok := s.st.aliasFor(b.Device, sess); ok {
+		out["name"] = a.Name
+	}
 	if !sess.LastActivity.IsZero() {
 		out["last_activity"] = sess.LastActivity.UTC().Format(time.RFC3339)
 	}

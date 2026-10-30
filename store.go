@@ -12,6 +12,7 @@ type pluginState struct {
 	Mandates []mandate      `json:"mandates,omitempty"`
 	Projects []projectTrust `json:"project_trusts,omitempty"`
 	Bindings []binding      `json:"bindings,omitempty"`
+	Aliases  []alias        `json:"session_names,omitempty"`
 }
 
 // binding ties one Bot (a "sister") to one Claude Code session: the Bot's messages reach only that

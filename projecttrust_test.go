@@ -426,7 +426,7 @@ func TestProjectTrustRevokeAndCoexistence(t *testing.T) {
 	if len(pl) != 1 || pl[0]["id"] != pt || pl[0]["project_root"] != ptRoot || pl[0]["branches"] != "citri/*" || pl[0]["uses"] == nil {
 		t.Fatalf("list %v", list)
 	}
-	view, err := s.panel(f, "view", nil)
+	view, err := s.panel(context.Background(), f, "view", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -436,7 +436,7 @@ func TestProjectTrustRevokeAndCoexistence(t *testing.T) {
 			t.Errorf("panel lacks %q: %s", want, raw)
 		}
 	}
-	if _, err := s.panel(f, "revoke", json.RawMessage(`{"id":"`+pt+`"}`)); err != nil || len(s.st.projects(*now)) != 0 {
+	if _, err := s.panel(context.Background(), f, "revoke", json.RawMessage(`{"id":"`+pt+`"}`)); err != nil || len(s.st.projects(*now)) != 0 {
 		t.Fatalf("panel revoke: %v %v", err, s.st.projects(*now))
 	}
 	grantViaOption(t, f, s, "cli-1", ptRoot)
