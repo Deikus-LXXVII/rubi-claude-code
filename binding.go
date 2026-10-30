@@ -378,12 +378,18 @@ func (s *sisters) sendTool(ctx context.Context, h sisterHost, in sendIn) (any, e
 		}
 		target = ref.session
 	}
+	var sess session
 	if target == "" {
-		sess, err := s.current(ctx, h, b)
-		if err != nil {
+		var err error
+		if sess, err = s.current(ctx, h, b); err != nil {
 			return nil, err
 		}
 		target = sess.SessionID
+	} else if _, found, err := findSession(ctx, h, b.Device, target); err == nil {
+		sess = found
+	}
+	if sess.State == "ended" {
+		return nil, errors.New("that Claude Code session has ended, so nobody would read the message; bind to a live one (claude_code_sessions)")
 	}
 	var res struct {
 		Queued  bool   `json:"queued"`
@@ -394,8 +400,29 @@ func (s *sisters) sendTool(ctx context.Context, h sisterHost, in sendIn) (any, e
 		return nil, err
 	}
 	h.Audit("message_sent", map[string]any{"sister": b.Sister, "session": target, "message": res.ID, "chars": len([]rune(text))})
-	return map[string]any{"queued": res.Queued, "message_id": res.ID, "waiting": res.Waiting,
-		"delivery": "Claude reads it when the session next stops or gets a prompt; its answer comes as a claude_reply event."}, nil
+	out := map[string]any{"queued": res.Queued, "message_id": res.ID, "waiting": res.Waiting,
+		"session_state": sess.State, "delivery": deliveryHint(sess, s.now())}
+	if !sess.LastActivity.IsZero() {
+		out["last_activity"] = sess.LastActivity.UTC().Format(time.RFC3339)
+	}
+	return out, nil
+}
+
+// deliveryHint says when Claude is likely to read a queued message, from the session's state: a busy
+// session reads it at its next stop, an idle one only when the user prompts it again.
+func deliveryHint(sess session, now time.Time) string {
+	const answer = " Its answer comes as a claude_reply event."
+	switch sess.State {
+	case "busy":
+		return "The session is working: Claude reads it at its next stop, usually within minutes." + answer
+	case "idle":
+		since := ""
+		if !sess.LastActivity.IsZero() {
+			since = fmt.Sprintf(" (idle for %s)", now.Sub(sess.LastActivity).Round(time.Minute))
+		}
+		return "The session is idle" + since + ": Claude reads it only when the user next prompts it, which may be hours. Don't wait on it." + answer
+	}
+	return "Claude reads it when the session next stops or gets a prompt; Rubi doesn't know when that will be." + answer
 }
 
 // ---- what sessions say ----

@@ -355,3 +355,45 @@ func TestBindUndoneWhenTheCodeCantBeDelivered(t *testing.T) {
 		t.Fatalf("a binding without a delivered code was kept: %v %+v", err, s.st.bindings())
 	}
 }
+
+// TestSendSaysWhenClaudeReads: claude_code_send reports the session's state and when Claude is likely
+// to read the message; a message to an ended session isn't queued at all.
+func TestSendSaysWhenClaudeReads(t *testing.T) {
+	f, s, code := boundFixture(t)
+	ctx := context.Background()
+	now := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { return now }
+	set := func(state string, last time.Time) {
+		f.mu.Lock()
+		f.sessions[0].State, f.sessions[0].LastActivity = state, last
+		f.mu.Unlock()
+	}
+	send := func() map[string]any {
+		t.Helper()
+		res, err := s.sendTool(ctx, f, sendIn{Sister: "Citri", BindCode: code, Text: "hi"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res.(map[string]any)
+	}
+
+	set("idle", now.Add(-30*time.Minute))
+	r := send()
+	if r["session_state"] != "idle" || !strings.Contains(r["delivery"].(string), "idle for 30m") ||
+		!strings.Contains(r["delivery"].(string), "next prompts it") || r["last_activity"] != "2026-10-30T11:30:00Z" {
+		t.Fatalf("idle: %+v", r)
+	}
+	set("busy", now.Add(-time.Minute))
+	if r := send(); r["session_state"] != "busy" || !strings.Contains(r["delivery"].(string), "next stop") {
+		t.Fatalf("busy: %+v", r)
+	}
+	set("unknown", time.Time{})
+	if r := send(); r["session_state"] != "unknown" || r["last_activity"] != nil || !strings.Contains(r["delivery"].(string), "doesn't know") {
+		t.Fatalf("unknown: %+v", r)
+	}
+	n := len(f.sent)
+	set("ended", now.Add(-time.Hour))
+	if _, err := s.sendTool(ctx, f, sendIn{Sister: "Citri", BindCode: code, Text: "hi"}); err == nil || !strings.Contains(err.Error(), "ended") || len(f.sent) != n {
+		t.Fatalf("ended session: %v, sent %d", err, len(f.sent)-n)
+	}
+}
