@@ -894,6 +894,8 @@ func run(dir, rubiBin, homeBin, plugin string) (err error) {
 	}
 	if res, err := bpc.ApproveWithPassword(fmt.Sprint(bo["approval_id"]), "bind", pw); err != nil || res["state"] != "executed" {
 		return fmt.Errorf("bind: %v %v", res, err)
+	} else if raw, _ := json.Marshal(res); strings.Contains(string(raw), "bc_") {
+		return errors.New("the bind approval's result carries the bind code (it must only reach the Bot in claude_bound)")
 	}
 	bound, err := eventFor("the claude_bound event", "claude_bound", func(d map[string]any) bool { return d["session_id"] == "cli-e2e" })
 	if err != nil {

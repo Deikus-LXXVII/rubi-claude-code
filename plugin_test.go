@@ -17,23 +17,24 @@ import (
 // fakeHost stands in for Rubi: Submit and WaitApproval give scripted approval results; HomeCall plays
 // the helper.
 type fakeHost struct {
-	mu       sync.Mutex
-	devices  []rubiplugin.HomeDevice
-	next     func(ctx context.Context, device string) (*request, error)
-	submit   func(r rubiplugin.Request) (map[string]any, error)
-	states   []string // WaitApproval answers in turn; the last one repeats
-	submits  []rubiplugin.Request
-	decided  []decided
-	events   []map[string]any
-	decideFn func(device string, a answer) error
-	sessions []session // claude-sessions.list answers
-	listHang bool      // claude-sessions.list never answers (until ctx ends)
-	outs     []outMsg  // claude-sessions.next answers, one per call
-	ops      []string  // every op called
-	sent     []map[string]any
-	audits   []string
-	auditLog []map[string]any
-	state    json.RawMessage
+	mu        sync.Mutex
+	devices   []rubiplugin.HomeDevice
+	next      func(ctx context.Context, device string) (*request, error)
+	submit    func(r rubiplugin.Request) (map[string]any, error)
+	states    []string // WaitApproval answers in turn; the last one repeats
+	submits   []rubiplugin.Request
+	decided   []decided
+	events    []map[string]any
+	decideFn  func(device string, a answer) error
+	sessions  []session // claude-sessions.list answers
+	listHang  bool      // claude-sessions.list never answers (until ctx ends)
+	outs      []outMsg  // claude-sessions.next answers, one per call
+	ops       []string  // every op called
+	sent      []map[string]any
+	audits    []string
+	auditLog  []map[string]any
+	state     json.RawMessage
+	emitToErr error // EmitTo fails (no Bot of that name with a webhook)
 }
 
 type decided struct {
@@ -102,6 +103,12 @@ func (f *fakeHost) HomeCall(ctx context.Context, device, op string, args, out an
 }
 
 func (f *fakeHost) EmitTo(agent, typ string, data map[string]any) (string, error) {
+	f.mu.Lock()
+	err := f.emitToErr
+	f.mu.Unlock()
+	if agent != "" && err != nil {
+		return "", err
+	}
 	data["_agent"] = agent
 	return f.Emit(typ, data)
 }

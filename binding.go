@@ -283,17 +283,34 @@ func (s *sisters) executeBind(h sisterHost, t bindTicket) (any, error) {
 	}
 	b := binding{Sister: t.Sister, Device: t.Device, DeviceName: t.DeviceName, SessionID: t.SessionID, AppSessionID: t.AppSessionID,
 		RepoKey: t.RepoKey, Cwd: t.Cwd, Title: t.Title, Code: newID("bc_"), Since: s.now().UTC()}
+	var prev *binding
+	for _, x := range s.st.bindings() {
+		if x.Sister == b.Sister {
+			prev = &x
+		}
+	}
 	if err := s.st.bind(b); err != nil {
 		return nil, err
 	}
-	h.Audit("binding_created", map[string]any{"sister": b.Sister, "device": b.Device, "session": b.SessionID, "app_session": b.AppSessionID, "project": b.RepoKey})
+	// The code goes to the sister alone, in an event addressed to her (Rubi delivers it to that Bot's
+	// webhook only, or drops it). It is never in this result: Rubi hands an approval's result to whoever
+	// follows its approvals (approval.decided), which may be another Bot.
 	data := map[string]any{"session_id": b.SessionID, "app_session_id": b.AppSessionID, "project": b.RepoKey, "directory": b.Cwd,
 		"title": b.Title, "bind_code": b.Code,
 		"next_step": "Keep bind_code private. Send the session short asks with claude_code_send {sister, bind_code, text}; its answers arrive as claude_reply events."}
 	if _, err := h.EmitTo(b.Sister, eventBound, data); err != nil {
-		h.Logf("telling %s about the binding: %v", b.Sister, err)
+		// Without its code the sister can't use the binding: put back what was there and say why.
+		if prev != nil {
+			_ = s.st.bind(*prev)
+		} else {
+			_, _ = s.st.unbind(b.Sister)
+		}
+		h.Audit("binding_undone", map[string]any{"sister": b.Sister, "session": b.SessionID, "reason": "the code couldn't be delivered"})
+		return nil, fmt.Errorf("not bound: Rubi couldn't deliver the binding's code to %s (%v); connect that Bot with a webhook, then bind again", b.Sister, err)
 	}
-	return map[string]any{"bound": true, "sister": b.Sister, "session_id": b.SessionID, "bind_code": b.Code}, nil
+	h.Audit("binding_created", map[string]any{"sister": b.Sister, "device": b.Device, "session": b.SessionID, "app_session": b.AppSessionID, "project": b.RepoKey})
+	return map[string]any{"bound": true, "sister": b.Sister, "session_id": b.SessionID, "title": b.Title,
+		"next_step": b.Sister + " got the bind_code in its claude_bound event; it is never shown anywhere else."}, nil
 }
 
 type unbindIn struct {

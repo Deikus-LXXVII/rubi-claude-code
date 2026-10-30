@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -36,7 +37,15 @@ func boundFixture(t *testing.T) (*fakeHost, *sisters, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	code := res.(map[string]any)["bind_code"].(string)
+	// The approval's result goes to whoever follows approvals: the code must never be in it.
+	if raw, _ := json.Marshal(res); strings.Contains(string(raw), "bc_") || strings.Contains(string(raw), `"bind_code"`) {
+		t.Fatalf("the approval result carries the bind code: %s", raw)
+	}
+	ev := f.events[len(f.events)-1]
+	if ev["_type"] != eventBound || ev["_agent"] != "Citri" {
+		t.Fatalf("the code didn't go to the sister alone: %+v", ev)
+	}
+	code := ev["bind_code"].(string)
 	return f, s, code
 }
 
@@ -312,5 +321,37 @@ func TestSessionsToolStuckComputer(t *testing.T) {
 	probs := out.(map[string]any)["problems"].([]string)
 	if len(probs) != 1 || !strings.Contains(probs[0], "no session list within") {
 		t.Fatalf("problems: %v", probs)
+	}
+}
+
+// TestBindUndoneWhenTheCodeCantBeDelivered: when the addressed claude_bound event can't reach the
+// sister, the binding isn't made (or the earlier one stays) and the error carries no code.
+func TestBindUndoneWhenTheCodeCantBeDelivered(t *testing.T) {
+	f, s, code := boundFixture(t)
+	ctx := context.Background()
+	f.mu.Lock()
+	f.emitToErr = errors.New("no Bot named Citri is connected")
+	f.mu.Unlock()
+	if _, err := s.bindTool(ctx, f, bindIn{VerifiedAgent: "Citri", SessionID: "cli-3"}); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(f.submits[len(f.submits)-1].Payload)
+	var tk bindTicket
+	_ = json.Unmarshal(raw, &tk)
+	res, err := s.executeBind(f, tk)
+	if err == nil || res != nil || strings.Contains(err.Error(), "bc_") {
+		t.Fatalf("undelivered bind: %v %v", res, err)
+	}
+	bs := s.st.bindings()
+	if len(bs) != 1 || bs[0].SessionID != "cli-1" || bs[0].Code != code || !slices.Contains(f.audits, "binding_undone") {
+		t.Fatalf("the earlier binding should stay: %+v %v", bs, f.audits)
+	}
+
+	// A first binding that can't be delivered leaves nothing behind.
+	if _, err := s.unbindTool(ctx, f, unbindIn{Sister: "Citri", BindCode: code, VerifiedAgent: "Citri"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.executeBind(f, tk); err == nil || len(s.st.bindings()) != 0 {
+		t.Fatalf("a binding without a delivered code was kept: %v %+v", err, s.st.bindings())
 	}
 }
