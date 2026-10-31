@@ -505,7 +505,7 @@ version is admitted (audit and history say `design-tokens 3 -> 4`; the change is
 hosts or MCP servers, and Revert undoes it). The check runs when the role's page is opened (at most every 30 seconds per
 role) and every 10 minutes from the plugin's poll loop (at most 12 roles and 40 library calls each time). A withdrawn
 version is dropped at the next check, audited per role (`role.library_dropped`); a deprecated one stays. A failure to
-reach the library (Rubi locked, no answer) is never read as a withdrawal. The panel's role page has **Pin to this
+reach the library (Rubi locked, no answer) is never read as a withdrawal. A skill the curator admitted for its own Bot is still tier 1 but marked: the attach's audit summary and the role page say "self-admitted by curator"; the role page also shows a withdrawn version as "withdrawn (removed at next start)" when the library says so. The panel's role page has **Pin to this
 version** and **Follow the latest** per library skill. Submitting an ad-hoc skill to the library is the Bot tool
 `rubi_library_submit` in Rubi's core; nothing in this plugin does it.
 

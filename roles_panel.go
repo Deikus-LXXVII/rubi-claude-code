@@ -254,6 +254,7 @@ func (s *sisters) rolePage(ctx context.Context, h sisterHost, p panelPage) (any,
 	if err != nil {
 		return nil, err
 	}
+	s.refreshLibraryMarks(ctx, h, d.ID, r)
 	lim := roleLimitsOf(h)
 	args := func(extra ...any) map[string]any {
 		m := panelPage{Device: d.ID, Role: r.ID}.args()
@@ -297,7 +298,17 @@ func (s *sisters) rolePage(ctx context.Context, h sisterHost, p panelPage) (any,
 
 	var skills []map[string]any
 	for _, k := range r.Skills {
-		it := map[string]any{"title": clipOne(k.Name, 48), "detail": oneLine(skillTag(k), 400)}
+		tag := skillTag(k)
+		it := map[string]any{"title": clipOne(k.Name, 48)}
+		if k.Source == "library" {
+			if m := s.libraryMark(d.ID, r.ID, k); m.Withdrawn {
+				tag += " · " + withdrawnPageNote
+				it["warn"] = true
+			} else if m.SelfAdmitted {
+				tag += " · " + selfAdmittedNote
+			}
+		}
+		it["detail"] = oneLine(tag, 400)
 		if k.State == "held" {
 			it["warn"] = true
 			it["actions"] = remove("role_skill_remove", k.Name, map[string]any{"label": "Accept", "op": "role_skill_accept", "args": args("item", k.Name)})

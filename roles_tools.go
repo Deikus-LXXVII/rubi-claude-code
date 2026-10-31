@@ -427,6 +427,12 @@ func (s *sisters) projectOf(ctx context.Context, h sisterHost, c roleCaller, ref
 
 // update runs one change of an existing role: edit builds the proposed role from a copy of the current one.
 func (s *sisters) roleEdit(ctx context.Context, h sisterHost, w roleWho, ref, op string, forceWiden bool, edit func(c roleCaller, cur, next *role) (map[string]string, []string, error)) (any, error) {
+	return s.roleEditNote(ctx, h, w, ref, op, forceWiden, nil, edit)
+}
+
+// roleEditNote is roleEdit where the edit may set *note: a remark added to the change's one-line summary (and so to
+// the audit and the approval).
+func (s *sisters) roleEditNote(ctx context.Context, h sisterHost, w roleWho, ref, op string, forceWiden bool, note *string, edit func(c roleCaller, cur, next *role) (map[string]string, []string, error)) (any, error) {
 	c, err := s.who(h, w)
 	if err != nil {
 		return nil, err
@@ -443,7 +449,11 @@ func (s *sisters) roleEdit(ctx context.Context, h sisterHost, w roleWho, ref, op
 	if len(reasons) > 0 {
 		return rejected(reasons...), nil
 	}
-	return s.changeRole(ctx, h, roleChangeReq{Bot: c.Bot, Dev: c.Dev, Op: op, Cur: cur, Next: next, Blobs: blobs, Lim: c.Lim, ForceWiden: forceWiden})
+	rq := roleChangeReq{Bot: c.Bot, Dev: c.Dev, Op: op, Cur: cur, Next: next, Blobs: blobs, Lim: c.Lim, ForceWiden: forceWiden}
+	if note != nil && *note != "" {
+		rq.Summary = joinSummary(append(describeRoleChange(cur, next), *note), 200)
+	}
+	return s.changeRole(ctx, h, rq)
 }
 
 func checkText(what, v string, max int) error {

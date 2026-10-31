@@ -27,6 +27,7 @@ type fakeLibVersion struct {
 	content string
 	verdict string
 	badSig  bool
+	self    bool // the curator admitted its own skill
 }
 
 func newFakeLibrary() *fakeLibrary { return &fakeLibrary{entries: map[string][]*fakeLibVersion{}} }
@@ -82,7 +83,7 @@ func (l *fakeLibrary) get(id string, version int) (map[string]any, error) {
 		sig = fakeLibSig(id, "99", sha)
 	}
 	return map[string]any{"id": id, "version": v.version, "state": v.state, "content": v.content, "sha256": sha, "signature": sig,
-		"description": "d", "tags": []string{}, "admitted_by": "curator", "scan_verdict": v.verdict, "scanner_version": "1", "latest_admitted": latest}, nil
+		"description": "d", "tags": []string{}, "admitted_by": "curator", "scan_verdict": v.verdict, "scanner_version": "1", "latest_admitted": latest, "self_admitted": v.self}, nil
 }
 
 func libFixture(t *testing.T) (*fakeHost, *sisters, *fakeRoles, *fakeLibrary, string) {
@@ -445,5 +446,35 @@ func TestLibraryPinAndFollowButtons(t *testing.T) {
 	// Pin on something that isn't a library skill.
 	if _, err := s.panelRoleItem(context.Background(), f, "role_skill_pin", "dev_mac", id, "plain", "", nil, nil); err == nil {
 		t.Fatal("pinned an ad-hoc skill")
+	}
+}
+
+func TestLibrarySelfAdmittedIsMarkedAndWithdrawnIsShown(t *testing.T) {
+	f, s, _, lib, id := libFixture(t)
+	lib.publish("mine", "admitted", "Mine v1.").self = true
+	m := addLib(t, s, f, id, "mine")
+	if status(m) != "applied" || m["tier"] != 1 {
+		t.Fatalf("self-admitted stays tier 1: %v", m)
+	}
+	a := auditsOf(f, "role.change")
+	if sum := fmt.Sprint(a[len(a)-1]["summary"]); !strings.Contains(sum, "self-admitted by curator") {
+		t.Fatalf("the audit says it: %v", a[len(a)-1])
+	}
+	addLib(t, s, f, id, "design-tokens@1")
+	pg := view(t, s, f, `{"page":"role","device":"dev_mac","role":"`+id+`"}`)
+	if d := findItem(t, pg, "Skills", "mine")["detail"].(string); !strings.Contains(d, "self-admitted by curator") {
+		t.Fatalf("%s", d)
+	}
+	if d := findItem(t, pg, "Skills", "design-tokens")["detail"].(string); strings.Contains(d, "self-admitted") || strings.Contains(d, "withdrawn") {
+		t.Fatalf("%s", d)
+	}
+	// A pinned version that was withdrawn stays in the role until the next start; the page says so.
+	lib.setState("design-tokens", 1, "withdrawn")
+	s.now = func() time.Time { return time.Now().Add(time.Hour) }
+	s.libSeen = map[string]time.Time{id: s.now()}
+	pg = view(t, s, f, `{"page":"role","device":"dev_mac","role":"`+id+`"}`)
+	it := findItem(t, pg, "Skills", "design-tokens")
+	if d := it["detail"].(string); !strings.Contains(d, "withdrawn (removed at next start)") || it["warn"] != true {
+		t.Fatalf("%v", it)
 	}
 }

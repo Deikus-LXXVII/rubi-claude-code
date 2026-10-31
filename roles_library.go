@@ -32,6 +32,7 @@ const (
 	auditLibraryDropped = "role.library_dropped"
 
 	libraryEvery       = 10 * time.Minute // the periodic check of every role that follows or pins a library skill
+	libraryMarkEvery   = 10 * time.Second // the least time between two looks at what the library says of one role's skills
 	libraryViewEvery   = 30 * time.Second // the least time between two checks of one role on its page
 	maxLibRolesPerTick = 12               // roles one periodic check looks at
 	maxLibCallsPerTick = 40               // library.get calls one periodic check makes
@@ -138,7 +139,8 @@ func (s *sisters) roleSkillsAddLibrary(ctx context.Context, h sisterHost, in rol
 	if pin != "" {
 		want, _ = strconv.Atoi(pin)
 	}
-	return s.roleEdit(ctx, h, in.roleWho, in.Role, "role.skills.add", false, func(c roleCaller, cur, next *role) (map[string]string, []string, error) {
+	note := ""
+	return s.roleEditNote(ctx, h, in.roleWho, in.Role, "role.skills.add", false, &note, func(c roleCaller, cur, next *role) (map[string]string, []string, error) {
 		old := slices.IndexFunc(cur.Skills, func(k roleSkill) bool { return k.Name == id })
 		exists := old >= 0
 		if exists && cur.Skills[old].Source != "library" {
@@ -155,6 +157,10 @@ func (s *sisters) roleSkillsAddLibrary(ctx context.Context, h sisterHost, in rol
 			return nil, []string{id + "@" + strconv.Itoa(info.Version) + " is deprecated: it keeps working in roles that already have it, but takes no new attachments; use a newer version"}, nil
 		}
 		entry := librarySkill(info, pin, botID(c.Bot))
+		s.markLibrary(c.Dev.ID, cur.ID, entry, libMark{SelfAdmitted: info.SelfAdmitted})
+		if info.SelfAdmitted {
+			note = selfAdmittedNote
+		}
 		if exists {
 			prev := cur.Skills[old]
 			entry.AddedBy = prev.AddedBy
@@ -168,6 +174,77 @@ func (s *sisters) roleSkillsAddLibrary(ctx context.Context, h sisterHost, in rol
 		}
 		return map[string]string{info.SHA256: info.Content}, nil, nil
 	})
+}
+
+// ---- what the role page says about a library skill ----
+
+const (
+	selfAdmittedNote  = "self-admitted by curator"
+	withdrawnPageNote = "withdrawn (removed at next start)"
+)
+
+// libMark is what the library said last about the version a role has: it was admitted by the curator for its own skill,
+// or it is withdrawn (Home enforces that; the page only says so).
+type libMark struct {
+	SelfAdmitted bool
+	Withdrawn    bool
+}
+
+func libMarkKey(dev, roleID string, k roleSkill) string {
+	return dev + "|" + roleID + "|" + k.Name + "|" + k.Resolved
+}
+
+func (s *sisters) markLibrary(dev, roleID string, k roleSkill, m libMark) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.libMarks == nil || len(s.libMarks) > 500 {
+		s.libMarks = map[string]libMark{}
+	}
+	s.libMarks[libMarkKey(dev, roleID, k)] = m
+}
+
+func (s *sisters) libraryMark(dev, roleID string, k roleSkill) libMark {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.libMarks[libMarkKey(dev, roleID, k)]
+}
+
+// refreshLibraryMarks asks the library about the version of each library skill of a role, within the calls left.
+// A failure other than "not admitted" leaves the mark as it was.
+func (s *sisters) refreshLibraryMarks(ctx context.Context, h sisterHost, dev string, r *role) {
+	if _, ok := h.(libraryHost); !ok || !slices.ContainsFunc(r.Skills, func(k roleSkill) bool { return k.Source == "library" }) {
+		return
+	}
+	s.mu.Lock()
+	if s.libMarkAt == nil || len(s.libMarkAt) > 200 {
+		s.libMarkAt = map[string]time.Time{}
+	}
+	if t, ok := s.libMarkAt[dev+"|"+r.ID]; ok && s.now().Sub(t) < libraryMarkEvery {
+		s.mu.Unlock()
+		return
+	}
+	s.libMarkAt[dev+"|"+r.ID] = s.now()
+	s.mu.Unlock()
+	n := maxLibCallsPerView
+	calls := &n
+	for _, k := range r.Skills {
+		v, err := strconv.Atoi(k.Resolved)
+		if k.Source != "library" || err != nil || v < 1 {
+			continue
+		}
+		if *calls <= 0 {
+			return
+		}
+		*calls--
+		info, err := libraryGet(ctx, h, k.LibraryID, v)
+		var na errNotAdmitted
+		switch {
+		case err == nil:
+			s.markLibrary(dev, r.ID, k, libMark{SelfAdmitted: info.SelfAdmitted})
+		case errors.As(err, &na):
+			s.markLibrary(dev, r.ID, k, libMark{Withdrawn: true})
+		}
+	}
 }
 
 // ---- following ----
