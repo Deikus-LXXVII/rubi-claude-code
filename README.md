@@ -503,8 +503,22 @@ argument is never used, and a call without a verified Bot fails). A project's de
 one, and compares. It is tier 2 when anything grows in `mcp`, `plugins` or `hosts`; when a tool outside the safe set
 is added; when a deny rule the user (or another Bot) set is removed; when `default_mode` is above `role_mode_ceiling`;
 when an SSH target that isn't registered is granted; when the role is on a project where this Bot holds no live
-project trust (`Sister` is the Bot, `Project` the role's project, not expired or revoked); or when the tool always asks
-(`mcp_set`, `plugins_set`, `hosts_set`). Otherwise it is tier 1: applied at once through `role.put`, audited.
+project trust (`Sister` is the Bot, `Project` the role's project, not expired or revoked); when the tool always asks
+(`mcp_set`, `plugins_set`, `hosts_set`); or when the role was created by someone else. **Ownership:** a Bot edits,
+archives and unarchives only the roles it created (tier 1); another Bot's roles and the user's are tier 2
+(`role_widen`), and inside a role it created, removing or rewriting a skill another Bot or the user wrote is tier 2
+too, so `skills_set`'s replace-all can't drop it silently. A change that is both on an untrusted project and
+widening asks as `role_widen` (`role_foreign` is the kind only when nothing widens). Otherwise it is tier 1: applied at
+once through `role.put`, audited. The headline of an approval lists what widens first; the full list of changes is in
+its preview. An MCP server is shown with its type and URL, or its whole command with every arg (each clipped), so a
+change of the args alone shows; a Bot's text that the user reads (MCP URLs and commands, plugin sources, hosts, deny
+rules) is refused with a reason when it has format, bidi, zero-width or control characters, an MCP URL is not https or
+carries credentials, or a host is not a host name (Home's syntax), before anyone is asked.
+
+**Bot identity.** The role's owner, the hourly role-change budget and the session-start budget all use the Bot's id
+(`botID`: lower case, characters other than letters, digits and `_.:@-` become `-`). Two Bot names that differ only in
+such characters (`My Bot` and `my-bot`) are one Bot to the roles and share an id, a count and a budget; project trusts
+still match names case-insensitively as before.
 
 **Results.** `{status: "applied", role, version, audit_id, tier, held_skills?}` (a change that alters nothing is
 `applied` with `unchanged: true` and makes no version); `{status: "needs_approval", approval_id, link, reasons,
@@ -515,20 +529,37 @@ about 1.5 MiB of waiting skill text, dropped after 6 hours). The approval carrie
 they had and the value to write; when it runs the plugin reads the role again, and if it is a newer version it
 **rebases**: the change applies only if every part it touches is still what it was, else it fails with "the role
 changed since you asked; ask again" and nothing is written. An approval runs once. A new MCP server or plugin gets
-the approval's id as its `approval` (Home refuses them without one).
+the approval's id as its `approval` (Home refuses them without one) and Home spends an approval id once. A skill the
+user accepts is put with an id made when the user was asked (`sk_...`), never the kind's name. A revert to a version
+with an MCP server or plugin the current version doesn't have clears the old ids (Home spent them), so the approval
+that allows the revert supplies fresh ones. The test suite runs the plugin's `role.put` payloads against a fake Home
+that mirrors Home's `approvalRE` (`^[A-Za-z0-9_-]{1,64}$`) and single-use rules (the plugin can't import Home's
+internal roles package, which is not part of the Rubi module's public API).
 
 **Approval kinds.** `claude-code.role_foreign` (strong, locked: a role on a project the Bot holds no trust for, whatever
-the change), `claude-code.role_widen` (strong, locked), `claude-code.role_skill_accept` (tap, locked: the user accepts a
+the change that doesn't also widen), `claude-code.role_widen` (strong, locked), `claude-code.role_skill_accept` (tap, locked: the user accepts a
 held skill, seeing the rules the scan flagged and the excerpts; the plugin then puts the skill's `accepted` rule ids,
 `by: user`). The panel for it is R7; `askSkillAccept` / `executeSkillAccept` are the ops it will call. No Bot tool can
 accept a held skill.
 
 **Limits and the ceiling** are user config fields (the plugin settings, with the plugin config's strong approval); no
-Bot tool changes them: `role_max_per_project_per_bot` (5), `role_max_per_bot` (20; active roles the Bot created, on
+Bot tool changes them: `role_max_per_project_per_bot` (5), `role_max_per_bot` (20; roles the Bot created, on
 that computer), `role_changes_per_hour_per_bot` (30; applied and asked changes), `role_max_skills` (20 per role),
 `role_max_adhoc_skills` (10 per role), `role_max_total` (50 per computer, archived roles included) and
 `role_mode_ceiling` (default `bypassPermissions`; ladder `plan` < `default` < `acceptEdits` < `auto` <
-`bypassPermissions`; `dontAsk` is not offered for roles). Over a limit the call is rejected with the setting named.
+`bypassPermissions`; `dontAsk` is not offered for roles). Over a limit the call is rejected with the setting named. **Archived roles count** toward `role_max_per_project_per_bot`
+and `role_max_per_bot`: Rubi Home has no delete, so archiving would otherwise free a place and a Bot could make roles
+without end. The user frees places by raising the limits in the plugin settings (a delete is for later). The session
+limits on the usage modes page (`claude-agent.limits`: sessions at once per role, per project, on the computer) are
+the user's own page: that op applies directly, like `usage_mode`, with no approval, and no Bot tool reaches it.
+
+**Starting in a role.** `claude_code_role_start`'s approval is for one version of the role: the ticket carries it and
+the session starts only if the role is still at that version, active, in the same mode ("the role changed since you
+approved; ask again"). The Bot is bound to the new session with the role recorded in the binding: every send, status,
+sessions and reply call for a bound session names the role (`withRole`), and events are routed by project, role and
+session, so a Bot bound to a role's session never addresses the legacy role or another role, nor receives theirs.
+A `net.ask` (a host the role's VM reached that nobody listed) is asked like a `cred.ask`, naming the role; allowing it
+adds the host to that role's approved hosts in Rubi Home.
 
 **Audit.** Every applied change writes `role.change {audit_id, role, project, device, from, to, by, tier, approval?,
 summary}` to Rubi's audit log (no skill text, no instructions: names and short facts) and is stored by Home as a
@@ -614,12 +645,12 @@ it).
 
 `claude-agent.next` returns `{items:[...]}`; each item has `type`:
 
-- `perm.ask` and `cred.ask`: `ask_id`, `project`, `session_id`, `tool`, `input` (the tool input as JSON),
-  `cwd`, `mode`, optionally `agent_id`, `agent_type`, `expires_at`. A `cred.ask` has no tool (it is always an
+- `perm.ask` and `cred.ask`: `ask_id`, `project`, `role` (an isolated role's id; the legacy role's is the project's),
+  `session_id`, `tool`, `input` (the tool input as JSON), `cwd`, `mode`, optionally `agent_id`, `agent_type`, `expires_at`. A `cred.ask` has no tool (it is always an
   approval).
 - `cred.ask`: `ask_id`, `project`, `host`, `path` (the repository path), `op`; `net.ask`: `ask_id`, `project`,
   `host`, `op` (`connect`). Both are answered with `claude-agent.decide` and denied when a field is missing.
-- `event`: `project`, `session_id` and the runner's event nested in `event` (`{"kind": ..., ...}`; flat fields
+- `event`: `project`, `role` (as above), `session_id` and the runner's event nested in `event` (`{"kind": ..., ...}`; flat fields
   are read too), `kind` and, by kind:
   - `result`: `text` (the turn's final text), `to` (the Bot that started the turn with `claude-agent.send` or
     `.start` `from`; **Rubi Home must set it, and leave it empty for turns the user started**, because the
