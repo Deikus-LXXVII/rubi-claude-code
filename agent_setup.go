@@ -305,7 +305,7 @@ func (s *sisters) setupPage(ctx context.Context, h sisterHost, p panelPage) (any
 	}
 	topActions = append(topActions, map[string]any{"label": "Refresh", "open": panelPage{Page: pageSetup, Device: d.ID}.open()})
 	allNote := "\"Set up everything\" appears once the container tool and the network are done: those two ask for your approval, and it never skips them."
-	sections := []map[string]any{{"title": "Setup", "note": allNote, "empty": "", "items": top, "actions": topActions}}
+	sections := []map[string]any{{"title": "Setup", "note": allNote, "empty": "Nothing is running now.", "items": top, "actions": topActions}}
 
 	for i, step := range st.Steps {
 		key := stepKey(step.ID)
