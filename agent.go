@@ -82,6 +82,13 @@ func (s *sisters) agentCapable(ctx context.Context, h homeCaller, device string)
 	return err == nil
 }
 
+// agentKnown says whether the computer is known (not probed now) to have the capability.
+func (s *sisters) agentKnown(device string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.caps[device].ok
+}
+
 // ---- projects and sessions ----
 
 type agentProject struct {

@@ -74,7 +74,9 @@ type startIn struct {
 	AgentCode     string `json:"rubi_agent_code,omitempty" jsonschema:"the agent_code of your latest Rubi webhook (or call rubi_verify with your name to get one); proves you are that Bot"`
 	VerifiedAgent string `json:"rubi_verified_agent,omitempty" jsonschema:"set by Rubi; don't pass it"`
 	Device        string `json:"device,omitempty" jsonschema:"the computer, when there are several"`
-	Cwd           string `json:"cwd" jsonschema:"the absolute path of your project's directory on that computer, as claude_code_sessions shows it (a project that already had a session, or a folder the user allowed)"`
+	Cwd           string `json:"cwd,omitempty" jsonschema:"the absolute path of your project's directory on that computer, as claude_code_sessions shows it (a project that already had a session, or a folder the user allowed)"`
+	Project       string `json:"project,omitempty" jsonschema:"for a computer that runs Claude in project VMs: the project (id or directory) to start the session in, instead of cwd"`
+	Mode          string `json:"mode,omitempty" jsonschema:"for a project VM: plan, default (the default), acceptEdits or bypassPermissions; the user sees it in the approval"`
 	Task          string `json:"task" jsonschema:"the first message of the new session (at most 2000 characters): what you want Claude to do, in your own words"`
 }
 
@@ -84,6 +86,8 @@ type startTicket struct {
 	DeviceName string `json:"device_name"`
 	Cwd        string `json:"cwd"`
 	Task       string `json:"task"`
+	Project    string `json:"project,omitempty"` // an agent project (claude-agent)
+	Mode       string `json:"mode,omitempty"`
 }
 
 // startWarning is what the user is told before approving, and the Bot after a session that skips prompts.
@@ -123,7 +127,9 @@ func (s *sisters) startTool(ctx context.Context, h sisterHost, in startIn) (any,
 		return nil, errors.New("task is empty")
 	case len([]rune(task)) > maxStartTask:
 		return nil, fmt.Errorf("task is longer than %d characters: start the session with a short task and send the details with claude_code_send", maxStartTask)
-	case in.Cwd == "" || len(in.Cwd) > 1024 || !strings.HasPrefix(in.Cwd, "/") || strings.ContainsFunc(in.Cwd, func(r rune) bool { return r < ' ' || r == 0x7f }):
+	case in.Project != "" && len(in.Project) > 1024:
+		return nil, errors.New("project is too long")
+	case in.Project == "" && (in.Cwd == "" || len(in.Cwd) > 1024 || !strings.HasPrefix(in.Cwd, "/") || strings.ContainsFunc(in.Cwd, func(r rune) bool { return r < ' ' || r == 0x7f })):
 		return nil, errors.New("cwd must be the absolute path of a directory on that computer")
 	}
 	if err := checkStartText(task); err != nil {
@@ -138,6 +144,12 @@ func (s *sisters) startTool(ctx context.Context, h sisterHost, in startIn) (any,
 	}
 	if !s.allow("start|*", startsGlobal) {
 		return nil, fmt.Errorf("at most %d session starts per hour in all", startsGlobal)
+	}
+	if s.agentCapable(ctx, h, d.ID) {
+		return s.startAgent(ctx, h, sister, d, in, task)
+	}
+	if in.Cwd == "" {
+		return nil, errors.New("cwd must be the absolute path of a directory on that computer")
 	}
 	t := startTicket{Sister: sister, Device: d.ID, DeviceName: d.Name, Cwd: in.Cwd, Task: task}
 	// A Bot bound to a session of a trusted project starts sessions in it without asking; the helper still
@@ -183,6 +195,12 @@ func (s *sisters) startTool(ctx context.Context, h sisterHost, in startIn) (any,
 
 // executeStart runs once the user approved starting a session.
 func (s *sisters) executeStart(ctx context.Context, h sisterHost, t startTicket) (any, error) {
+	if t.Project != "" {
+		if t.Sister == "" || t.Device == "" || t.Task == "" {
+			return nil, errors.New("bad payload")
+		}
+		return s.executeStartAgent(ctx, h, t)
+	}
 	if t.Sister == "" || t.Device == "" || t.Cwd == "" || t.Task == "" {
 		return nil, errors.New("bad payload")
 	}

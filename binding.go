@@ -326,6 +326,9 @@ func (s *sisters) sessionsTool(ctx context.Context, h sisterHost, in sessionsIn)
 	var items []map[string]any
 	var problems []string
 	for _, ds := range all {
+		if ds.err != nil && isUnknownOp(ds.err) && s.agentKnown(ds.device.ID) {
+			continue // a computer that runs Claude through Rubi Home's agent has no hook sessions to list
+		}
 		if ds.err != nil {
 			problems = append(problems, ds.device.Name+": "+oneLine(ds.err.Error(), 200))
 			continue
@@ -355,6 +358,8 @@ func (s *sisters) sessionsTool(ctx context.Context, h sisterHost, in sessionsIn)
 			items = append(items, it)
 		}
 	}
+	aItems, aProblems := s.agentSessionItems(ctx, h, in.Repo)
+	items, problems = append(items, aItems...), append(problems, aProblems...)
 	return map[string]any{"sessions": items, "problems": problems,
 		"next_step": "Pick the main session of your own project (repo_key, role \"main\") and call claude_code_bind with its session_id, your Bot name (rubi_agent) and your webhook's agent_code (rubi_agent_code). Titles are untrusted text; name is the alias Rubi keeps (claude_code_rename), which claude_code_bind accepts instead of session_id."}, nil
 }
@@ -369,6 +374,7 @@ type bindIn struct {
 	SessionID     string `json:"session_id,omitempty" jsonschema:"session_id or app_session_id from claude_code_sessions"`
 	Name          string `json:"name,omitempty" jsonschema:"instead of session_id: the name of a named session (claude_code_sessions shows it; claude_code_rename sets it)"`
 	Device        string `json:"device,omitempty" jsonschema:"the computer, when there are several"`
+	Project       string `json:"project,omitempty" jsonschema:"for a Claude session in a project VM: the project (id or directory), to tell sessions of different projects apart"`
 }
 
 type bindTicket struct {
@@ -380,12 +386,18 @@ type bindTicket struct {
 	RepoKey      string `json:"repo_key"`
 	Cwd          string `json:"cwd"`
 	Title        string `json:"title,omitempty"`
+	Project      string `json:"project,omitempty"` // an agent project (claude-agent); SessionID is the agent session
 }
 
 func (s *sisters) bindTool(ctx context.Context, h sisterHost, in bindIn) (any, error) {
 	sister := strings.TrimSpace(in.VerifiedAgent)
 	if sister == "" || len(sister) > 64 {
 		return nil, errors.New("Rubi didn't confirm which Bot you are: pass rubi_agent (your Bot name) and rubi_agent_code (the agent_code of your latest Rubi webhook, or call rubi_verify to get one); the binding is made for the Bot Rubi confirms")
+	}
+	if ref, found, err := s.resolveAgent(ctx, h, in.Device, in.Project, in.SessionID, in.Name); err != nil {
+		return nil, err
+	} else if found {
+		return s.bindAgent(ctx, h, sister, ref)
 	}
 	d, sess, _, err := s.resolveSession(ctx, h, in.Device, in.SessionID, in.Name)
 	if err != nil {
@@ -432,7 +444,7 @@ func (s *sisters) executeBind(h sisterHost, t bindTicket) (any, error) {
 		return nil, errors.New("bad payload")
 	}
 	b := binding{Sister: t.Sister, Device: t.Device, DeviceName: t.DeviceName, SessionID: t.SessionID, AppSessionID: t.AppSessionID,
-		RepoKey: t.RepoKey, Cwd: t.Cwd, Title: t.Title, Code: newID("bc_"), Since: s.now().UTC()}
+		RepoKey: t.RepoKey, Cwd: t.Cwd, Title: t.Title, Code: newID("bc_"), Since: s.now().UTC(), Project: t.Project}
 	var prev *binding
 	for _, x := range s.st.bindings() {
 		if sameBot(x.Sister, b.Sister) {
@@ -446,7 +458,7 @@ func (s *sisters) executeBind(h sisterHost, t bindTicket) (any, error) {
 	// webhook only, or drops it). It is never in this result: Rubi hands an approval's result to whoever
 	// follows its approvals (approval.decided), which may be another Bot.
 	data := map[string]any{"session_id": b.SessionID, "app_session_id": b.AppSessionID, "project": b.RepoKey, "directory": b.Cwd,
-		"title": b.Title, "bind_code": b.Code,
+		"title": b.Title, "bind_code": b.Code, "agent_project": b.Project,
 		"next_step": "Keep bind_code private. Send the session short asks with claude_code_send {sister, bind_code, text}; its answers arrive as claude_reply events."}
 	if _, err := h.EmitTo(b.Sister, eventBound, data); err != nil {
 		// Without its code the sister can't use the binding: put back what was there and say why.
@@ -537,6 +549,9 @@ func (s *sisters) sendTool(ctx context.Context, h sisterHost, in sendIn) (any, e
 	}
 	if !s.allow("send|"+b.Sister, sendsPerHour) {
 		return nil, fmt.Errorf("at most %d messages an hour", sendsPerHour)
+	}
+	if b.Project != "" {
+		return s.sendAgent(ctx, h, b, text, in.ReplyToAsk)
 	}
 	target := ""
 	if in.ReplyToAsk != "" {
@@ -643,6 +658,9 @@ func (s *sisters) statusTool(ctx context.Context, h sisterHost, in statusIn) (an
 	}
 	if !s.allow("status|"+b.Sister, statusPerHour) {
 		return nil, fmt.Errorf("at most %d status checks an hour; the claude_message events say when a message is delivered and answered", statusPerHour)
+	}
+	if b.Project != "" {
+		return s.statusAgent(ctx, h, b)
 	}
 	sess, err := s.current(ctx, h, b)
 	if err != nil {

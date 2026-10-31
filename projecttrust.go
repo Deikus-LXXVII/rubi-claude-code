@@ -444,6 +444,9 @@ func (s *sisters) trustTool(ctx context.Context, h sisterHost, in trustIn) (any,
 	if !s.allow("trust|"+strings.ToLower(b.Sister), trustsPerHour) {
 		return nil, fmt.Errorf("at most %d project trust requests an hour", trustsPerHour)
 	}
+	if b.Project != "" {
+		return s.trustAgent(ctx, h, b, in)
+	}
 	sess, err := s.current(ctx, h, b)
 	if err != nil {
 		return nil, err
