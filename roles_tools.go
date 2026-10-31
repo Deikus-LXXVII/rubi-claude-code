@@ -268,6 +268,9 @@ func (s *sisters) who(h sisterHost, w roleWho) (roleCaller, error) {
 	if bot == "" || len(bot) > 64 || botID(bot) == "" {
 		return roleCaller{}, errors.New(notVerified)
 	}
+	if botID(bot) == panelUser {
+		return roleCaller{}, errors.New("that Bot name is reserved for the user's own changes on the panel; connect under another name")
+	}
 	d, err := s.pickDevice(h, w.Device)
 	if err != nil {
 		return roleCaller{}, err

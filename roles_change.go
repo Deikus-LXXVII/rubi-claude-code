@@ -30,7 +30,8 @@ type roleTicket struct {
 	Bot        string                     `json:"bot"`
 	Device     string                     `json:"device"`
 	DeviceName string                     `json:"device_name,omitempty"`
-	Role       string                     `json:"role,omitempty"` // "" creates a role
+	ByUser     bool                       `json:"by_user,omitempty"` // the user's own change from the panel (Bot is "user")
+	Role       string                     `json:"role,omitempty"`    // "" creates a role
 	Project    string                     `json:"project"`
 	Op         string                     `json:"op"`
 	Base       int                        `json:"base"`
@@ -235,7 +236,13 @@ type roleChangeReq struct {
 	Lim          roleLimits
 	ForceWiden   bool
 	RevertOthers bool
+	// ByUser is the user's own change from the panel (Bot is panelUser): the Bot-only rules (trust of the project,
+	// the per-Bot counts and the hourly rate) don't apply, the diff-based tier does.
+	ByUser bool
 }
+
+// panelUser is the "Bot" of a change the user made on the panel. It is a reserved name: a Bot can't take it.
+const panelUser = "user"
 
 func rejected(reasons ...string) map[string]any {
 	return map[string]any{"status": "rejected", "reasons": reasons}
@@ -295,6 +302,7 @@ func (s *sisters) limitReasons(ctx context.Context, h sisterHost, rq roleChangeR
 		}
 	}
 	creating := rq.Cur == nil
+	perBot := !rq.ByUser
 	activating := rq.Cur != nil && rq.Cur.Status != "active" && next.Status == "active"
 	if creating || activating {
 		d, err := s.refreshRoles(ctx, h, rq.Dev.ID, true)
@@ -312,10 +320,10 @@ func (s *sisters) limitReasons(ctx context.Context, h sisterHost, rq roleChangeR
 		if creating && len(d.roles) >= lim.Total {
 			out = append(out, fmt.Sprintf("%s: this computer already has %d roles (the limit)", cfgRoleTotal, len(d.roles)))
 		}
-		if n := roleCount(d, creator, next.Project, except); n >= lim.PerProjectPerBot {
+		if n := roleCount(d, creator, next.Project, except); perBot && n >= lim.PerProjectPerBot {
 			out = append(out, fmt.Sprintf("%s: %d active roles of the same Bot on this project already (the limit)", cfgRolePerProject, n))
 		}
-		if n := roleCount(d, creator, "", except); n >= lim.PerBot {
+		if n := roleCount(d, creator, "", except); perBot && n >= lim.PerBot {
 			out = append(out, fmt.Sprintf("%s: %d active roles of the same Bot already (the limit)", cfgRolePerBot, n))
 		}
 	}
@@ -338,9 +346,9 @@ func (s *sisters) changeRole(ctx context.Context, h sisterHost, rq roleChangeReq
 		return rejected(reasons...), nil
 	}
 	project := next.Project
-	v := tierOf(rq.Cur, next, tierCtx{Bot: rq.Bot, Trust: s.botTrust(rq.Dev.ID, rq.Bot, project) != nil, Ceiling: rq.Lim.Ceiling,
+	v := tierOf(rq.Cur, next, tierCtx{Bot: rq.Bot, Trust: rq.ByUser || s.botTrust(rq.Dev.ID, rq.Bot, project) != nil, Ceiling: rq.Lim.Ceiling,
 		Registered: s.registeredSSH(rq.Dev.ID), RevertOthers: rq.RevertOthers, ForceWiden: rq.ForceWiden})
-	if !s.allow("rolechg|"+strings.ToLower(strings.TrimSpace(rq.Bot)), rq.Lim.ChangesPerHour) {
+	if !rq.ByUser && !s.allow("rolechg|"+strings.ToLower(strings.TrimSpace(rq.Bot)), rq.Lim.ChangesPerHour) {
 		return rejected(fmt.Sprintf("%s: at most %d role changes per hour for one Bot", cfgRoleChanges, rq.Lim.ChangesPerHour)), nil
 	}
 	lines := describeRoleChange(rq.Cur, next)
@@ -439,7 +447,7 @@ func (s *sisters) applied(h sisterHost, bot, device string, cur, next *role, res
 // ---- tier 2: ask ----
 
 func (s *sisters) askRoleChange(ctx context.Context, h sisterHost, rq roleChangeReq, next *role, fields []string, v tierVerdict, lines []string, summary string) (any, error) {
-	t := roleTicket{ID: newID("rq_"), Bot: rq.Bot, Device: rq.Dev.ID, DeviceName: rq.Dev.Name, Project: next.Project, Op: rq.Op,
+	t := roleTicket{ID: newID("rq_"), Bot: rq.Bot, ByUser: rq.ByUser, Device: rq.Dev.ID, DeviceName: rq.Dev.Name, Project: next.Project, Op: rq.Op,
 		After: map[string]json.RawMessage{}, Blobs: rq.Blobs, Summary: summary, Reasons: v.Reasons}
 	if rq.Cur != nil {
 		t.Role, t.Base = rq.Cur.ID, rq.Cur.Version
@@ -469,13 +477,17 @@ func (s *sisters) askRoleChange(ctx context.Context, h sisterHost, rq roleChange
 	}
 	name := next.Name
 	where := rq.Dev.Name
-	preview := map[string]any{"bot": rq.Bot, "computer": where, "project": next.Project, "role": name, "role_id": t.Role, "base_version": t.Base,
+	asker := rq.Bot
+	if rq.ByUser {
+		asker = "you, on Rubi's panel"
+	}
+	preview := map[string]any{"bot": asker, "computer": where, "project": next.Project, "role": name, "role_id": t.Role, "base_version": t.Base,
 		"changes": lines, "why_you_are_asked": v.Reasons, "what_it_does": "Changes the agent role " + clipOne(name, 40) + " on the project " + next.Project + ". Nothing is applied until you approve; if the role changes before you do, the request fails and the Bot has to ask again. Skill text is not shown here: a skill is only context, it grants nothing."}
 	if rq.Cur == nil {
 		preview["what_it_does"] = "Creates the agent role " + clipOne(name, 40) + " on the project " + next.Project + ". Nothing is created until you approve."
 	}
 	res, err := h.Submit(ctx, rubiplugin.Request{Kind: kind,
-		Summary: "Role " + oneLine(name, 40) + " on " + oneLine(next.Project, 40) + " for " + rq.Bot + ": " + oneLine(summary, 100),
+		Summary: "Role " + oneLine(name, 40) + " on " + oneLine(next.Project, 40) + " for " + asker + ": " + oneLine(summary, 100),
 		Preview: preview, Payload: t})
 	if err != nil {
 		s.st.takeRolePending(t.ID, s.now())
@@ -550,7 +562,7 @@ func (s *sisters) executeRoleChange(ctx context.Context, h sisterHost, t roleTic
 	}
 	if cur == nil {
 		// A new role: the limits hold when the user answers, not only when the Bot asked.
-		rq := roleChangeReq{Bot: t.Bot, Dev: rubiplugin.HomeDevice{ID: t.Device, Name: t.DeviceName}, Next: next, Lim: roleLimitsOf(h)}
+		rq := roleChangeReq{Bot: t.Bot, ByUser: t.ByUser, Dev: rubiplugin.HomeDevice{ID: t.Device, Name: t.DeviceName}, Next: next, Lim: roleLimitsOf(h)}
 		reasons, err := s.limitReasons(ctx, h, rq, []string{"name"})
 		if err != nil {
 			return nil, err

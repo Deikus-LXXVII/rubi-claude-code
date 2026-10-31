@@ -100,6 +100,7 @@ func (s *sisters) agentLinkSection(ctx context.Context, h sisterHost) []map[stri
 		"items": []map[string]any{
 			{"title": "Projects and sessions", "detail": "Each project's sessions with the running ones marked, what is waiting and why, and a button to start a new session.", "actions": []map[string]any{{"label": "Open", "open": panelPage{Page: pageAgent}.open()}}},
 			{"title": "Usage modes", "detail": "How much each Bot may run at once: Maximum, Medium (Recommended) or Light. Only you change it.", "actions": []map[string]any{{"label": "Open", "open": panelPage{Page: pageModes}.open()}}},
+			{"title": "Agent roles", "detail": "Profiles of a project with their own skills, tools and hosts: the roles of each project, what each has, its history with a one-click revert, and a button to start a session in one.", "actions": []map[string]any{{"label": "Open", "open": panelPage{Page: pageRoles}.open()}}},
 			{"title": "Usage and sign-in", "detail": "Today's estimate and whether Claude is signed in.", "actions": []map[string]any{{"label": "Open", "open": panelPage{Page: pageUsage}.open()}}},
 		}}}
 }
@@ -195,6 +196,14 @@ func (s *sisters) agentPage(ctx context.Context, h sisterHost, p panelPage) (any
 		return s.setupPage(ctx, h, p)
 	case pageModes:
 		return s.modesPage(ctx, h)
+	case pageRoles:
+		return s.rolesPage(ctx, h, p)
+	case pageRole:
+		return s.rolePage(ctx, h, p)
+	case pageRoleHistory:
+		return s.roleHistoryPage(ctx, h, p)
+	case pageRoleDiff:
+		return s.roleDiffPage(ctx, h, p)
 	}
 	return nil, fmt.Errorf("unknown page %q", p.Page)
 }
@@ -327,6 +336,7 @@ func (s *sisters) projectsPage(ctx context.Context, h sisterHost) (any, error) {
 					{"label": "New session", "op": "new", "args": panelPage{Device: d.ID, Project: pr.ID}.args(),
 						"prompt": map[string]any{"arg": "text", "label": "First message for Claude in this project (sent as you)", "value": ""}},
 					{"label": "Manage", "open": panelPage{Page: pageSessions, Device: d.ID, Project: pr.ID}.open()},
+					{"label": "Roles", "open": panelPage{Page: pageRoles, Device: d.ID, Project: pr.ID}.open()},
 				}})
 		}
 	}

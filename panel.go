@@ -76,6 +76,9 @@ func (s *sisters) panel(ctx context.Context, h sisterHost, op string, args json.
 		Bot       string  `json:"bot"`
 		Role      string  `json:"role"`
 		Version   int     `json:"version"`
+		Item      string  `json:"item"`
+		On        *bool   `json:"on"`
+		Which     string  `json:"which"`
 		Default   bool    `json:"default"`
 		All       bool    `json:"all"`
 	}
@@ -96,7 +99,16 @@ func (s *sisters) panel(ctx context.Context, h sisterHost, op string, args json.
 	case "fork":
 		return s.panelAgentFork(ctx, h, a.Device, a.Project, a.SessionID)
 	case "new": // a new session in a project, the first message typed on the page
-		return s.panelAgentNew(ctx, h, a.Device, a.Project, a.Text)
+		return s.panelAgentNew(ctx, h, a.Device, a.Project, a.Role, a.Text)
+	case "role_new", "role_convert":
+		return s.panelRoleCreate(ctx, h, a.Device, a.Project, a.Text, op == "role_convert")
+	case "role_archive", "role_unarchive", "role_skill_remove", "role_tool", "role_deny_add", "role_deny_remove", "role_mcp_remove",
+		"role_plugin_remove", "role_host_remove", "role_agent_remove", "role_mode", "role_pinstr":
+		return s.panelRoleItem(ctx, h, op, a.Device, a.Role, a.Item, a.Mode, a.On, a.Text)
+	case "role_skill_accept":
+		return s.panelSkillAccept(ctx, h, a.Device, a.Role, a.Item)
+	case "role_revert":
+		return s.panelRoleRevert(ctx, h, a.Device, a.Role, a.Version)
 	case "usage_mode": // the user's own switch; no Bot tool exists for it
 		return s.panelAgentUsage(ctx, h, a.Device, a.Bot, a.Default, a.All, a.Mode)
 	case "send":

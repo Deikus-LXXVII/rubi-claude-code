@@ -197,7 +197,7 @@ func (s *sisters) panelAgentUsage(ctx context.Context, h sisterHost, device, bot
 
 // panelAgentNew starts a new session in a project as the user (no Bot: it counts under the default mode),
 // with the first message the user typed in the panel's box.
-func (s *sisters) panelAgentNew(ctx context.Context, h sisterHost, device, project string, text *string) (any, error) {
+func (s *sisters) panelAgentNew(ctx context.Context, h sisterHost, device, project, roleID string, text *string) (any, error) {
 	if text == nil {
 		return nil, errors.New("this Rubi's panel can't ask for text; update Rubi")
 	}
@@ -221,6 +221,13 @@ func (s *sisters) panelAgentNew(ctx context.Context, h sisterHost, device, proje
 	if !ok || proj.ID != project {
 		return nil, errors.New("no such project on that computer")
 	}
+	mode := "default"
+	if roleID != "" {
+		var err error
+		if mode, err = s.panelRoleSession(lctx, h, device, proj.ID, roleID); err != nil {
+			return nil, err
+		}
+	}
 	var res struct {
 		ID       string `json:"id"`
 		Queued   bool   `json:"queued"`
@@ -230,11 +237,11 @@ func (s *sisters) panelAgentNew(ctx context.Context, h sisterHost, device, proje
 	cctx, cancel := context.WithTimeout(ctx, createTimeout)
 	defer cancel()
 	// default mode: Claude asks before commands; the first message is the user's own (no `from`, no `bot`).
-	if err := h.HomeCall(cctx, device, opAgentStart, map[string]any{"project": proj.ID, "prompt": t, "mode": "default"}, &res); err != nil {
-		h.Audit(auditPanelAgent, map[string]any{"action": "start", "device": device, "project": proj.ID, "by": "user", "failed": oneLine(err.Error(), 160)})
+	if err := h.HomeCall(cctx, device, opAgentStart, withRole(map[string]any{"project": proj.ID, "prompt": t, "mode": mode}, roleID), &res); err != nil {
+		h.Audit(auditPanelAgent, withRole(map[string]any{"action": "start", "device": device, "project": proj.ID, "by": "user", "failed": oneLine(err.Error(), 160)}, roleID))
 		return nil, err
 	}
-	h.Audit(auditPanelAgent, map[string]any{"action": "start", "device": device, "project": proj.ID, "session": res.ID, "by": "user", "queued": res.Queued, "chars": len([]rune(t))})
+	h.Audit(auditPanelAgent, withRole(map[string]any{"action": "start", "device": device, "project": proj.ID, "session": res.ID, "by": "user", "queued": res.Queued, "chars": len([]rune(t)), "mode": mode}, roleID))
 	out := map[string]any{"started": !res.Queued, "queued": res.Queued, "position": res.Position}
 	if res.ID != "" {
 		out["session_id"] = res.ID

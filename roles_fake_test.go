@@ -87,9 +87,31 @@ func (f *fakeRoles) call(op string, m map[string]any) (any, error) {
 		var out []map[string]any
 		for i := len(vs) - 1; i >= 0; i-- {
 			r := vs[i]
-			out = append(out, map[string]any{"version": r.Version, "parent": r.Parent, "changed_by": r.ChangedBy, "name": r.Name, "status": r.Status, "change": r.Change})
+			out = append(out, map[string]any{"version": r.Version, "parent": r.Parent, "changed_by": r.ChangedBy, "changed_at": r.ChangedAt, "name": r.Name, "status": r.Status, "change": r.Change})
 		}
 		return map[string]any{"id": a.ID, "current": len(vs), "versions": out}, nil
+	case opRoleDiff:
+		var a struct {
+			ID       string `json:"id"`
+			From, To int
+		}
+		_ = json.Unmarshal(raw, &a)
+		vs := f.roles[a.ID]
+		if a.From < 1 || a.To < 1 || a.From > len(vs) || a.To > len(vs) {
+			return nil, homeRefusal("no such version")
+		}
+		x, y := vs[a.From-1], vs[a.To-1]
+		changes := []map[string]any{}
+		for _, fld := range fieldDiffers(x, y) {
+			changes = append(changes, map[string]any{"field": fld, "kind": "changed", "from": json.RawMessage(x.fieldValue(fld)), "to": json.RawMessage(y.fieldValue(fld))})
+		}
+		texts := []map[string]any{}
+		for _, k := range y.Skills {
+			if f.blobs[k.SHA256] != "" {
+				texts = append(texts, map[string]any{"name": k.Name, "diff": "+" + f.blobs[k.SHA256]})
+			}
+		}
+		return map[string]any{"id": a.ID, "from": a.From, "to": a.To, "changes": changes, "skill_text": texts}, nil
 	case opRolePut:
 		f.puts = append(f.puts, m)
 		return f.put(raw)
