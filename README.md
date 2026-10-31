@@ -514,8 +514,9 @@ keeps the table of modes.
 
 When a computer's Rubi Home reports `agent-setup` (probed with `agent-setup.status`, remembered like the
 `claude-agent` probe), the plugin's page gets a "First-time setup" entry that opens a page with one section per
-step: Apple's container tool, its service, the host-only network, the runner image, the project folders, Claude's
-the one Claude sign-in for the whole computer and a self-test per project (the contract is `docs/design/home-setup-wizard.md` in the Rubi
+step: Apple's container tool, its service, the host-only network, the runner image, the project folders,
+the one Claude sign-in for the whole computer (the token stays in Rubi Home; the VMs never hold it, Rubi Home's auth
+gateway adds it to their requests to Anthropic) and a self-test per project (the contract is `docs/design/home-setup-wizard.md` in the Rubi
 repository). Each step shows its state and reason, the last 20 progress lines while it works, and its buttons;
 the status is a full probe of the machine, so its capability probe waits 15 seconds, a status is reused for 2
 seconds, and a computer known to have the capability stays listed through a slow probe; a project id is checked
@@ -537,7 +538,7 @@ they are not, so it cannot get past those two approvals. The sign-in code typed 
 sent"); a panel that does not send the `code` key is refused. What Rubi Home reports (reasons, progress lines,
 the sign-in link) is untrusted text: clipped, shown as item text only, and the link is offered only when it is
 `https://`. Bots have no tool for any of it. Subscription sign-in is for the user's own personal use under
-Anthropic's terms (a per-project Console account sign-in is possible from Claude Code inside a project if needed), and macOS shows its own administrator dialog on the computer for Install; the page never asks
+Anthropic's terms (the token stays in Rubi Home; the VMs never hold it), and macOS shows its own administrator dialog on the computer for Install; the page never asks
 for a password. Actions are audited as `agent_setup_action`.
 
 The page ends with a **Usage mode** section when the computer also reports `claude-agent` and its status carries
