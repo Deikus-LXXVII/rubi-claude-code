@@ -119,6 +119,7 @@ type sisters struct {
 	sshKeys    map[string]string
 	sshAuditAt time.Time
 	sshSeen    map[string]bool
+	sshOpen    map[string]map[string]sshTarget // by computer: registered targets that allow any command
 }
 
 type askRef struct {

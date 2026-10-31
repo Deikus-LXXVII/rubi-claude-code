@@ -5,7 +5,7 @@ package main
 // a host. This plugin is the user's side of it: the panel page that lists, adds and removes targets, the strong
 // approval `claude-code.ssh_target` that carries the host key fingerprint the user confirmed, the role grants
 // (tier 1 for a registered target), the ssh.ask questions of targets registered with ask_each_time, and the plugin
-// side of the audit. A Bot can never register a target: registration is panel-only.
+// side of the audit. A Bot can't register a target: registration is panel-only. It may grant a restricted one (tier 1); granting one that allows any command is tier 2.
 
 import (
 	"context"
@@ -90,15 +90,48 @@ func (s *sisters) registeredSSH(device string) map[string]bool {
 
 func (s *sisters) setSSHNames(device string, targets []sshTarget) {
 	names := map[string]bool{}
+	open := map[string]sshTarget{}
 	for _, t := range targets {
 		names[t.Name] = true
+		if t.unrestricted() {
+			open[t.Name] = t
+		}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.sshNames == nil {
 		s.sshNames = map[string]map[string]bool{}
 	}
+	if s.sshOpen == nil {
+		s.sshOpen = map[string]map[string]sshTarget{}
+	}
 	s.sshNames[device] = names
+	s.sshOpen[device] = open
+}
+
+// openSSH says which registered targets of a computer let a role run any command (the tier engine's Unrestricted).
+func (s *sisters) openSSH(device string) map[string]sshTarget {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sshOpen[device]
+}
+
+// unrestricted: the target has no allowed-commands list that limits it and doesn't ask for each command. A pattern
+// that is only * or that ends in ** passes any command (or any options), so it limits nothing.
+func (t sshTarget) unrestricted() bool {
+	if t.AskEachTime {
+		return false
+	}
+	if len(t.AllowedCommands) == 0 {
+		return true
+	}
+	for _, c := range t.AllowedCommands {
+		c = strings.TrimSpace(c)
+		if c == "*" || strings.HasSuffix(c, "**") {
+			return true
+		}
+	}
+	return false
 }
 
 // listSSH reads the registry of a computer and remembers the names. A failure forgets them: with no registry an SSH
@@ -288,7 +321,7 @@ func (s *sisters) sshPage(ctx context.Context, h sisterHost, p panelPage) (any, 
 		"sections": sections}, nil
 }
 
-const panelSSHDoc = "A target is a server a role may run commands on, from your computer: Rubi Home connects, so the project VM never sees a key or a host. Only you register a target (a Bot can't). A role gets a target only when it is granted on the role's page, and then the target's allowed commands apply. Names, hosts and commands are shown as text."
+const panelSSHDoc = "A target is a server a role may run commands on, from your computer: Rubi Home connects, so the project VM never sees a key or a host. Only you register a target (a Bot can't). A role gets a target only when it is granted: you grant it on the role's page, and a Bot with a project trust may grant a target with restricted commands or ask-each-time to its roles. A target that allows any command needs your approval for each grant. The target's allowed commands apply. Names, hosts and commands are shown as text."
 
 func (s *sisters) sshRow(device string, t sshTarget) map[string]any {
 	allowed := "any command"
@@ -495,7 +528,7 @@ func (s *sisters) askSSHRegister(ctx context.Context, h sisterHost, dev rubiplug
 	preview := map[string]any{"computer": dev.Name, "name": t.Name, "host": t.Host, "port": t.Port, "user": t.User, "host_key_fingerprint": t.Fingerprint, "host_key_type": t.KeyType,
 		"allowed_commands": allowed, "ask_each_time": t.AskEachTime, "reuses_the_name_of_a_removed_target": t.Reuse,
 		"compare_the_fingerprint": "Compare the fingerprint with the one the server itself shows (on the server: ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub) before you approve. Rubi Home pins this key and refuses the target if the server ever presents another.",
-		"what_it_does":            "Registers the target on that computer. Rubi Home makes a new key pair there (the private key never leaves it) and shows you the public key line to put on the server. A role can use the target only after you grant it; the project VM never gets the key or the host. Commands run as " + t.User + " on the server."}
+		"what_it_does":            "Registers the target on that computer. Rubi Home makes a new key pair there (the private key never leaves it) and shows you the public key line to put on the server. A role can use the target only after it is granted: Bots with a project trust may grant a target with restricted commands or ask-each-time to their roles, and a target that allows any command needs your approval per grant. The project VM never gets the key or the host. Commands run as " + t.User + " on the server."}
 	if expect != nil && strings.TrimSpace(*expect) != "" {
 		preview["matches_the_fingerprint_you_typed"] = true
 	}

@@ -343,7 +343,7 @@ func registerRoleTools(p *rubiplugin.Plugin, s *sisters) {
 		func(ctx context.Context, h *rubiplugin.Host, in roleHostsSetIn) (any, error) {
 			return s.roleHostsSetTool(ctx, h, in)
 		})
-	rubiplugin.AddTool(p, "claude_code_role_ssh_grant", "Grant a role one registered SSH target (the user registers targets on Rubi's panel; an unregistered name is rejected). Applied at once and audited; the role can then run the target's allowed commands over SSH from its VM.",
+	rubiplugin.AddTool(p, "claude_code_role_ssh_grant", "Grant a role one registered SSH target (the user registers targets on Rubi's panel; an unregistered name is rejected). Applied at once and audited when the target has restricted allowed commands or asks each time; a target that allows any command needs the user's approval. The role can then run the target's allowed commands over SSH from its VM.",
 		func(ctx context.Context, h *rubiplugin.Host, in roleSSHIn) (any, error) {
 			return s.roleSSHTool(ctx, h, in, true)
 		})

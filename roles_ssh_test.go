@@ -564,3 +564,28 @@ func TestSSHTargetKindIsStrongAndLocked(t *testing.T) {
 		t.Fatal("the kind is not in the manifest")
 	}
 }
+
+func TestSSHGrantOfATargetThatAllowsAnyCommandIsTier2(t *testing.T) {
+	f, s, fr, fs := sshFixture(t)
+	id := mustCreate(t, s, f, botA, "design")
+	addTarget(t, s, f, "web-1")
+	for name, allowed := range map[string][]string{"open-1": nil, "star-1": {"*"}, "dstar-1": {"tail **"}, "narrow-1": {"tail -n *"}} {
+		fs.targets[name] = &sshTarget{Name: name, Host: "h.example.com", Port: 22, User: "deploy", AllowedCommands: allowed}
+	}
+	for _, name := range []string{"open-1", "star-1", "dstar-1"} {
+		n := len(f.submits)
+		m := asMap(t)(s.roleSSHTool(context.Background(), f, roleSSHIn{roleWho: who(botA), Role: id, Target: name}, true))
+		if status(m) != "needs_approval" || len(f.submits) != n+1 || lastSubmit(t, f).Kind != kindRoleWiden || len(fr.current(id).SSH) != 0 {
+			t.Fatalf("%s: %v", name, m)
+		}
+		if sum := lastSubmit(t, f).Summary; !strings.Contains(sum, name) || !strings.Contains(sum, "deploy@h.example.com:22") || !strings.Contains(sum, "any command") {
+			t.Fatalf("%s", sum)
+		}
+	}
+	// Restricted commands, and ask-each-time, stay tier 1.
+	for _, name := range []string{"narrow-1", "web-1"} {
+		if m := asMap(t)(s.roleSSHTool(context.Background(), f, roleSSHIn{roleWho: who(botA), Role: id, Target: name}, true)); status(m) != "applied" || m["tier"] != 1 {
+			t.Fatalf("%s: %v", name, m)
+		}
+	}
+}

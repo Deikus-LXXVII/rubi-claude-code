@@ -496,7 +496,7 @@ argument is never used, and a call without a verified Bot fails). A project's de
 | `claude_code_role_tools_set {role, tools?, deny?}` | built-in tools and deny rules (each leaving the other as it is when omitted) | 1 for the safe set (Read, Edit, Write, Glob, Grep, Bash, Agent, Skill, WebFetch, WebSearch), added deny rules and removing deny rules this Bot added; 2 for any other tool or removing a deny rule the user (or another Bot) set |
 | `claude_code_role_agents_set {role, agents}` | subagent definitions | 1 |
 | `claude_code_role_mcp_set`, `_plugins_set`, `_hosts_set {role, ...}` | MCP servers, Claude plugins, extra network hosts | always 2 (`role_widen`) |
-| `claude_code_role_ssh_grant` / `_revoke {role, target}` | SSH target grants (R12) | 1 for a registered target, audited (revoking cuts the role's live streams); an unregistered name is rejected, and only the user registers targets |
+| `claude_code_role_ssh_grant` / `_revoke {role, target}` | SSH target grants (R12) | 1 for a registered target with restricted allowed commands or ask-each-time, audited (revoking cuts the role's live streams); 2 (`role_widen`, naming target, host, user and "any command") for a target that allows any command; an unregistered name is rejected, and only the user registers targets |
 | `claude_code_role_start {role, prompt, name?}` | a session in the role's VM (`claude-agent.start` with `role`), the Bot bound to it | as `claude_code_start`: one strong approval (`claude-code.start`), or none with a live project trust held by this Bot, never for a `bypassPermissions` role; same hidden-text checks and 5 an hour |
 | `claude_code_role_list {project?}`, `_get {role, version?}`, `_history {role}` | read | none |
 
@@ -531,7 +531,7 @@ remote operations that always ask, and no 2-hour or project trust covers them; t
 **The tier comes from the difference, not from the tool.** The plugin reads the current version, builds the proposed
 one, and compares. It is tier 2 when anything grows in `mcp`, `plugins` or `hosts`; when a tool outside the safe set
 is added; when a deny rule the user (or another Bot) set is removed; when `default_mode` is above `role_mode_ceiling`;
-when an SSH target that isn't registered is granted; when the role is on a project where this Bot holds no live
+when an SSH target that isn't registered is granted, or one that allows any command (no limiting allowed-commands list, no ask-each-time); when the role is on a project where this Bot holds no live
 project trust (`Sister` is the Bot, `Project` the role's project, not expired or revoked); when the tool always asks
 (`mcp_set`, `plugins_set`, `hosts_set`); or when the role was created by someone else. **Ownership:** a Bot edits,
 archives and unarchives only the roles it created (tier 1); another Bot's roles and the user's are tier 2

@@ -454,6 +454,8 @@ type tierCtx struct {
 	Trust      bool            // the Bot holds a live project trust for the role's project
 	Ceiling    string          // role_mode_ceiling
 	Registered map[string]bool // registered SSH targets (none until R11)
+	// Unrestricted: the registered targets that allow any command (no limiting allowed-commands list, no asking).
+	Unrestricted map[string]sshTarget
 	// Revert: the change reverts to an older version; Foreign history says some version after it is not this
 	// Bot's own tier 1 change.
 	RevertOthers bool
@@ -494,7 +496,7 @@ func (v tierVerdict) headline(lines []string, n int) string {
 
 // tierOf compares cur with next (cur nil: a new role) and says which tier the change is. The tier comes from the
 // difference, never from the tool's name: any growth in mcp, plugins or hosts, a new tool outside the safe set, a
-// removed deny rule the Bot didn't set, a default mode above the ceiling, an SSH grant of an unregistered target,
+// removed deny rule the Bot didn't set, a default mode above the ceiling, an SSH grant of an unregistered target or of one that allows any command,
 // or any change to a role of a project this Bot holds no trust for makes it tier 2. Content (instructions,
 // skills, subagents, names) is tier 1: a skill carries no grants.
 func tierOf(cur, next *role, c tierCtx) tierVerdict {
@@ -564,6 +566,8 @@ func tierOf(cur, next *role, c tierCtx) tierVerdict {
 	for _, t := range next.SSH {
 		if !slices.Contains(base.SSH, t) && !c.Registered[t] {
 			v.widen("grants the SSH target %s, which isn't registered", clipOne(t, 40))
+		} else if u, open := c.Unrestricted[t]; open && !slices.Contains(base.SSH, t) {
+			v.widen("grants the SSH target %s (%s@%s:%d) with any command", clipOne(t, 40), clipOne(u.User, 32), clipOne(u.Host, 80), u.Port)
 		}
 	}
 	if c.RevertOthers {
