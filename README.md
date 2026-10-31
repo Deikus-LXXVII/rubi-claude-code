@@ -522,7 +522,9 @@ asks for confirmation, calls `ssh.remove` and takes the grant away from every ro
 change, audited), so a later target with the same name starts clean; re-registering a removed name needs the draft's
 **Reuse a removed name** switch, which is shown in the approval and is the only way `reuse` is sent. Each target has an
 audit page (`ssh.audit`) and Home's stream entries are copied into Rubi's audit log (`ssh.stream`, at most every 5
-minutes). A Bot can grant or revoke a registered target on a role it may change, nothing else: there is no Bot tool that
+minutes): the plugin asks for the entries after the last `seq` it copied (kept per computer in the plugin's state; a Home that
+sends no `seq` gets the old newest-50 dedupe), and audits a summary with the number copied, the refusals and Home's refusal
+counters (`ssh.audit_copied`). A Bot can grant or revoke a registered target on a role it may change, nothing else: there is no Bot tool that
 registers or scans. When a target was registered with ask-each-time, Home sends an `ssh.ask` item; the plugin turns it
 into a strong approval (`claude-code.run`, one option) showing the role, target, host, port, user and the command (newlines
 marked `⏎`; hidden characters are refused), in every mode. `ssh <target> ...` and `rubi-ssh` in a Bash call are also

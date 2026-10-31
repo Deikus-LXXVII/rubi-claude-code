@@ -18,6 +18,8 @@ type pluginState struct {
 	Aliases  []alias        `json:"session_names,omitempty"`
 	// RolePending are the role changes waiting for the user's approval (roles_change.go); bounded.
 	RolePending []rolePending `json:"role_pending,omitempty"`
+	// SSHAuditSeq is, per computer, the last Rubi Home SSH audit sequence number copied into Rubi's audit log.
+	SSHAuditSeq map[string]int64 `json:"ssh_audit_seq,omitempty"`
 }
 
 // binding ties one Bot (a "sister") to one Claude Code session: the Bot's messages reach only that
@@ -410,4 +412,30 @@ func (s *store) rolePendings() []rolePending {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]rolePending(nil), s.st.RolePending...)
+}
+
+// sshAuditSeq is the last SSH audit sequence number of a computer that was copied (0: none).
+func (s *store) sshAuditSeq(device string) int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.st.SSHAuditSeq[device]
+}
+
+// setSSHAuditSeq remembers it; a lower number never replaces a higher one. Computers that are gone keep a small entry.
+func (s *store) setSSHAuditSeq(device string, seq int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if seq <= s.st.SSHAuditSeq[device] {
+		return nil
+	}
+	before := s.st.SSHAuditSeq[device]
+	if s.st.SSHAuditSeq == nil {
+		s.st.SSHAuditSeq = map[string]int64{}
+	}
+	s.st.SSHAuditSeq[device] = seq
+	if err := s.saveLocked(); err != nil {
+		s.st.SSHAuditSeq[device] = before
+		return err
+	}
+	return nil
 }

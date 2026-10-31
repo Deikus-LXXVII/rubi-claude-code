@@ -589,3 +589,35 @@ func TestSSHGrantOfATargetThatAllowsAnyCommandIsTier2(t *testing.T) {
 		}
 	}
 }
+
+func TestSSHAuditUsesAfterSeqAndRemembersIt(t *testing.T) {
+	f, s, _, fs := sshFixture(t)
+	fs.numbered = true
+	fs.refusals = map[string]int{"not_granted": 2}
+	fs.audit = []sshAuditEntry{{Stream: "st_1", Target: "web-1", Command: "uptime", Start: "t1", Result: "ok"},
+		{Stream: "st_2", Target: "web-1", Command: "ls", Start: "t1", Result: "denied", Reason: "not granted"}}
+	clock := time.Now()
+	s.now = func() time.Time { return clock }
+	s.sshAuditTick(context.Background(), f, []string{"dev_mac"})
+	if a := auditsOf(f, auditSSHStream); len(a) != 2 || a[0]["seq"] != int64(1) || a[1]["seq"] != int64(2) || s.st.sshAuditSeq("dev_mac") != 2 {
+		t.Fatalf("%v", a)
+	}
+	if c := auditsOf(f, auditSSHCopy); len(c) != 1 || c[0]["copied"] != 2 || c[0]["refused"] != 1 || c[0]["refusals"] == nil {
+		t.Fatalf("%v", c)
+	}
+	// A restart forgets the in-memory dedupe; the saved seq keeps entries from being copied twice, and the call asks after it.
+	s.sshSeen = nil
+	clock = clock.Add(sshAuditEvery + time.Second)
+	fs.audit = append(fs.audit, sshAuditEntry{Stream: "st_3", Target: "web-1", Command: "df", Start: "t1", Result: "ok"})
+	s.sshAuditTick(context.Background(), f, []string{"dev_mac"})
+	if a := auditsOf(f, auditSSHStream); len(a) != 3 || a[2]["command"] != "df" {
+		t.Fatalf("%v", a)
+	}
+	var asked []map[string]any
+	for _, c := range fs.called(opSSHAudit) {
+		asked = append(asked, c)
+	}
+	if last := asked[len(asked)-1]; fmt.Sprint(last["after_seq"]) != "2" {
+		t.Fatalf("%v", last)
+	}
+}

@@ -8,6 +8,7 @@ package main
 // side of the audit. A Bot can't register a target: registration is panel-only. It may grant a restricted one (tier 1); granting one that allows any command is tier 2.
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -39,6 +40,7 @@ const (
 	auditSSHRegistered = "ssh.target_registered"
 	auditSSHRemoved    = "ssh.target_removed"
 	auditSSHStream     = "ssh.stream"
+	auditSSHCopy       = "ssh.audit_copied"
 
 	maxSSHDrafts   = 8
 	maxAllowedCmds = 8
@@ -631,6 +633,7 @@ func (s *sisters) panelSSHRemove(ctx context.Context, h sisterHost, dev rubiplug
 // ---- panel: the audit of one target ----
 
 type sshAuditEntry struct {
+	Seq      int64  `json:"seq"`
 	Stream   string `json:"stream"`
 	Role     string `json:"role"`
 	Project  string `json:"project"`
@@ -647,19 +650,32 @@ type sshAuditEntry struct {
 }
 
 func (s *sisters) readSSHAudit(ctx context.Context, h sisterHost, device, target string, limit int) ([]sshAuditEntry, error) {
-	var out struct {
-		Entries []sshAuditEntry `json:"entries"`
-	}
+	out, err := s.readSSHAuditAfter(ctx, h, device, target, limit, 0)
+	return out.Entries, err
+}
+
+// sshAuditReply is ssh.audit's answer: the entries and, when Home counts them, its counters of refusals by reason.
+type sshAuditReply struct {
+	Entries  []sshAuditEntry  `json:"entries"`
+	Refusals map[string]int64 `json:"refusals"`
+}
+
+// readSSHAuditAfter asks for the entries after a sequence number (0: the newest limit).
+func (s *sisters) readSSHAuditAfter(ctx context.Context, h sisterHost, device, target string, limit int, after int64) (sshAuditReply, error) {
+	var out sshAuditReply
 	args := map[string]any{"limit": limit}
 	if target != "" {
 		args["target"] = target
 	}
+	if after > 0 {
+		args["after_seq"] = after
+	}
 	actx, cancel := context.WithTimeout(ctx, listTimeout)
 	defer cancel()
 	if err := h.HomeCall(actx, device, opSSHAudit, args, &out); err != nil {
-		return nil, fmt.Errorf("couldn't read the SSH audit: %s", oneLine(err.Error(), 160))
+		return sshAuditReply{}, fmt.Errorf("couldn't read the SSH audit: %s", oneLine(err.Error(), 160))
 	}
-	return out.Entries, nil
+	return out, nil
 }
 
 func (s *sisters) sshAuditPage(ctx context.Context, h sisterHost, p panelPage) (any, error) {
@@ -697,7 +713,10 @@ func (s *sisters) sshAuditPage(ctx context.Context, h sisterHost, p panelPage) (
 }
 
 // sshAuditTick copies Home's SSH audit entries into Rubi's audit log (the plugin's side of section 9.7): at most
-// every sshAuditEvery, the newest sshAuditLimit entries, each once while the plugin runs.
+// every sshAuditEvery. Home numbers its entries (seq): the plugin asks for those after the last seq it copied, which
+// it keeps in its state per computer, so nothing is copied twice or missed after a restart. A Home that sends no seq
+// gets the old way: the newest sshAuditLimit entries, each once while the plugin runs. A per-computer summary
+// (entries copied, refusals, Home's refusal counters) is audited too.
 func (s *sisters) sshAuditTick(ctx context.Context, h sisterHost, devices []string) {
 	s.mu.Lock()
 	if !s.sshAuditAt.IsZero() && s.now().Sub(s.sshAuditAt) < sshAuditEvery {
@@ -707,34 +726,80 @@ func (s *sisters) sshAuditTick(ctx context.Context, h sisterHost, devices []stri
 	s.sshAuditAt = s.now()
 	s.mu.Unlock()
 	for _, dev := range devices {
-		entries, err := s.readSSHAudit(ctx, h, dev, "", sshAuditLimit)
-		if err != nil {
-			continue
+		last := s.st.sshAuditSeq(dev)
+		copied, refused := 0, 0
+		var counters map[string]int64
+		for page := 0; page < 10; page++ {
+			rep, err := s.readSSHAuditAfter(ctx, h, dev, "", sshAuditLimit, last)
+			if err != nil {
+				break
+			}
+			counters = rep.Refusals
+			entries := rep.Entries
+			numbered := slices.ContainsFunc(entries, func(e sshAuditEntry) bool { return e.Seq > 0 })
+			if numbered {
+				slices.SortStableFunc(entries, func(a, b sshAuditEntry) int { return cmp.Compare(a.Seq, b.Seq) })
+			} else {
+				slices.Reverse(entries) // oldest first
+			}
+			next := last
+			for _, e := range entries {
+				if numbered && e.Seq <= last {
+					continue
+				}
+				if !numbered && s.sshSeenBefore(dev, e) {
+					continue
+				}
+				h.Audit(auditSSHStream, sshAuditFields(dev, e))
+				copied++
+				if e.Result != "" && e.Result != "ok" {
+					refused++
+				}
+				next = max(next, e.Seq)
+			}
+			if next > last {
+				_ = s.st.setSSHAuditSeq(dev, next)
+			}
+			if !numbered || next == last || len(entries) < sshAuditLimit {
+				break
+			}
+			last = next
 		}
-		for i := len(entries) - 1; i >= 0; i-- { // oldest first
-			e := entries[i]
-			key := dev + "|" + e.Stream + "|" + e.Start + "|" + e.Target + "|" + e.Role + "|" + e.Result
-			s.mu.Lock()
-			if s.sshSeen == nil || len(s.sshSeen) > 2000 {
-				s.sshSeen = map[string]bool{}
+		if copied > 0 || len(counters) > 0 {
+			f := map[string]any{"device": dev, "copied": copied, "refused": refused}
+			if len(counters) > 0 {
+				f["refusals"] = counters
 			}
-			seen := s.sshSeen[key]
-			s.sshSeen[key] = true
-			s.mu.Unlock()
-			if seen {
-				continue
-			}
-			f := map[string]any{"device": dev, "role": e.Role, "project": e.Project, "bot": e.Bot, "target": e.Target, "command": plainText(e.Command, 200),
-				"start": e.Start, "end": e.End, "bytes_in": e.BytesIn, "bytes_out": e.BytesOut, "result": e.Result}
-			if e.Exit != nil {
-				f["exit"] = *e.Exit
-			}
-			if e.Reason != "" {
-				f["reason"] = plainText(e.Reason, 100)
-			}
-			h.Audit(auditSSHStream, f)
+			h.Audit(auditSSHCopy, f)
 		}
 	}
+}
+
+func (s *sisters) sshSeenBefore(dev string, e sshAuditEntry) bool {
+	key := dev + "|" + e.Stream + "|" + e.Start + "|" + e.Target + "|" + e.Role + "|" + e.Result
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.sshSeen == nil || len(s.sshSeen) > 2000 {
+		s.sshSeen = map[string]bool{}
+	}
+	seen := s.sshSeen[key]
+	s.sshSeen[key] = true
+	return seen
+}
+
+func sshAuditFields(dev string, e sshAuditEntry) map[string]any {
+	f := map[string]any{"device": dev, "role": e.Role, "project": e.Project, "bot": e.Bot, "target": e.Target, "command": plainText(e.Command, 200),
+		"start": e.Start, "end": e.End, "bytes_in": e.BytesIn, "bytes_out": e.BytesOut, "result": e.Result}
+	if e.Seq > 0 {
+		f["seq"] = e.Seq
+	}
+	if e.Exit != nil {
+		f["exit"] = *e.Exit
+	}
+	if e.Reason != "" {
+		f["reason"] = plainText(e.Reason, 100)
+	}
+	return f
 }
 
 // ---- role grants on the role page ----

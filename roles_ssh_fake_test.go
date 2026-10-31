@@ -16,6 +16,8 @@ type fakeSSH struct {
 	removed   map[string]bool // names used by a removed target (the tombstone)
 	calls     []fakeCall
 	audit     []sshAuditEntry
+	numbered  bool           // the audit entries carry seq and after_seq works
+	refusals  map[string]int // Home's refusal counters
 	scanErr   error
 	registers []map[string]any
 }
@@ -116,12 +118,16 @@ func (f *fakeSSH) call(op string, m map[string]any, roles *fakeRoles) (any, erro
 	case opSSHAudit:
 		target, _ := m["target"].(string)
 		var out []sshAuditEntry
+		after, _ := m["after_seq"].(int64)
 		for i := len(f.audit) - 1; i >= 0; i-- {
-			if target == "" || f.audit[i].Target == target {
+			if f.numbered {
+				f.audit[i].Seq = int64(i + 1)
+			}
+			if (target == "" || f.audit[i].Target == target) && f.audit[i].Seq > after || (!f.numbered && (target == "" || f.audit[i].Target == target)) {
 				out = append(out, f.audit[i])
 			}
 		}
-		return map[string]any{"entries": out}, nil
+		return map[string]any{"entries": out, "refusals": f.refusals}, nil
 	}
 	return nil, fmt.Errorf(`Rubi Home doesn't do "%s"`, op)
 }
