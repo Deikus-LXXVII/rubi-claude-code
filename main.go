@@ -71,6 +71,10 @@ func manifest() rubiplugin.Manifest {
 				Options: []rubiplugin.Option{{Key: "start", Label: "Start", Meaning: "Starts a new Claude Code session on your computer with the Bot's task as its first message, and binds the Bot to it. The session runs with the Claude desktop app's permission settings: if those skip permission prompts, Claude can run any command there without asking, and Rubi approvals don't apply to it"}}},
 			{Kind: kindAgentQuestion, Title: "Answer a question Claude asks in a project VM", DefaultLevel: rubiplugin.Tap, Locked: true,
 				Options: []rubiplugin.Option{{Key: "opt0", Label: "Answer", Meaning: "Gives Claude the option you choose as the answer to its question; approves nothing else"}}},
+			{Kind: kindFork, Title: "Let a Bot fork a Claude session in a project VM", DefaultLevel: rubiplugin.Strong, Locked: true,
+				Options: []rubiplugin.Option{{Key: "fork", Label: "Fork", Meaning: "Makes a branch of that session's conversation as a new, idle session in the same project"}}},
+			{Kind: kindForkOwn, Title: "Let a Bot fork the Claude session it is bound to", DefaultLevel: rubiplugin.Tap, Locked: true,
+				Options: []rubiplugin.Option{{Key: "fork", Label: "Fork", Meaning: "Makes a branch of the Bot's own session's conversation as a new, idle session in the same project"}}},
 			{Kind: kindMode, Title: "Loosen the permission mode of a Claude session in a project VM", DefaultLevel: rubiplugin.Strong, Locked: true,
 				Options: []rubiplugin.Option{{Key: "mode", Label: "Change the mode", Meaning: "Moves the session to a looser permission mode: Claude asks fewer questions; bypassPermissions lets it run almost anything in the VM without asking. Push, sudo, the network outside the allow-list, paths outside /work and edits of .rubi/.claude still ask"}}},
 		},
@@ -148,6 +152,20 @@ func main() {
 	p.OnExecute(kindAgentQuestion, func(ctx context.Context, h *rubiplugin.Host, option string, payload json.RawMessage) (any, error) {
 		return answerQuestion(ctx, h, option, payload)
 	})
+	p.OnExecute(kindFork, func(ctx context.Context, h *rubiplugin.Host, _ string, payload json.RawMessage) (any, error) {
+		var t forkTicket
+		if err := json.Unmarshal(payload, &t); err != nil {
+			return nil, fmt.Errorf("bad payload")
+		}
+		return sis.executeFork(ctx, h, t)
+	})
+	p.OnExecute(kindForkOwn, func(ctx context.Context, h *rubiplugin.Host, _ string, payload json.RawMessage) (any, error) {
+		var t forkTicket
+		if err := json.Unmarshal(payload, &t); err != nil {
+			return nil, fmt.Errorf("bad payload")
+		}
+		return sis.executeFork(ctx, h, t)
+	})
 	p.OnExecute(kindMode, func(ctx context.Context, h *rubiplugin.Host, _ string, payload json.RawMessage) (any, error) {
 		var t modeTicket
 		if err := json.Unmarshal(payload, &t); err != nil {
@@ -176,6 +194,8 @@ func main() {
 		func(ctx context.Context, h *rubiplugin.Host, in trustIn) (any, error) {
 			return sis.trustTool(ctx, h, in)
 		})
+	rubiplugin.AddTool(p, "claude_code_fork", "Fork a Claude session in a project VM (agent path): a branch of its conversation as a new idle session, optionally named. A tap from the user for the session you are bound to, one strong approval for any other. Then claude_code_bind to the fork and send it a message to start it.",
+		func(ctx context.Context, h *rubiplugin.Host, in forkIn) (any, error) { return sis.forkTool(ctx, h, in) })
 	rubiplugin.AddTool(p, "claude_code_mode", "Change the permission mode (plan, default, acceptEdits, bypassPermissions; strictest first) of a Claude session in a project VM (agent path). A stricter mode applies at once if you are bound in that project; a looser one asks the user (one strong approval).",
 		func(ctx context.Context, h *rubiplugin.Host, in modeIn) (any, error) { return sis.modeTool(ctx, h, in) })
 	rubiplugin.AddTool(p, "claude_code_unbind", "End your binding to a Claude Code session.",

@@ -173,6 +173,9 @@ func (s *store) setAlias(device, deviceName string, sess session, name, by strin
 	}
 	na := alias{Device: device, DeviceName: deviceName, SessionID: sess.SessionID, AppSessionID: sess.AppSessionID, Name: name, SetBy: by,
 		Cwd: sess.Cwd, RepoKey: sess.RepoKey, Title: oneLine(sess.Title, 200), Set: now, Seen: now}
+	if sess.Source == "agent" { // an agent session (agent.go asSession): its project is in the RepoKey
+		na.Project = strings.TrimPrefix(sess.RepoKey, "agent:")
+	}
 	if found >= 0 {
 		s.st.Aliases[found] = na
 	} else {
@@ -436,6 +439,7 @@ type renameIn struct {
 	SessionID     string `json:"session_id,omitempty" jsonschema:"the session to name: session_id or app_session_id from claude_code_sessions. Leave out (with session_name) for the session you are bound to"`
 	SessionName   string `json:"session_name,omitempty" jsonschema:"the session's current name, instead of session_id"`
 	Device        string `json:"device,omitempty" jsonschema:"the computer, when there are several"`
+	Project       string `json:"project,omitempty" jsonschema:"for a Claude session in a project VM: its project (id or directory)"`
 	Name          string `json:"name,omitempty" jsonschema:"the new name: 1 to 64 plain characters, unique on that computer (ignoring case), not like an id"`
 	Clear         bool   `json:"clear,omitempty" jsonschema:"remove the session's name instead of setting one"`
 }
@@ -448,6 +452,7 @@ type renameTicket struct {
 	AppSessionID string `json:"app_session_id,omitempty"`
 	Name         string `json:"name,omitempty"`
 	Clear        bool   `json:"clear,omitempty"`
+	Project      string `json:"project,omitempty"` // an agent project (claude-agent)
 }
 
 // freeName checks a name against the session ids the list showed (a name that equals an id is refused).
@@ -486,7 +491,12 @@ func (s *sisters) renameTool(ctx context.Context, h sisterHost, in renameIn) (an
 		sess session
 		all  []deviceSessions
 		err  error
+		// project is set when the session is an agent session (claude-agent).
+		project string
 	)
+	agentTarget := func(ref agentRef) {
+		d, sess, all, project = ref.ad.device, ref.sess.asSession(ref.proj.Dir), asDeviceSessions([]agentDevice{ref.ad}), ref.proj.ID
+	}
 	if in.SessionID == "" && in.SessionName == "" {
 		// The Bot's own session.
 		var mine *binding
@@ -499,14 +509,26 @@ func (s *sisters) renameTool(ctx context.Context, h sisterHost, in renameIn) (an
 		if mine == nil {
 			return nil, errors.New("you are not bound to a session: pass session_id (or session_name) of the session to name")
 		}
-		key := firstNonEmpty(mine.AppSessionID, mine.SessionID)
-		if d, sess, all, err = lookupSession(ctx, h, mine.Device, key); err != nil {
-			return nil, fmt.Errorf("the session you are bound to isn't there any more (%v)", err)
+		if mine.Project != "" {
+			ref, found, err := s.resolveAgent(ctx, h, mine.Device, mine.Project, mine.SessionID, "")
+			if err != nil || !found {
+				return nil, errors.New("the session you are bound to isn't there any more")
+			}
+			agentTarget(ref)
+		} else {
+			key := firstNonEmpty(mine.AppSessionID, mine.SessionID)
+			if d, sess, all, err = lookupSession(ctx, h, mine.Device, key); err != nil {
+				return nil, fmt.Errorf("the session you are bound to isn't there any more (%v)", err)
+			}
+			s.sweep(h, all, s.sweepWanted())
 		}
-		s.sweep(h, all, s.sweepWanted())
 	} else {
 		id, nm := strings.TrimSpace(in.SessionID), strings.TrimSpace(in.SessionName)
-		if d, sess, all, err = s.resolveSession(ctx, h, in.Device, id, nm); err != nil {
+		if ref, found, err := s.resolveAgent(ctx, h, in.Device, in.Project, id, nm); err != nil {
+			return nil, err
+		} else if found {
+			agentTarget(ref)
+		} else if d, sess, all, err = s.resolveSession(ctx, h, in.Device, id, nm); err != nil {
 			return nil, err
 		}
 	}
@@ -519,7 +541,7 @@ func (s *sisters) renameTool(ctx context.Context, h sisterHost, in renameIn) (an
 			return nil, err
 		}
 	}
-	t := renameTicket{Sister: sister, Device: d.ID, DeviceName: d.Name, SessionID: sess.SessionID, AppSessionID: sess.AppSessionID, Name: name, Clear: in.Clear}
+	t := renameTicket{Sister: sister, Device: d.ID, DeviceName: d.Name, SessionID: sess.SessionID, AppSessionID: sess.AppSessionID, Name: name, Clear: in.Clear, Project: project}
 	old, _ := s.st.aliasFor(d.ID, sess)
 	if in.Clear && old.Name == "" {
 		return map[string]any{"cleared": false, "session_id": sess.SessionID, "note": "that session has no name"}, nil
@@ -530,7 +552,7 @@ func (s *sisters) renameTool(ctx context.Context, h sisterHost, in renameIn) (an
 
 	// 1. The session the Bot is bound to: no approval.
 	for _, b := range s.st.bindings() {
-		if mayAlone && sameBot(b.Sister, sister) && b.Device == d.ID && (b.SessionID == sess.SessionID || b.AppSessionID != "" && b.AppSessionID == sess.AppSessionID) {
+		if mayAlone && sameBot(b.Sister, sister) && b.Device == d.ID && b.Project == project && (b.SessionID == sess.SessionID || b.AppSessionID != "" && b.AppSessionID == sess.AppSessionID) {
 			res, err := s.executeRename(ctx, h, t, "bot", "own bound session", all)
 			if m, ok := res.(map[string]any); ok && err == nil {
 				m["approval"] = "none needed: you are bound to this session"
@@ -540,7 +562,13 @@ func (s *sisters) renameTool(ctx context.Context, h sisterHost, in renameIn) (an
 	}
 	// 2. A session inside a project the user trusts, for a Bot bound inside it.
 	if mayAlone {
-		if pt := s.projectCovering(ctx, h, d.ID, sister, sess.Cwd, sess.RealCwd); pt != nil {
+		var pt *projectTrust
+		if project != "" {
+			pt = s.agentProjectCovering(d.ID, sister, project)
+		} else {
+			pt = s.projectCovering(ctx, h, d.ID, sister, sess.Cwd, sess.RealCwd)
+		}
+		if pt != nil {
 			h.Audit(auditMandateAll, map[string]any{"mandate": pt.ID, "project": pt.Root, "device": d.ID, "sister": sister, "action": "claude_code_rename",
 				"session": sess.SessionID, "directory": sess.Cwd, "uses": pt.Uses})
 			res, err := s.executeRename(ctx, h, t, "bot", "project trust "+pt.ID, all)
@@ -575,6 +603,9 @@ func (s *sisters) executeRename(ctx context.Context, h sisterHost, t renameTicke
 		return nil, errors.New("bad payload")
 	}
 	sess := session{SessionID: t.SessionID, AppSessionID: t.AppSessionID}
+	if t.Project != "" {
+		sess.Source, sess.RepoKey = "agent", "agent:"+t.Project
+	}
 	if t.Clear {
 		old, err := s.st.clearAlias(t.Device, sess)
 		if err != nil {
@@ -590,7 +621,27 @@ func (s *sisters) executeRename(ctx context.Context, h sisterHost, t renameTicke
 	if err != nil {
 		return nil, err
 	}
-	if all == nil {
+	if t.Project != "" {
+		// An agent session: the runner keeps the name (renameSession), Rubi keeps the alias beside it.
+		if all == nil {
+			lctx, cancel := context.WithTimeout(ctx, panelListTimeout)
+			defer cancel()
+			ads := s.listAgent(lctx, h, t.Device)
+			if len(ads) == 0 || ads[0].err != nil {
+				return nil, errors.New("couldn't check the name against the computer's sessions; try again")
+			}
+			all = asDeviceSessions(ads)
+		}
+		if err := freeName(name, all, t.Device); err != nil {
+			return nil, err
+		}
+		rctx, cancel := context.WithTimeout(ctx, panelListTimeout)
+		defer cancel()
+		if err := h.HomeCall(rctx, t.Device, opAgentRename, map[string]any{"project": t.Project, "id": t.SessionID, "name": name}, nil); err != nil {
+			return nil, fmt.Errorf("Rubi Home didn't rename the session (%v); nothing changed", err)
+		}
+		all = nil
+	} else if all == nil {
 		lctx, cancel := context.WithTimeout(ctx, panelListTimeout)
 		defer cancel()
 		var lerr error
@@ -609,8 +660,10 @@ func (s *sisters) executeRename(ctx context.Context, h sisterHost, t renameTicke
 			return nil, fmt.Errorf("couldn't check the name against the computer's sessions (%v); try again", lerr)
 		}
 	}
-	if err := freeName(name, all, t.Device); err != nil {
-		return nil, err
+	if all != nil {
+		if err := freeName(name, all, t.Device); err != nil {
+			return nil, err
+		}
 	}
 	setBy := t.Sister
 	if by == "user" {
