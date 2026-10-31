@@ -549,7 +549,7 @@ func TestPerBotLimits(t *testing.T) {
 	if status(m) != "rejected" || !strings.Contains(strings.Join(m["reasons"].([]string), " "), "role_max_total") {
 		t.Fatalf("%v", m)
 	}
-	// Archiving frees a slot for the Bot (but not the total); unarchiving past the limit is refused.
+	// Archiving frees nothing: an archived role still counts (Home has no delete).
 	asMap(t)(s.roleArchiveTool(context.Background(), ch, roleRefIn{who(botA), a1["role"].(string)}, true))
 	if m := create("p1", "a4", botA); !strings.Contains(strings.Join(m["reasons"].([]string), " "), "role_max_total") {
 		t.Fatalf("%v", m)
@@ -973,5 +973,30 @@ func TestSkillAcceptancesUseDistinctApprovalIDs(t *testing.T) {
 	}
 	if fr.putCount() != puts {
 		t.Fatal("a put was made")
+	}
+}
+
+// Archived roles count toward the per-Bot limits: archiving the old ones is not a way to make roles without end.
+func TestArchivedRolesCountTowardTheBotLimits(t *testing.T) {
+	f, s, _ := roleFixture(t)
+	trustBot(t, s, botA, "p1")
+	ch := cfgRoleHost{f, `{"role_max_per_project_per_bot":"2","role_max_per_bot":"3","role_max_total":"50"}`}
+	create := func(name string) map[string]any {
+		return asMap(t)(s.roleCreateTool(context.Background(), ch, roleCreateIn{roleWho: who(botA), Project: "p1", Name: name}))
+	}
+	a := create("a")["role"].(string)
+	b := create("b")["role"].(string)
+	for _, id := range []string{a, b} {
+		if m := asMap(t)(s.roleArchiveTool(context.Background(), ch, roleRefIn{who(botA), id}, true)); status(m) != "applied" {
+			t.Fatalf("%v", m)
+		}
+	}
+	m := create("c")
+	if status(m) != "rejected" || !strings.Contains(m["reasons"].([]string)[0], "role_max_per_project_per_bot") || !strings.Contains(m["reasons"].([]string)[0], "archived ones count") {
+		t.Fatalf("%v", m)
+	}
+	// Unarchiving is not blocked by the count of the others.
+	if m := asMap(t)(s.roleArchiveTool(context.Background(), ch, roleRefIn{who(botA), a}, false)); status(m) != "applied" {
+		t.Fatalf("%v", m)
 	}
 }

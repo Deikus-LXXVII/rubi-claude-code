@@ -283,11 +283,13 @@ func refusalReasons(msg string) []string {
 	return out
 }
 
-// roleCount counts a Bot's active roles (project "": on the whole computer).
+// roleCount counts the roles a Bot created, archived ones too (project "": on the whole computer). Rubi Home has no
+// delete, so an archived role keeps its place: otherwise a Bot could make roles without end by archiving the old
+// ones, and the limits would only slow it down.
 func roleCount(d *roleDev, creator, project, except string) int {
 	n := 0
 	for id, r := range d.roles {
-		if id != except && r.Status == "active" && r.CreatedBy == creator && (project == "" || r.Project == project) {
+		if id != except && r.CreatedBy == creator && (project == "" || r.Project == project) {
 			n++
 		}
 	}
@@ -319,8 +321,8 @@ func (s *sisters) limitReasons(ctx context.Context, h sisterHost, rq roleChangeR
 	}
 	creating := rq.Cur == nil
 	perBot := !rq.ByUser
-	activating := rq.Cur != nil && rq.Cur.Status != "active" && next.Status == "active"
-	if creating || activating {
+	// Archived roles count, so archiving or unarchiving never changes a Bot's count: only a new role is checked.
+	if creating {
 		d, err := s.refreshRoles(ctx, h, rq.Dev.ID, true)
 		if err != nil {
 			return nil, err
@@ -337,10 +339,10 @@ func (s *sisters) limitReasons(ctx context.Context, h sisterHost, rq roleChangeR
 			out = append(out, fmt.Sprintf("%s: this computer already has %d roles (the limit)", cfgRoleTotal, len(d.roles)))
 		}
 		if n := roleCount(d, creator, next.Project, except); perBot && n >= lim.PerProjectPerBot {
-			out = append(out, fmt.Sprintf("%s: %d active roles of the same Bot on this project already (the limit)", cfgRolePerProject, n))
+			out = append(out, fmt.Sprintf("%s: %d roles of the same Bot on this project already, archived ones count (the limit)", cfgRolePerProject, n))
 		}
 		if n := roleCount(d, creator, "", except); perBot && n >= lim.PerBot {
-			out = append(out, fmt.Sprintf("%s: %d active roles of the same Bot already (the limit)", cfgRolePerBot, n))
+			out = append(out, fmt.Sprintf("%s: %d roles of the same Bot already, archived ones count (the limit)", cfgRolePerBot, n))
 		}
 	}
 	return out, nil
