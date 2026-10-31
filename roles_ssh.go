@@ -696,6 +696,7 @@ type sshAuditEntry struct {
 	BytesOut int64  `json:"bytes_out"`
 	Result   string `json:"result"`
 	Reason   string `json:"reason"`
+	Count    int    `json:"count"` // identical refusals Home collapsed into this entry
 }
 
 func (s *sisters) readSSHAudit(ctx context.Context, h sisterHost, device, target string, limit int) ([]sshAuditEntry, error) {
@@ -705,8 +706,9 @@ func (s *sisters) readSSHAudit(ctx context.Context, h sisterHost, device, target
 
 // sshAuditReply is ssh.audit's answer: the entries and, when Home counts them, its counters of refusals by reason.
 type sshAuditReply struct {
+	LastSeq  int64            `json:"last_seq"`
 	Entries  []sshAuditEntry  `json:"entries"`
-	Refusals map[string]int64 `json:"refusals"`
+	Refusals map[string]int64 `json:"refusals"` // older Homes; current ones collapse refusals into entries' count
 }
 
 // readSSHAuditAfter asks for the entries after a sequence number (0: the newest limit).
@@ -802,7 +804,7 @@ func (s *sisters) sshAuditTick(ctx context.Context, h sisterHost, devices []stri
 				h.Audit(auditSSHStream, sshAuditFields(dev, e))
 				copied++
 				if e.Result != "" && e.Result != "ok" {
-					refused++
+					refused += max(e.Count, 1)
 				}
 				next = max(next, e.Seq)
 			}
