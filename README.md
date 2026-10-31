@@ -28,6 +28,8 @@ Code runs without asking (its read-only set, or allow rules in managed settings)
   computers.
 - **Rubi Home: `claude-sessions`.** The plugin can list the Claude Code sessions on your paired computers
   and pass messages to and from them; this part can't approve anything. The install screen shows both.
+- **Rubi Home: `claude-agent`.** The plugin can answer the permission questions of Claude run in a project VM
+  on your computer and pass messages to and from its sessions (see [the agent path](#claude-in-a-project-vm-the-agent-path-v04)).
 - **No network access**, no files, no secrets.
 - **Actions.** `claude-code.run` (any command; passkey or password, and you can't lower it) and
   `claude-code.run_safe` (a few read-only commands such as `ls`, `cat`, `git status` with plain
@@ -406,6 +408,82 @@ Manual check: start a Claude Code session in a project, ask "which sister do you
 (it lists the tools and names her once she is bound), then have the Bot send a message and ask Claude to
 `rubi_reply` to it (approve the prompt); the Bot should receive `claude_reply` with `in_reply_to`. `/mcp` shows the `rubi`
 server of the `rubi-sisters` plugin as connected.
+
+## Claude in a project VM (the agent path, v0.4)
+
+Besides approving the commands of Claude Code sessions through its hook, the plugin can work with Claude run
+through the Agent SDK in a project VM on your computer (Rubi Home's `claude-agent` capability; the design is
+`docs/design/agent-runner.md` in the Rubi repository). The two paths live side by side: the old one is used
+for a computer whose Rubi Home doesn't report the capability, and for bindings made on it.
+
+**Capability detection.** For each paired computer the plugin calls `claude-agent.status`. An answer means the
+computer has the capability (remembered for 5 minutes; "no" for 1 minute, so an updated Rubi Home is noticed).
+Such a computer is polled with `claude-agent.next`; the hook's `claude.next` poll goes on as before. The
+manifest declares the `claude-agent` Home capability; `min_rubi` stays at v0.13.0 until a Rubi release knows
+that capability (a core that doesn't know it refuses the manifest, so this plugin version must not be
+published before that release).
+
+**How a question is decided** (`claude-agent.next` item `perm.ask`, answered with `claude-agent.decide`; Rubi
+Home denies a question nobody answered in 280 seconds, or while Rubi is locked):
+
+1. `AskUserQuestion` is shown as an approval (a tap) whose buttons are the question's options; the chosen
+   option is Claude's answer. One single-choice question with 2 to 4 options at a time; anything else is sent
+   back to Claude to ask again.
+2. **Always asks, in every mode, bypassPermissions included, with a strong approval and no trust option:**
+   `git push` and every remote git command (fetch, pull, clone, remote ...), `--force`, `sudo`, the network
+   outside the allow-list (`curl`/`wget`/`WebFetch` to a host other than the Anthropic API, npm and PyPI
+   hosts; `ssh`, `scp`, `nc` ...), any path outside `/work` (also `~`, `..`), anything under `.rubi`
+   (reading too: it holds the Claude login), edits under `.claude`, `git tag`, `gh`, `npm publish` and
+   similar releases, and a git credential request (`cred.ask`). The check reads the command line leniently
+   (quotes dropped, `g''it push` still reads git push) and errs toward asking; it can't see what a program
+   does inside, which the VM's own borders cover.
+3. `bypassPermissions`: allow.
+4. A stricter mode (`plan`, `default`, `acceptEdits`): a live 2-hour or project trust that covers the session
+   or project allows what `mandateAllows` accepts (root `/work`; a trust of one project never covers another,
+   nor a hook session); a read-only command from the short list is a tap; the rest is a normal run approval
+   (allow, or allow and trust the session for 2 hours). Edits: `acceptEdits` allows (secret-looking paths
+   ask), `plan` denies, `default` asks unless a trust covers them. Read-only tools are allowed; Rubi's own
+   in-session tools (`mcp__rubi__*`) are allowed.
+
+**Modes.** `claude_code_mode {project, session, mode}` (and the panel op `mode`): to a stricter mode (order:
+plan, default, acceptEdits, bypassPermissions) at once, for a Bot bound in that project; to a looser one one
+strong approval (`claude-code.mode`). Rubi Home forwards only what the plugin asked for.
+
+**Sisters.** `claude_code_bind` takes a `project` and binds to an agent session (strong approval; no approval
+for a Bot already bound in a project the user trusts). `claude_code_send` goes through `claude-agent.send`
+(never steering) and reports the queue position; `claude_code_status` combines `claude-agent.status` and the
+session list; `claude_code_start` takes `project` and a `mode` (default `default`) and calls
+`claude-agent.start` (strong approval, the hidden-character checks, 5 an hour; under a project trust no
+approval, but a `bypassPermissions` start always asks); `claude_code_trust_project` trusts the agent project
+(root `/work`); `claude_code_sessions` lists the agent sessions (`agent: true`, with `name`: the Rubi alias or
+else the runner's name). `claude_code_rename` calls `claude-agent.rename` and keeps the Rubi alias with the
+same rules and approvals as before; clearing removes the alias only (the runner has no way to clear a name).
+`claude_code_fork {project, session, name?}` calls `claude-agent.fork`: a tap for the Bot's own bound session,
+a strong approval for any other; no trust shortcut.
+
+### Events and items the plugin expects from Rubi Home (addendum to the contract)
+
+`claude-agent.next` returns `{items:[...]}`; each item has `type`:
+
+- `perm.ask` and `cred.ask`: `ask_id`, `project`, `session_id`, `tool`, `input` (the tool input as JSON),
+  `cwd`, `mode`, optionally `agent_id`, `agent_type`, `expires_at`. A `cred.ask` has no tool (it is always an
+  approval).
+- `event`: `project`, `session_id`, `kind` and, by kind:
+  - `result`: `text` (the turn's final text), `to` (the Bot that started the turn with `claude-agent.send` or
+    `.start` `from`; **Rubi Home must set it, and leave it empty for turns the user started**, because the
+    text goes to that Bot only), `in_reply_to` (message ids), `is_error`. Becomes `claude_reply`.
+  - `sister_reply` (the in-process `rubi_reply` tool): `text`, `to`, `in_reply_to`. Becomes `claude_reply`.
+  - `sister_ask` (the in-process `rubi_ask` tool): `ask_kind`, `text`. Becomes `claude_ask` for the Bot bound to
+    that session, or else a Bot bound in the same project.
+  - `message`: `id`, `to`, `state` (`delivered`, `answered`, `expired`; `queued` is ignored), `at`. Becomes
+    `claude_message`.
+  - `assistant`, `tool`, `status`, `rate_limit`, `background`, `error`, `ask`: for the panel (M6), not forwarded.
+
+Results the plugin reads: `claude-agent.projects` `{projects:[{id, dir, vm_state, slot_busy, queue}]}`;
+`claude-agent.sessions` `{sessions:[{id, name, created, last_activity, mode, busy}]}`;
+`claude-agent.status` `{login:{logged_in}, slot:{busy, project, session}, queue:[{project, session,
+position}]}`; `claude-agent.start` `{id}` or `{queued:true, position}`; `claude-agent.send`
+`{queued, position, delivered?}`; `claude-agent.fork` `{id}`.
 
 ## Set up on a Mac
 
