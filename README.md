@@ -430,13 +430,21 @@ Home denies a question nobody answered in 280 seconds, or while Rubi is locked):
    option is Claude's answer. One single-choice question with 2 to 4 options at a time; anything else is sent
    back to Claude to ask again.
 2. **Always asks, in every mode, bypassPermissions included, with a strong approval and no trust option:**
-   `git push` and every remote git command (fetch, pull, clone, remote ...), `--force`, `sudo`, the network
-   outside the allow-list (`curl`/`wget`/`WebFetch` to a host other than the Anthropic API, npm and PyPI
-   hosts; `ssh`, `scp`, `nc` ...), any path outside `/work` (also `~`, `..`), anything under `.rubi`
-   (reading too: it holds the Claude login), edits under `.claude`, `git tag`, `gh`, `npm publish` and
-   similar releases, and a git credential request (`cred.ask`). The check reads the command line leniently
-   (quotes dropped, `g''it push` still reads git push) and errs toward asking; it can't see what a program
-   does inside, which the VM's own borders cover.
+   `git push` and every remote git command, `--force`, `sudo`, the network outside the allow-list
+   (`curl`/`wget`/`WebFetch` to anything but a plain lower-case URL on the Anthropic API, npm and PyPI hosts;
+   `ssh`, `nc`, `openssl` ... and a host the project VM's proxy asks about: item `net.ask`), any path outside
+   `/work` (also `~`, a `..` that leaves it, a `cd` that goes home or out), anything under `.rubi` (reading
+   too: it holds the Claude login), edits under `.claude`, `.git` (hooks, config), `.gitmodules` and
+   `.mcp.json`, `git tag`, `gh`, `npm publish` and similar releases, and a git credential request
+   (`cred.ask`, shown with its host, repository path and operation; without them it is denied as "unknown
+   remote"). **The check fails closed:** a Bash command is read with the strict splitter of the trust check, and
+   whatever that refuses (variables and expansions, `$(...)`, backticks, backslash escapes and line
+   continuations, here documents, subshells, comments) asks, so does a shell or wrapper (`sh`, `env`, `xargs`,
+   `eval`), an interpreter with code on the command line or stdin (`python -c`, `node -e`), a variable set in
+   front of a command, `ln`, `find -exec`, a git command that is not a plain local one (an alias, `config`,
+   `archive`, `bundle`, `-c`) and a wildcard that can match `.rubi`, `.claude` or `.git`. This over-asks (for
+   example a commit message in `$(cat <<EOF ...)`); under-asking is the error it avoids. It cannot see what a
+   program does inside (`make`, `npm run`, `python x.py`), which the VM's own borders cover.
 3. `bypassPermissions`: allow.
 4. A stricter mode (`plan`, `default`, `acceptEdits`): a live 2-hour or project trust that covers the session
    or project allows what `mandateAllows` accepts (root `/work`; a trust of one project never covers another,
@@ -454,12 +462,16 @@ for a Bot already bound in a project the user trusts). `claude_code_send` goes t
 (never steering) and reports the queue position; `claude_code_status` combines `claude-agent.status` and the
 session list; `claude_code_start` takes `project` and a `mode` (default `default`) and calls
 `claude-agent.start` (strong approval, the hidden-character checks, 5 an hour; under a project trust no
-approval, but a `bypassPermissions` start always asks); `claude_code_trust_project` trusts the agent project
+approval, but a `bypassPermissions` start always asks; note that a `plan`, `default` or `acceptEdits` start does
+not, so under a project trust a Bot can start an `acceptEdits` session (which edits files in `/work` without
+asking) with no approval); `claude_code_trust_project` trusts the agent project
 (root `/work`); `claude_code_sessions` lists the agent sessions (`agent: true`, with `name`: the Rubi alias or
 else the runner's name). `claude_code_rename` calls `claude-agent.rename` and keeps the Rubi alias with the
 same rules and approvals as before; clearing removes the alias only (the runner has no way to clear a name).
 `claude_code_fork {project, session, name?}` calls `claude-agent.fork`: a tap for the Bot's own bound session,
-a strong approval for any other; no trust shortcut.
+a strong approval for any other; no trust shortcut. The fork is asked of Rubi Home with the source session's
+`mode` explicitly (`claude-agent.fork {project, id, name?, mode}`; Home must apply it, and the plugin refuses to
+fork a session whose mode it doesn't know), so a fork never runs looser than its source.
 
 ### Events and items the plugin expects from Rubi Home (addendum to the contract)
 
@@ -468,7 +480,10 @@ a strong approval for any other; no trust shortcut.
 - `perm.ask` and `cred.ask`: `ask_id`, `project`, `session_id`, `tool`, `input` (the tool input as JSON),
   `cwd`, `mode`, optionally `agent_id`, `agent_type`, `expires_at`. A `cred.ask` has no tool (it is always an
   approval).
-- `event`: `project`, `session_id`, `kind` and, by kind:
+- `cred.ask`: `ask_id`, `project`, `host`, `path` (the repository path), `op`; `net.ask`: `ask_id`, `project`,
+  `host`, `op` (`connect`). Both are answered with `claude-agent.decide` and denied when a field is missing.
+- `event`: `project`, `session_id` and the runner's event nested in `event` (`{"kind": ..., ...}`; flat fields
+  are read too), `kind` and, by kind:
   - `result`: `text` (the turn's final text), `to` (the Bot that started the turn with `claude-agent.send` or
     `.start` `from`; **Rubi Home must set it, and leave it empty for turns the user started**, because the
     text goes to that Bot only), `in_reply_to` (message ids), `is_error`. Becomes `claude_reply`.
@@ -478,6 +493,11 @@ a strong approval for any other; no trust shortcut.
   - `message`: `id`, `to`, `state` (`delivered`, `answered`, `expired`; `queued` is ignored), `at`. Becomes
     `claude_message`.
   - `assistant`, `tool`, `status`, `rate_limit`, `background`, `error`, `ask`: for the panel (M6), not forwarded.
+  - An ask goes to the Bot bound to the asking session only; an ask from an unbound session is dropped.
+
+The plugin does not check a digest of the tool input on this path: Rubi Home's `claude-agent.decide` works
+once per `ask_id` and Home hands each `ask_id` out once, so an approval can answer only the question it was
+made for. The plugin keeps a hash of the input in the approval's payload for the audit trail only.
 
 Results the plugin reads: `claude-agent.projects` `{projects:[{id, dir, vm_state, slot_busy, queue}]}`;
 `claude-agent.sessions` `{sessions:[{id, name, created, last_activity, mode, busy}]}`;
