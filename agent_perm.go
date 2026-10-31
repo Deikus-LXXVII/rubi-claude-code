@@ -94,6 +94,11 @@ func (w *watcher) handleAsk(ctx context.Context, d rubiplugin.HomeDevice, it age
 	allow := func() { w.agentDecide(ctx, d, it.AskID, "allow", "") }
 	cwd := firstNonEmpty(it.Cwd, agentRoot)
 	tool := it.Tool
+	// The isolated role the question comes from (its id is checked: it is shown in the approval).
+	if r := normRole(it.Project, it.Role); r != "" && !roleIDRE.MatchString(r) {
+		deny("unknown role: Rubi Home didn't say which role this is")
+		return
+	}
 	switch it.Type {
 	case "cred.ask", "net.ask":
 		// A question about a remote: the host, the repository path and the operation must be there to show, or
@@ -108,6 +113,9 @@ func (w *watcher) handleAsk(ctx context.Context, d rubiplugin.HomeDevice, it age
 		} else {
 			tool = "network"
 			it.detail = "the project VM connects to " + it.Host + " (" + plainText(it.Op, 30) + "), a host outside the allow-list"
+			if r := w.s.roleLabel(d.ID, it.Project, it.Role); r != "" {
+				it.detail = "the VM of the role " + r + " connects to " + it.Host + " (" + plainText(it.Op, 30) + "), a host outside the role's hosts; allowing it adds the host to this role's approved hosts"
+			}
 		}
 	}
 	if tool == "AskUserQuestion" {
@@ -198,6 +206,9 @@ func (w *watcher) agentApprove(ctx context.Context, d rubiplugin.HomeDevice, it 
 	}
 	if it.AgentType != "" {
 		preview["subagent"] = it.AgentType
+	}
+	if r := w.s.roleLabel(d.ID, it.Project, it.Role); r != "" {
+		preview["role"] = r
 	}
 	if it.Host != "" {
 		preview["host"], preview["repository_path"], preview["operation"] = it.Host, plainText(it.Path, 200), plainText(it.Op, 30)
@@ -318,4 +329,19 @@ func answerQuestion(ctx context.Context, h homeCaller, option string, payload js
 		return nil, fmt.Errorf("Claude is no longer waiting for this answer (%v)", err)
 	}
 	return map[string]any{"answered": t.Labels[i]}, nil
+}
+
+// roleLabel names the isolated role a question comes from for the user: its name when the role list is cached, else
+// its id; "" for the project's legacy role.
+func (s *sisters) roleLabel(device, project, role string) string {
+	id := normRole(project, role)
+	if id == "" {
+		return ""
+	}
+	if d := s.rc.get(device); d != nil {
+		if r := d.roles[id]; r != nil && r.Name != "" {
+			return plainText(r.Name, 32) + " (" + id + ")"
+		}
+	}
+	return id
 }

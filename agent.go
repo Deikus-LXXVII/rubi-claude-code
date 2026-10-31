@@ -416,7 +416,7 @@ func (w *watcher) pollAgent(ctx context.Context, d rubiplugin.HomeDevice) {
 		failures = 0
 		for _, it := range out.Items {
 			switch it.Type {
-			case "perm.ask", "cred.ask":
+			case "perm.ask", "cred.ask", "net.ask":
 				w.wg.Go(func() { w.handleAsk(ctx, d, it) })
 			case "event":
 				w.wg.Go(func() { w.s.routeAgent(ctx, w.h, d, it) })

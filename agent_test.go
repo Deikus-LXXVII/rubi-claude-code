@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -659,5 +660,44 @@ func TestAgentQuestionIsPlainAndBounded(t *testing.T) {
 	p := lastSubmit(t, f).Preview.(map[string]any)
 	if p["untrusted"] == nil || p["question"] != "Proceed?" {
 		t.Fatalf("%+v", p)
+	}
+}
+
+// net.ask items reach the approval through the poll, with the role they come from.
+func TestWatcherRoutesNetAskWithItsRole(t *testing.T) {
+	f, s, w := agentFixture(t)
+	s.rc.set("dev_mac", &roleDev{at: time.Now(), roles: map[string]*role{"r_aaaaaaaa": {ID: "r_aaaaaaaa", Name: "reviewer"}}})
+	f.next = func(ctx context.Context, _ string) (*request, error) { <-ctx.Done(); return nil, ctx.Err() }
+	f.agent.items = []agentItem{{Type: "net.ask", AskID: "n1", Project: "p1", Role: "r_aaaaaaaa", SessionID: "rs-1", Host: "cdn.example.com", Op: "connect", ExpiresAt: time.Now().Add(time.Minute)}}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { w.run(ctx); close(done) }()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		f.mu.Lock()
+		n := len(f.submits)
+		f.mu.Unlock()
+		if n > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	<-done
+	r := lastSubmit(t, f)
+	p := r.Preview.(map[string]any)
+	if p["host"] != "cdn.example.com" || p["role"] != "reviewer (r_aaaaaaaa)" || !strings.Contains(r.Summary, "reviewer") || !strings.Contains(fmt.Sprint(p["command"]), "the VM of the role reviewer (r_aaaaaaaa) connects to cdn.example.com") {
+		t.Fatalf("%+v %s", p, r.Summary)
+	}
+	// The legacy role's id is its project's: no role is named. A malformed role is refused.
+	f2, _, w2 := agentFixture(t)
+	w2.handleAsk(context.Background(), mac, agentItem{Type: "net.ask", AskID: "n2", Project: "p1", Role: "p1", Host: "cdn.example.com", Op: "connect"})
+	if p := lastSubmit(t, f2).Preview.(map[string]any); p["role"] != nil {
+		t.Fatalf("%+v", p)
+	}
+	f3, _, w3 := agentFixture(t)
+	w3.handleAsk(context.Background(), mac, agentItem{Type: "net.ask", AskID: "n3", Project: "p1", Role: "r_x‮", Host: "cdn.example.com", Op: "connect"})
+	if d := f3.agent.decided(); len(d) != 1 || d[0].Behavior != "deny" || len(f3.submits) != 0 {
+		t.Fatalf("%+v", d)
 	}
 }
