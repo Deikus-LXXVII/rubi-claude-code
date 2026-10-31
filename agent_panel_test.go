@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -50,21 +53,25 @@ func TestPanelAgentProjectsAndSessions(t *testing.T) {
 	f.agent.queue = []map[string]any{{"project": "p1", "session": "s-1", "position": 1}}
 	// The main page links to the agent pages.
 	main := view(t, s, f, `{}`)
-	if first := items(t, main, 0); len(first) != 2 || first[0]["title"] != "Projects and sessions" {
+	if first := items(t, main, 0); len(first) != 3 || first[0]["title"] != "Projects and sessions" || first[1]["title"] != "Usage modes" {
 		t.Fatalf("%v", main["sections"])
 	}
 	pg := view(t, s, f, `{"page":"agent"}`)
-	it := items(t, pg, 0)
-	if len(it) != 1 || it[0]["title"] != "/home/alice/my-project" {
-		t.Fatalf("%v", it)
+	secs := pg["sections"].([]map[string]any)
+	if len(secs) != 2 || secs[1]["title"] != "/home/alice/my-project" {
+		t.Fatalf("%v", secs)
 	}
-	d := it[0]["detail"].(string)
-	for _, want := range []string{"VM: running", "busy with s-2", "#1 s-1"} {
-		if !strings.Contains(d, want) {
-			t.Errorf("%q lacks %q", d, want)
+	it := secs[1]["items"].([]map[string]any)
+	var text strings.Builder
+	for _, x := range it {
+		text.WriteString(x["title"].(string) + " | " + x["detail"].(string) + "\n")
+	}
+	for _, want := range []string{"RUNNING now", "Waiting #1: a message to main work", "VM: running"} {
+		if !strings.Contains(text.String()+secs[1]["note"].(string), want) {
+			t.Errorf("%q lacks %q", text.String(), want)
 		}
 	}
-	open := actionByLabel(t, it[0], "Sessions")["open"].(map[string]any)
+	open := secs[1]["actions"].([]map[string]any)[1]["open"].(map[string]any)
 	if open["page"] != "sessions" || open["project"] != "p1" || open["device"] != "dev_mac" {
 		t.Fatalf("%v", open)
 	}
@@ -350,5 +357,234 @@ func TestPanelAgentCloseFailureAudited(t *testing.T) {
 	}
 	if len(f.auditLog) == 0 || f.auditLog[len(f.auditLog)-1]["failed"] == nil {
 		t.Fatalf("%v", f.auditLog)
+	}
+}
+
+// newHomeStatus makes the fake report a newer Rubi Home's per-project slots, limits and Bot modes.
+func newHomeStatus(f *fakeHost) {
+	f.agent.mu.Lock()
+	defer f.agent.mu.Unlock()
+	f.agent.projects = append(f.agent.projects, agentProject{ID: "p2", Dir: "/home/alice/web-app", VMState: "running", SessionsRunning: 1})
+	f.agent.sessions["p2"] = []agentSess{{ID: "t-1", Name: "docs", Mode: "default"}}
+	f.agent.slots = []map[string]any{
+		{"project": "p1", "session": "s-2", "bot": "bot-a", "busy": true, "background": 1, "subagents": 2},
+		{"project": "p2", "session": "t-1", "bot": "", "busy": true, "subagents": 0},
+	}
+	f.agent.limits = map[string]any{"per_project": 1, "total": 16}
+	f.agent.modes = map[string]any{"default": "medium", "modes": []string{"maximum", "medium", "light"}, "bots": []map[string]any{
+		{"id": "bot-a", "mode": "light", "custom": false, "sessions_running": 1, "sessions_limit": 1, "subagents_per_session": 2},
+		{"id": "bot-b", "mode": "medium", "custom": true, "sessions_running": 0, "sessions_limit": 4, "subagents_per_session": 3},
+		{"id": "", "mode": "medium", "sessions_running": 1, "sessions_limit": 4, "subagents_per_session": 4},
+	}}
+	f.agent.queue = []map[string]any{{"project": "p1", "op": "start", "position": 1, "from": "bot-a", "reason": "waiting: project my-project already has 1 session"}}
+}
+
+func TestPanelProjectsGroupedWithRunningAndReasons(t *testing.T) {
+	f, s, _ := agentFixture(t)
+	newHomeStatus(f)
+	pg := view(t, s, f, `{"page":"agent"}`)
+	secs := pg["sections"].([]map[string]any)
+	// One summary, then one section per project.
+	if len(secs) != 3 || secs[1]["title"] != "/home/alice/my-project" || secs[2]["title"] != "/home/alice/web-app" {
+		t.Fatalf("%v", secs)
+	}
+	if !strings.Contains(secs[0]["note"].(string), "2 sessions running of 16") || !strings.Contains(secs[0]["note"].(string), "1 at a time per project") {
+		t.Errorf("summary: %v", secs[0]["note"])
+	}
+	var p1 []string
+	for _, x := range secs[1]["items"].([]map[string]any) {
+		p1 = append(p1, x["title"].(string)+" | "+x["detail"].(string))
+	}
+	joined := strings.Join(p1, "\n")
+	for _, want := range []string{"s-2 | RUNNING now · 2 subagents", "main work | idle", "Waiting #1: a new session | waiting: project my-project already has 1 session · from bot-a"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("project 1 lacks %q in\n%s", want, joined)
+		}
+	}
+	if !strings.Contains(secs[2]["items"].([]map[string]any)[0]["detail"].(string), "RUNNING now") {
+		t.Errorf("project 2: %v", secs[2]["items"])
+	}
+	// A New session button per project: a prompt for the first message, then a start for that project.
+	na := secs[2]["actions"].([]map[string]any)[0]
+	if na["label"] != "New session" || na["op"] != "new" || na["args"].(map[string]any)["project"] != "p2" || na["prompt"].(map[string]any)["arg"] != "text" {
+		t.Fatalf("%v", na)
+	}
+	// Chat of a running session opens from its row.
+	if c := actionByLabel(t, secs[1]["items"].([]map[string]any)[0], "Open chat")["open"].(map[string]any); c["page"] != "chat" {
+		t.Fatalf("%v", c)
+	}
+}
+
+func TestPanelProjectsOlderHomeSingleSlot(t *testing.T) {
+	f, s, _ := agentFixture(t)
+	f.agent.slot = map[string]any{"busy": true, "project": "p1", "session": "s-2"}
+	pg := view(t, s, f, `{"page":"agent"}`)
+	secs := pg["sections"].([]map[string]any)
+	if got := secs[1]["items"].([]map[string]any); !strings.Contains(got[0]["detail"].(string)+got[len(got)-1]["detail"].(string), "RUNNING now") {
+		t.Fatalf("%v", got)
+	}
+}
+
+func TestPanelNewSession(t *testing.T) {
+	f, s, _ := agentFixture(t)
+	ctx := context.Background()
+	text := "  look at the failing test  "
+	res, err := s.panel(ctx, f, "new", json.RawMessage(`{"device":"dev_mac","project":"p1","text":"`+text+`"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := f.agent.called(opAgentStart)
+	if len(c) != 1 || c[0]["project"] != "p1" || c[0]["prompt"] != "look at the failing test" || c[0]["mode"] != "default" || c[0]["from"] != nil || c[0]["bot"] != nil {
+		t.Fatalf("%v", c)
+	}
+	if m := res.(map[string]any); m["session_id"] != "s-new" || m["started"] != true {
+		t.Fatalf("%v", res)
+	}
+	// A start that has to wait says why.
+	f.agent.startFn = func(map[string]any) (map[string]any, error) {
+		return map[string]any{"queued": true, "position": 2, "reason": "waiting: project my-project already has 1 session"}, nil
+	}
+	res, _ = s.panel(ctx, f, "new", json.RawMessage(`{"device":"dev_mac","project":"p1","text":"again"}`))
+	if m := res.(map[string]any); m["queued"] != true || m["position"] != 2 || !strings.Contains(m["reason"].(string), "already has 1 session") {
+		t.Fatalf("%v", res)
+	}
+	for _, bad := range []string{`{"device":"dev_mac","project":"p1"}`, `{"device":"dev_mac","project":"p1","text":"  "}`,
+		`{"device":"dev_mac","project":"nope","text":"x"}`, `{"device":"dev_mac","text":"x"}`} {
+		if _, err := s.panel(ctx, f, "new", json.RawMessage(bad)); err == nil {
+			t.Errorf("accepted %s", bad)
+		}
+	}
+	if n := len(f.agent.called(opAgentStart)); n != 2 {
+		t.Fatalf("%d starts", n)
+	}
+}
+
+func TestPanelUsageModesPage(t *testing.T) {
+	f, s, _ := agentFixture(t)
+	newHomeStatus(f)
+	pg := view(t, s, f, `{"page":"modes"}`)
+	secs := pg["sections"].([]map[string]any)
+	if len(secs) != 2 {
+		t.Fatalf("%v", secs)
+	}
+	note := secs[0]["note"].(string)
+	for _, want := range []string{"Maximum: Fastest", "Medium (Recommended): A balance", "Light: Saves quota", "Bots cannot"} {
+		if !strings.Contains(note, want) {
+			t.Errorf("note lacks %q", want)
+		}
+	}
+	head := secs[0]["items"].([]map[string]any)
+	if !strings.Contains(head[0]["title"].(string), "Medium (Recommended)") || !strings.Contains(head[0]["detail"].(string), "2 of 16") {
+		t.Errorf("%v", head[0])
+	}
+	// The current default isn't offered again; "all" asks to confirm.
+	for _, a := range head[0]["actions"].([]map[string]any) {
+		if a["args"].(map[string]any)["mode"] == "medium" {
+			t.Errorf("offers the current default: %v", a)
+		}
+	}
+	all := head[1]["actions"].([]map[string]any)
+	if len(all) != 3 || all[0]["confirm"] == nil || all[0]["args"].(map[string]any)["all"] != true {
+		t.Fatalf("%v", all)
+	}
+	bots := secs[1]["items"].([]map[string]any)
+	if len(bots) != 3 {
+		t.Fatalf("%v", bots)
+	}
+	if bots[0]["title"] != "bot-a: Light" || !strings.Contains(bots[0]["detail"].(string), "Sessions 1 of 1") || !strings.Contains(bots[0]["detail"].(string), "subagents per session: 2") || !strings.Contains(bots[0]["detail"].(string), "s-2: 2 running") {
+		t.Errorf("bot-a: %v", bots[0])
+	}
+	if !strings.Contains(bots[1]["title"].(string), "Custom") || !strings.Contains(bots[1]["detail"].(string), "overrides this mode") {
+		t.Errorf("bot-b: %v", bots[1])
+	}
+	if bots[2]["actions"] != nil || !strings.HasPrefix(bots[2]["title"].(string), "You") {
+		t.Errorf("the user's own row has no switch: %v", bots[2])
+	}
+	for _, a := range bots[0]["actions"].([]map[string]any) {
+		if a["op"] != "usage_mode" || a["args"].(map[string]any)["bot"] != "bot-a" || a["args"].(map[string]any)["mode"] == "light" {
+			t.Errorf("bot-a action: %v", a)
+		}
+	}
+}
+
+func TestPanelUsageModeActions(t *testing.T) {
+	f, s, _ := agentFixture(t)
+	ctx := context.Background()
+	for _, c := range []struct{ args, key string }{
+		{`{"device":"dev_mac","bot":"bot-a","mode":"maximum"}`, "bot"},
+		{`{"device":"dev_mac","default":true,"mode":"light"}`, "default"},
+		{`{"device":"dev_mac","all":true,"mode":"medium"}`, "all"},
+	} {
+		if _, err := s.panel(ctx, f, "usage_mode", json.RawMessage(c.args)); err != nil {
+			t.Fatalf("%s: %v", c.args, err)
+		}
+	}
+	calls := f.agent.called(opAgentUsageMode)
+	if len(calls) != 3 || calls[0]["bot"] != "bot-a" || calls[0]["mode"] != "maximum" || calls[1]["default"] != true || calls[2]["all"] != true {
+		t.Fatalf("%v", calls)
+	}
+	for _, bad := range []string{`{"device":"dev_mac","mode":"light"}`, `{"device":"dev_mac","bot":"a","all":true,"mode":"light"}`,
+		`{"device":"dev_mac","all":true,"mode":"turbo"}`, `{"device":"other","all":true,"mode":"light"}`} {
+		if _, err := s.panel(ctx, f, "usage_mode", json.RawMessage(bad)); err == nil {
+			t.Errorf("accepted %s", bad)
+		}
+	}
+	if n := len(f.agent.called(opAgentUsageMode)); n != 3 {
+		t.Fatalf("%d calls", n)
+	}
+	// A refusal from Rubi Home is an error, audited as failed.
+	f.agent.failOp = map[string]error{opAgentUsageMode: errors.New("no")}
+	if _, err := s.panel(ctx, f, "usage_mode", json.RawMessage(`{"device":"dev_mac","all":true,"mode":"light"}`)); err == nil {
+		t.Error("a refusal was swallowed")
+	}
+}
+
+// A Bot has no tool to change a mode: the operation is reached from the panel only.
+func TestNoBotToolForUsageModes(t *testing.T) {
+	src, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{"usage_mode", "opAgentUsageMode", "panelAgentUsage"} {
+		if strings.Contains(string(src), bad) {
+			t.Errorf("main.go (where the Bot tools are registered) mentions %s", bad)
+		}
+	}
+	files, _ := filepath.Glob("*.go")
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") || f == "agent_usage.go" || f == "panel.go" {
+			continue
+		}
+		b, _ := os.ReadFile(f)
+		if strings.Contains(string(b), "opAgentUsageMode") || strings.Contains(string(b), "panelAgentUsage") {
+			t.Errorf("%s reaches the usage-mode operation", f)
+		}
+	}
+}
+
+func TestBotIDIsStableAndAcceptable(t *testing.T) {
+	re := regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,63}$`)
+	for in, want := range map[string]string{"bot-a": "bot-a", " Bot A ": "bot-a", "Alice@example.com": "alice@example.com"} {
+		if got := botID(in); got != want {
+			t.Errorf("%q -> %q, want %q", in, got, want)
+		}
+	}
+	for _, in := range []string{"", "!!!", strings.Repeat("x", 100), "Bot A", "ünï"} {
+		id := botID(in)
+		if !re.MatchString(id) || id != botID(in) {
+			t.Errorf("%q -> %q", in, id)
+		}
+	}
+}
+
+func TestBotIDGoesToRubiHomeWithStartAndSend(t *testing.T) {
+	f, s, _ := agentFixture(t)
+	ctx := context.Background()
+	code := agentBind(t, f, s, "Alice", "s-1")
+	if _, err := s.sendTool(ctx, f, sendIn{Sister: "Alice", BindCode: code, Text: "hi"}); err != nil {
+		t.Fatal(err)
+	}
+	if c := f.agent.called(opAgentSend); len(c) != 1 || c[0]["bot"] != "alice" || c[0]["from"] != "Alice" {
+		t.Fatalf("%v", c)
 	}
 }

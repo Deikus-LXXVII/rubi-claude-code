@@ -69,6 +69,9 @@ func (s *sisters) panel(ctx context.Context, h sisterHost, op string, args json.
 		Mode      string  `json:"mode"`
 		Page      string  `json:"page"`
 		Text      *string `json:"text"`
+		Bot       string  `json:"bot"`
+		Default   bool    `json:"default"`
+		All       bool    `json:"all"`
 	}
 	if len(args) > 0 && string(args) != "null" {
 		if err := json.Unmarshal(args, &a); err != nil {
@@ -84,6 +87,10 @@ func (s *sisters) panel(ctx context.Context, h sisterHost, op string, args json.
 		return s.panelAgentSimple(ctx, h, "claude-agent."+op, a.Device, a.Project, a.SessionID)
 	case "fork":
 		return s.panelAgentFork(ctx, h, a.Device, a.Project, a.SessionID)
+	case "new": // a new session in a project, the first message typed on the page
+		return s.panelAgentNew(ctx, h, a.Device, a.Project, a.Text)
+	case "usage_mode": // the user's own switch; no Bot tool exists for it
+		return s.panelAgentUsage(ctx, h, a.Device, a.Bot, a.Default, a.All, a.Mode)
 	case "send":
 		return s.panelAgentSend(ctx, h, a.Device, a.Project, a.SessionID, a.Text)
 	case "revoke":
