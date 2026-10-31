@@ -100,6 +100,8 @@ func (s *sisters) panel(ctx context.Context, h sisterHost, op string, args json.
 		return s.panelAgentFork(ctx, h, a.Device, a.Project, a.SessionID)
 	case "new": // a new session in a project, the first message typed on the page
 		return s.panelAgentNew(ctx, h, a.Device, a.Project, a.Role, a.Text)
+	case "limits": // the user's own switch, like usage_mode; no Bot tool exists for it
+		return s.panelAgentLimits(ctx, h, a.Device, a.Which, a.Text)
 	case "role_new", "role_convert":
 		return s.panelRoleCreate(ctx, h, a.Device, a.Project, a.Text, op == "role_convert")
 	case "role_archive", "role_unarchive", "role_skill_remove", "role_tool", "role_deny_add", "role_deny_remove", "role_mcp_remove",

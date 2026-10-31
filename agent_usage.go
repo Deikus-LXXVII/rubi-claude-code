@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/Deikus-LXXVII/rubi/sdk/rubiplugin"
@@ -18,8 +19,11 @@ import (
 
 const (
 	opAgentUsageMode = "claude-agent.usage_mode"
+	opAgentLimits    = "claude-agent.limits"
 	pageModes        = "modes"
 	auditUsageMode   = "agent_usage_mode_changed"
+	auditLimits      = "agent_limits_changed"
+	maxSessionLimit  = 256 // Rubi Home's bound on any session limit
 )
 
 // usageModes: what the user chooses between, in plain words (quota against speed).
@@ -143,7 +147,7 @@ func (s *sisters) modesPage(ctx context.Context, h sisterHost) (any, error) {
 			}
 			items = append(items, it)
 		}
-		sections = append(sections, map[string]any{"title": d.Name + ": Bots", "empty": "No Bot has used the agent path yet; a new Bot gets the default mode.", "items": items})
+		sections = append(sections, map[string]any{"title": d.Name + ": Bots", "empty": "No Bot has used the agent path yet; a new Bot gets the default mode.", "items": items}, s.limitsSection(d.ID, d.Name, st))
 	}
 	if len(sections) == 0 {
 		sections = []map[string]any{{"title": "Usage modes", "empty": "No computer reports the claude-agent capability."}}
@@ -250,4 +254,77 @@ func (s *sisters) panelAgentNew(ctx context.Context, h sisterHost, device, proje
 		out["reason"] = oneLine(res.Reason, 200)
 	}
 	return out, nil
+}
+
+// sessionLimits are the three limits the user sets on the usage page (claude-agent.limits). which is the key
+// Rubi Home takes; min is the smallest value (0 = no cap).
+var sessionLimits = []struct {
+	Which, Title, Label, About string
+	Min                        int
+}{
+	{"per_profile", "Sessions at once in one role", "Most sessions at once in one role, 1 to 256", "Each role has its own VM and its own count, so two roles of one project run together. The project's default role counts as one role.", 1},
+	{"per_project", "Sessions at once in one project, all roles together", "Most sessions at once in one project, 0 (no cap) to 256", "An extra cap on a project's roles together. 0 means none.", 0},
+	{"total", "Sessions at once on this computer", "Most sessions at once on this computer, 0 (no cap) to 256", "The cap for the whole computer. 0 means none.", 0},
+}
+
+// limitsSection is the user's own switches for the session limits. Like the usage modes they are on this page
+// only: no Bot tool changes a limit (a Bot must not raise its own).
+func (s *sisters) limitsSection(device, name string, st agentStatus) map[string]any {
+	cur := map[string]int{"per_profile": st.Limits.PerProfile, "per_project": st.Limits.PerProject, "total": st.Limits.Total}
+	var items []map[string]any
+	for _, l := range sessionLimits {
+		v := fmt.Sprint(cur[l.Which])
+		if cur[l.Which] == 0 && l.Min == 0 {
+			v = "no cap"
+		}
+		if l.Which == "per_profile" && cur[l.Which] == 0 {
+			v = "not reported by this Rubi Home"
+		}
+		items = append(items, map[string]any{"title": l.Title + ": " + v, "detail": l.About,
+			"actions": []map[string]any{{"label": "Change", "op": "limits", "args": map[string]any{"device": device, "which": l.Which},
+				"prompt": map[string]any{"arg": "text", "label": l.Label, "value": ifElse(cur[l.Which] > 0, fmt.Sprint(cur[l.Which]), "")}}}})
+	}
+	return map[string]any{"title": name + ": session limits",
+		"note":  "Only you change these; Bots cannot. A raised limit lets the queue go on at once; a lowered one lets the extra sessions finish and holds new work. The limits a Bot may give roles (how many roles, how many skills, the loosest permission mode) are in this plugin's settings and change only with your strong approval.",
+		"empty": "", "items": items}
+}
+
+// panelAgentLimits sets one session limit. Only the panel reaches it.
+func (s *sisters) panelAgentLimits(ctx context.Context, h sisterHost, device, which string, text *string) (any, error) {
+	if text == nil {
+		return nil, errors.New("this Rubi's panel can't ask for a number; update Rubi")
+	}
+	idx := -1
+	for i, l := range sessionLimits {
+		if l.Which == which {
+			idx = i
+		}
+	}
+	if idx < 0 {
+		return nil, errors.New("pick one of per_profile, per_project and total")
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(*text))
+	if err != nil {
+		return nil, errors.New("write a whole number")
+	}
+	if min := sessionLimits[idx].Min; n < min || n > maxSessionLimit {
+		return nil, fmt.Errorf("%s is a number from %d to %d", which, min, maxSessionLimit)
+	}
+	cctx, cancel := context.WithTimeout(ctx, panelListTimeout)
+	defer cancel()
+	var dev *rubiplugin.HomeDevice
+	for _, d := range s.agentDevices(cctx, h) {
+		if d.ID == device {
+			dev = &d
+		}
+	}
+	if dev == nil {
+		return nil, errors.New("that computer doesn't report the claude-agent capability")
+	}
+	if err := h.HomeCall(cctx, dev.ID, opAgentLimits, map[string]any{which: n}, nil); err != nil {
+		h.Audit(auditLimits, map[string]any{"device": dev.ID, "which": which, "value": n, "by": "user", "failed": oneLine(err.Error(), 160)})
+		return nil, err
+	}
+	h.Audit(auditLimits, map[string]any{"device": dev.ID, "which": which, "value": n, "by": "user"})
+	return map[string]any{"ok": true, "which": which, "value": n}, nil
 }

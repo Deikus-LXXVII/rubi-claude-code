@@ -138,6 +138,7 @@ type agentStatus struct {
 	} `json:"slot"`
 	Slots  []agentSlot `json:"slots"`
 	Limits struct {
+		PerProfile int `json:"per_profile"` // sessions at once in one role (a newer Rubi Home)
 		PerProject int `json:"per_project"`
 		Total      int `json:"total"` // on the computer, 0 = no cap
 	} `json:"limits"`

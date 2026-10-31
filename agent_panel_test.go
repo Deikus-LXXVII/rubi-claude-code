@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -464,7 +465,7 @@ func TestPanelUsageModesPage(t *testing.T) {
 	newHomeStatus(f)
 	pg := view(t, s, f, `{"page":"modes"}`)
 	secs := pg["sections"].([]map[string]any)
-	if len(secs) != 2 {
+	if len(secs) != 3 { // modes, Bots, session limits
 		t.Fatalf("%v", secs)
 	}
 	note := secs[0]["note"].(string)
@@ -559,6 +560,102 @@ func TestNoBotToolForUsageModes(t *testing.T) {
 		if strings.Contains(string(b), "opAgentUsageMode") || strings.Contains(string(b), "panelAgentUsage") {
 			t.Errorf("%s reaches the usage-mode operation", f)
 		}
+	}
+}
+
+// The session limits are the user's too: the operation is reached from the panel only, like the usage modes, and
+// no Bot tool mentions it or has a field for it.
+func TestNoBotToolForSessionLimits(t *testing.T) {
+	bad := []string{"claude-agent.limits", "opAgentLimits", "panelAgentLimits", `"per_profile"`, `"per_project"`, "limitsSection", "sessionLimits"}
+	files, _ := filepath.Glob("*.go")
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") || f == "agent_usage.go" || f == "panel.go" || f == "agent_panel.go" {
+			continue // the panel's own code
+		}
+		b, _ := os.ReadFile(f)
+		for _, w := range bad {
+			if strings.Contains(string(b), w) {
+				t.Errorf("%s mentions %s", f, w)
+			}
+		}
+	}
+	// No registered tool's name or input has a field for a session limit.
+	src, _ := os.ReadFile("main.go")
+	for _, w := range []string{"limits", "per_profile", "per_project"} {
+		for _, line := range strings.Split(string(src), "\n") {
+			if strings.Contains(line, "AddTool") && strings.Contains(line, w) {
+				t.Errorf("a tool registration mentions %s: %.80s", w, line)
+			}
+		}
+	}
+	for _, in := range []any{roleCreateIn{}, roleUpdateIn{}, roleRefIn{}, roleToolsSetIn{}, roleStartIn{}, roleListIn{}, startIn{}, modeIn{}, sendIn{}} {
+		var walk func(rt reflect.Type)
+		walk = func(rt reflect.Type) {
+			for i := 0; i < rt.NumField(); i++ {
+				f := rt.Field(i)
+				tag := strings.Split(f.Tag.Get("json"), ",")[0]
+				if tag == "per_profile" || tag == "per_project" || tag == "total" || tag == "limits" {
+					t.Errorf("%s has %s", rt, tag)
+				}
+				if f.Anonymous {
+					walk(f.Type)
+				}
+			}
+		}
+		walk(reflect.TypeOf(in))
+	}
+}
+
+func TestPanelSessionLimits(t *testing.T) {
+	f, s, _ := agentFixture(t)
+	newHomeStatus(f)
+	f.agent.limits = map[string]any{"per_profile": 2, "per_project": 0, "total": 16}
+	pg := view(t, s, f, `{"page":"modes"}`)
+	allLabels(t, pg)
+	lim := section(t, pg, "Mac: session limits")
+	its := lim["items"].([]map[string]any)
+	if len(its) != 3 || !strings.Contains(its[0]["title"].(string), ": 2") || !strings.Contains(its[1]["title"].(string), "no cap") || !strings.Contains(its[2]["title"].(string), ": 16") {
+		t.Fatalf("%v", its)
+	}
+	if !strings.Contains(lim["note"].(string), "Bots cannot") || !strings.Contains(lim["note"].(string), "settings") {
+		t.Errorf("%v", lim["note"])
+	}
+	for i, which := range []string{"per_profile", "per_project", "total"} {
+		a := actionByLabel(t, its[i], "Change")
+		if a["op"] != "limits" || a["args"].(map[string]any)["which"] != which || a["args"].(map[string]any)["device"] != "dev_mac" || a["prompt"].(map[string]any)["arg"] != "text" {
+			t.Fatalf("%v", a)
+		}
+	}
+	if its[0]["actions"].([]map[string]any)[0]["prompt"].(map[string]any)["value"] != "2" {
+		t.Error("the prompt starts at the current value")
+	}
+	// The buttons send exactly the numbers they were given; a value not given is not sent.
+	ctx := context.Background()
+	for _, c := range []struct{ which, text string }{{"per_profile", "3"}, {"per_project", "0"}, {"total", " 8 "}} {
+		if _, err := s.panel(ctx, f, "limits", json.RawMessage(`{"device":"dev_mac","which":"`+c.which+`","text":"`+c.text+`"}`)); err != nil {
+			t.Fatalf("%v: %v", c, err)
+		}
+	}
+	calls := f.agent.called(opAgentLimits)
+	if len(calls) != 3 || len(calls[0]) != 1 || calls[0]["per_profile"] != float64(3) || calls[1]["per_project"] != float64(0) || calls[2]["total"] != float64(8) || len(calls[2]) != 1 {
+		t.Fatalf("%v", calls)
+	}
+	if a := auditsOf(f, auditLimits); len(a) != 3 || a[0]["by"] != "user" || a[0]["which"] != "per_profile" {
+		t.Fatalf("%v", a)
+	}
+	for _, bad := range []string{`{"device":"dev_mac","which":"per_profile","text":"0"}`, `{"device":"dev_mac","which":"total","text":"-1"}`, `{"device":"dev_mac","which":"total","text":"257"}`,
+		`{"device":"dev_mac","which":"total","text":"many"}`, `{"device":"dev_mac","which":"total","text":""}`, `{"device":"dev_mac","which":"total"}`, `{"device":"dev_mac","which":"nope","text":"2"}`,
+		`{"device":"other","which":"total","text":"2"}`, `{"device":"dev_mac","text":"2"}`} {
+		if _, err := s.panel(ctx, f, "limits", json.RawMessage(bad)); err == nil {
+			t.Errorf("accepted %s", bad)
+		}
+	}
+	if n := len(f.agent.called(opAgentLimits)); n != 3 {
+		t.Fatalf("%d calls", n)
+	}
+	f.agent.failOp = map[string]error{opAgentLimits: errors.New("no")}
+	if _, err := s.panel(ctx, f, "limits", json.RawMessage(`{"device":"dev_mac","which":"total","text":"2"}`)); err == nil {
+		t.Error("a refusal was swallowed")
 	}
 }
 

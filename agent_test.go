@@ -152,7 +152,7 @@ func (a *fakeAgent) call(ctx context.Context, op string, args, out any) error {
 		return reply(map[string]any{"id": "s-new"})
 	case opAgentSend:
 		return reply(map[string]any{"queued": true, "position": 0, "delivered": true})
-	case opAgentRename, opAgentMode, opAgentUsageMode:
+	case opAgentRename, opAgentMode, opAgentUsageMode, opAgentLimits:
 		return reply(map[string]any{"ok": true})
 	case opAgentFork:
 		return reply(map[string]any{"id": "s-fork"})
