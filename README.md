@@ -473,6 +473,69 @@ a strong approval for any other; no trust shortcut. The fork is asked of Rubi Ho
 `mode` explicitly (`claude-agent.fork {project, id, name?, mode}`; Home must apply it, and the plugin refuses to
 fork a session whose mode it doesn't know), so a fork never runs looser than its source.
 
+### Agent roles (R6)
+
+A role is a named profile on one project of the agent path (its own skills, subagents, built-in tools, MCP servers,
+Claude plugins, default permission mode and SSH grants) that runs in its own VM, isolated from the repository's own
+`.claude`. Rubi Home keeps the records and the versions (`claude-agent.role.list`, `.get`, `.history`, `.diff`,
+`.put`; every change is a new immutable version); this plugin keeps the tiers, the per-Bot limits, the approvals and
+the audit. It needs a Rubi Home that does `role.*`; an older one answers "doesn't do agent roles yet". The design is
+`docs/design/agent-roles.md` in the Rubi repository (sections 2, 6, 7).
+
+**Bot tools** (the Bot is always the one Rubi verified, `rubi_verified_agent`; a typed name or a Bot named in an
+argument is never used, and a call without a verified Bot fails). A project's default role (the repository's own
+`.claude`) can't be changed by a Bot.
+
+| Tool | What | Tier |
+|---|---|---|
+| `claude_code_role_create {project, name, description?, from_role?}` | new role; `from_role` (same project) copies instructions, tools, deny rules, subagents and mode, not skills, MCP, plugins, hosts or SSH | 1 with a live project trust held by this Bot for the project, else 2 (`claude-code.role_foreign`) |
+| `claude_code_role_update {role, name?, description?, instructions?, project_instructions?, default_mode?, revert_to?}` | text, rename, mode up to the ceiling; `revert_to` makes a new version with an older version's content (alone, without the other fields) | 1; a mode above the ceiling, or a revert over changes that weren't this Bot's own tier 1 changes, or a revert that widens: 2 (`role_widen`) |
+| `claude_code_role_archive` / `_unarchive {role}` | | 1 |
+| `claude_code_role_skills_set {role, skills:[{name, description?, content}]}`, `_skills_add {role, name, description?, content}`, `_skills_remove {role, name}` | ad-hoc, content-only skills; the text goes to Home as content-addressed blobs and is never put in the audit | 1 (a skill's text grants nothing: frontmatter is stripped and the body is context); a skill the scan flags is saved but **held** until the user accepts it; `library:` sources answer "not available yet" (R8/R9) |
+| `claude_code_role_tools_set {role, tools?, deny?}` | built-in tools and deny rules (each leaving the other as it is when omitted) | 1 for the safe set (Read, Edit, Write, Glob, Grep, Bash, Agent, Skill, WebFetch, WebSearch), added deny rules and removing deny rules this Bot added; 2 for any other tool or removing a deny rule the user (or another Bot) set |
+| `claude_code_role_agents_set {role, agents}` | subagent definitions | 1 |
+| `claude_code_role_mcp_set`, `_plugins_set`, `_hosts_set {role, ...}` | MCP servers, Claude plugins, extra network hosts | always 2 (`role_widen`) |
+| `claude_code_role_ssh_grant` / `_revoke {role, target}` | SSH target grants | answer "not available yet" until the SSH registry (R11/R12); the tier logic is in place: a registered target is 1, an unregistered one 2 |
+| `claude_code_role_start {role, prompt, name?}` | a session in the role's VM (`claude-agent.start` with `role`), the Bot bound to it | as `claude_code_start`: one strong approval (`claude-code.start`), or none with a live project trust held by this Bot, never for a `bypassPermissions` role; same hidden-text checks and 5 an hour |
+| `claude_code_role_list {project?}`, `_get {role, version?}`, `_history {role}` | read | none |
+
+**The tier comes from the difference, not from the tool.** The plugin reads the current version, builds the proposed
+one, and compares. It is tier 2 when anything grows in `mcp`, `plugins` or `hosts`; when a tool outside the safe set
+is added; when a deny rule the user (or another Bot) set is removed; when `default_mode` is above `role_mode_ceiling`;
+when an SSH target that isn't registered is granted; when the role is on a project where this Bot holds no live
+project trust (`Sister` is the Bot, `Project` the role's project, not expired or revoked); or when the tool always asks
+(`mcp_set`, `plugins_set`, `hosts_set`). Otherwise it is tier 1: applied at once through `role.put`, audited.
+
+**Results.** `{status: "applied", role, version, audit_id, tier, held_skills?}` (a change that alters nothing is
+`applied` with `unchanged: true` and makes no version); `{status: "needs_approval", approval_id, link, reasons,
+pending: {role, base_version, changes}}`; `{status: "rejected", reasons: [...]}` (a limit named, Home's validation
+reasons, a skill rejected by the scan). The pending request is **atomic**: nothing of it is applied until the user
+approves, and a request that mixes tiers waits as a whole. The plugin keeps at most 32 pending requests (8 per Bot,
+about 1.5 MiB of waiting skill text, dropped after 6 hours). The approval carries the touched fields with the value
+they had and the value to write; when it runs the plugin reads the role again, and if it is a newer version it
+**rebases**: the change applies only if every part it touches is still what it was, else it fails with "the role
+changed since you asked; ask again" and nothing is written. An approval runs once. A new MCP server or plugin gets
+the approval's id as its `approval` (Home refuses them without one).
+
+**Approval kinds.** `claude-code.role_foreign` (strong, locked: a role on a project the Bot holds no trust for, whatever
+the change), `claude-code.role_widen` (strong, locked), `claude-code.role_skill_accept` (tap, locked: the user accepts a
+held skill, seeing the rules the scan flagged and the excerpts; the plugin then puts the skill's `accepted` rule ids,
+`by: user`). The panel for it is R7; `askSkillAccept` / `executeSkillAccept` are the ops it will call. No Bot tool can
+accept a held skill.
+
+**Limits and the ceiling** are user config fields (the plugin settings, with the plugin config's strong approval); no
+Bot tool changes them: `role_max_per_project_per_bot` (5), `role_max_per_bot` (20; active roles the Bot created, on
+that computer), `role_changes_per_hour_per_bot` (30; applied and asked changes), `role_max_skills` (20 per role),
+`role_max_adhoc_skills` (10 per role), `role_max_total` (50 per computer, archived roles included) and
+`role_mode_ceiling` (default `bypassPermissions`; ladder `plan` < `default` < `acceptEdits` < `auto` <
+`bypassPermissions`; `dontAsk` is not offered for roles). Over a limit the call is rejected with the setting named.
+
+**Audit.** Every applied change writes `role.change {audit_id, role, project, device, from, to, by, tier, approval?,
+summary}` to Rubi's audit log (no skill text, no instructions: names and short facts) and is stored by Home as a
+version with the same `{op, tier, approval, summary}`. Skill scanning is Home's: the plugin does not import the
+scanner (the pinned Rubi module has none) and lets Home's verdict (`role.put` answers `skills[].state` and `verdict`)
+decide whether a skill is active or held.
+
 ### Panel pages for the agent path (M6)
 
 When a computer reports `claude-agent`, the plugin's page gets a "Claude in project VMs" section linking to
