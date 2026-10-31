@@ -491,12 +491,16 @@ func tierOf(cur, next *role, c tierCtx) tierVerdict {
 	}
 	for _, m := range next.MCP {
 		if !slices.ContainsFunc(base.MCP, func(o roleMCP) bool { return sameMCP(o, m) }) {
-			v.widen("adds the MCP server %s", clipOne(m.Name, 40))
+			verb := "adds"
+			if slices.ContainsFunc(base.MCP, func(o roleMCP) bool { return o.Name == m.Name }) {
+				verb = "changes"
+			}
+			v.widen("%s the MCP server %s", verb, mcpDesc(m))
 		}
 	}
 	for _, p := range next.Plugins {
 		if !slices.ContainsFunc(base.Plugins, func(o rolePlugin) bool { return o.Name == p.Name && o.Source == p.Source }) {
-			v.widen("adds the Claude plugin %s", clipOne(p.Name, 40))
+			v.widen("adds the Claude plugin %s from %s", clipOne(p.Name, 40), clipOne(p.Source, 100))
 		}
 	}
 	for _, h := range next.Hosts {

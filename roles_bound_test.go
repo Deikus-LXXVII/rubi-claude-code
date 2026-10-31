@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -94,5 +96,48 @@ func TestClearStaleApprovals(t *testing.T) {
 	}
 	if next.Plugins[0].Approval != "apr_cur" || next.Plugins[1].Approval != "" {
 		t.Fatalf("%+v", next.Plugins)
+	}
+}
+
+// The approval for an MCP server shows its type and the whole command line, so a change of the args alone is
+// visible, and the reasons say the same.
+func TestMCPApprovalShowsCommandAndArgs(t *testing.T) {
+	f, s, fr := roleFixture(t)
+	trustBot(t, s, botA, "p1")
+	id := mustCreate(t, s, f, botA, "design")
+	set := func(args ...string) map[string]any {
+		return asMap(t)(s.roleMCPSetTool(context.Background(), f, roleMCPSetIn{roleWho: who(botA), Role: id,
+			MCP: []roleMCPIn{{Name: "docs", Type: "stdio", Command: "npx", Args: args}}}))
+	}
+	if m := set("-y", "@docs/server"); status(m) != "needs_approval" {
+		t.Fatalf("%v", m)
+	}
+	p := lastSubmit(t, f).Preview.(map[string]any)
+	if ch := fmt.Sprint(p["changes"]); !strings.Contains(ch, `docs: stdio npx "-y" "@docs/server"`) {
+		t.Fatalf("changes: %s", ch)
+	}
+	if why := fmt.Sprint(p["why_you_are_asked"]); !strings.Contains(why, `adds the MCP server docs: stdio npx "-y" "@docs/server"`) {
+		t.Fatalf("why: %s", why)
+	}
+	asMap(t)(s.executeRoleChange(context.Background(), f, lastTicket(t, f)))
+	if len(fr.current(id).MCP) != 1 {
+		t.Fatal("not applied")
+	}
+	// Same name, same command, other args: it must show, and it is a change of the server.
+	if m := set("-y", "@evil/server"); status(m) != "needs_approval" {
+		t.Fatalf("%v", m)
+	}
+	p = lastSubmit(t, f).Preview.(map[string]any)
+	ch := fmt.Sprint(p["changes"])
+	if !strings.Contains(ch, `-mcp docs: stdio npx "-y" "@docs/server"`) || !strings.Contains(ch, `+mcp docs: stdio npx "-y" "@evil/server"`) {
+		t.Fatalf("changes: %s", ch)
+	}
+	if why := fmt.Sprint(p["why_you_are_asked"]); !strings.Contains(why, `changes the MCP server docs: stdio npx "-y" "@evil/server"`) {
+		t.Fatalf("why: %s", why)
+	}
+	// Long args are clipped one by one.
+	set(strings.Repeat("x", 200))
+	if ch := fmt.Sprint(lastSubmit(t, f).Preview.(map[string]any)["changes"]); strings.Contains(ch, strings.Repeat("x", 61)) {
+		t.Fatalf("an arg is not clipped: %s", ch)
 	}
 }

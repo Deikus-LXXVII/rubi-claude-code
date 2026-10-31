@@ -132,6 +132,22 @@ func setLines(prefix string, before, after []string, n int) []string {
 	return out
 }
 
+// maxMCPDesc bounds one MCP server's line: its type, URL or command and up to 16 args of at most 60 characters.
+const maxMCPDesc = 1200
+
+// mcpDesc is what the user reads of an MCP server: its name and type, the URL or the full command with every arg
+// (each clipped), so a change of the args alone shows. The text is the Bot's: it is data.
+func mcpDesc(m roleMCP) string {
+	if m.URL != "" {
+		return fmt.Sprintf("%s: %s %s", clipOne(m.Name, 48), clipOne(m.Type, 10), clipOne(m.URL, 200))
+	}
+	parts := []string{clipOne(m.Command, 200)}
+	for _, a := range m.Args {
+		parts = append(parts, fmt.Sprintf("%q", clipOne(a, 60)))
+	}
+	return fmt.Sprintf("%s: %s %s", clipOne(m.Name, 48), clipOne(m.Type, 10), strings.Join(parts, " "))
+}
+
 func describeRoleChange(cur, next *role) []string {
 	base := cur
 	if base == nil {
@@ -194,12 +210,12 @@ func describeRoleChange(cur, next *role) []string {
 		case "mcp":
 			var bn, an []string
 			for _, m := range base.MCP {
-				bn = append(bn, m.Name+" ("+firstNonEmpty(m.URL, m.Command)+")")
+				bn = append(bn, mcpDesc(m))
 			}
 			for _, m := range next.MCP {
-				an = append(an, m.Name+" ("+firstNonEmpty(m.URL, m.Command)+")")
+				an = append(an, mcpDesc(m))
 			}
-			out = append(out, setLines("mcp", bn, an, 100)...)
+			out = append(out, setLines("mcp", bn, an, maxMCPDesc)...)
 		case "plugins":
 			var bn, an []string
 			for _, p := range base.Plugins {
