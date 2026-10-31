@@ -430,7 +430,7 @@ func (s *sisters) setupPage(ctx context.Context, h sisterHost, p panelPage) (any
 		sections = append(sections, sec)
 	}
 	page := map[string]any{"title": "Set up the agent path: " + oneLine(d.Name, 60), "up": upMain,
-		"note": "The sign-in is one for every project on this computer, with a Claude subscription, for your own personal use under Anthropic's terms (a per-project Console account sign-in is possible from Claude Code inside a project if you need it). Install shows macOS's own administrator dialog on the computer: this page never asks for a password. Install, Create (network) and Add a folder ask for your strong approval first.", "sections": sections}
+		"note": "The sign-in is one for every project on this computer, with a Claude subscription, for your own personal use under Anthropic's terms. The token stays in Rubi Home on that computer: the agents' VMs never hold it, Rubi Home adds it to their requests to Anthropic. Install shows macOS's own administrator dialog on the computer: this page never asks for a password. Install, Create (network) and Add a folder ask for your strong approval first.", "sections": sections}
 	if busy || st.Login != nil {
 		page["refresh"] = 3
 	}
