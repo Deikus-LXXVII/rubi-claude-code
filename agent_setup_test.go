@@ -79,7 +79,7 @@ func row(state, reason, action string) map[string]any {
 
 // allDone is a status in Rubi Home's shape: steps 1 to 5 done, the project not signed in and not tested.
 func allDone(extra ...map[string]any) map[string]any {
-	steps := []map[string]any{step("container", "done", "Installed 1.2", "", nil), step("service", "done", "Running", "", nil), step("network", "done", "Host-only", "", nil),
+	steps := []map[string]any{step("container", "done", "Installed 1.2", "", nil), step("service", "done", "Running", "", nil),
 		step("image", "done", "Built", "", nil), step("projects", "done", "1 folder", "add", map[string]any{"projects": []any{row("done", "", "remove")}}),
 		step("login", "todo", "Not signed in", "login", nil),
 		step("selftest", "todo", "Not run", "", map[string]any{"projects": []any{row("todo", "Not run", "selftest")}})}
@@ -155,7 +155,7 @@ func TestSetupEntryNeedsCapability(t *testing.T) {
 func TestSetupPageStates(t *testing.T) {
 	// Nothing done: only the first step has a button, the rest wait for it.
 	st := map[string]any{"steps": []any{step("container", "todo", "Not installed", "install", nil), step("service", "todo", "Needs step 1 first", "", nil),
-		step("network", "todo", "Needs step 1 first", "", nil), step("image", "todo", "Needs step 2 first", "", nil), step("projects", "todo", "No folder", "", nil),
+		step("image", "todo", "Needs step 2 first", "", nil), step("projects", "todo", "No folder", "", nil),
 		step("login", "todo", "Needs step 5 first", "", nil), step("selftest", "todo", "Needs step 6 first", "", nil)}}
 	f, s := setupFixture(t, st)
 	pg := setupView(t, s, f)
@@ -178,16 +178,15 @@ func TestSetupPageStates(t *testing.T) {
 	steps := st["steps"].([]map[string]any)
 	steps[1] = step("service", "failed", "Didn't start", "start", nil)
 	steps[0] = step("container", "done", "Old", "upgrade", nil)
-	steps[3] = step("image", "needs_user", "Do something", "build", nil)
-	steps[2] = step("network", "failed", "Proxy address set", "use_auto_address", nil)
+	steps[2] = step("image", "needs_user", "Do something", "build", nil)
 	f, s = setupFixture(t, st)
 	pg = setupView(t, s, f)
 	secs := pg["sections"].([]map[string]any)
-	if secs[2]["items"].([]map[string]any)[0]["warn"] != true || secs[4]["items"].([]map[string]any)[0]["warn"] != true {
+	if secs[2]["items"].([]map[string]any)[0]["warn"] != true || secs[3]["items"].([]map[string]any)[0]["warn"] != true {
 		t.Error("no warn on failed/needs_user")
 	}
 	a = allActions(pg)
-	if a["Upgrade"] == nil || a["Start"] == nil || a["Build"] == nil || a["Use the automatic address"] == nil || a["Set up everything"] != nil {
+	if a["Upgrade"] == nil || a["Start"] == nil || a["Build"] == nil || a["Set up everything"] == nil {
 		t.Fatalf("%v", a)
 	}
 	// All done but the sign-in: one sign-in button for the computer (no Console one), self-test per project.
@@ -201,14 +200,14 @@ func TestSetupPageStates(t *testing.T) {
 	}
 	// The sign-in row Home says to check, and one that is signed in (sign in again, sign out).
 	st = allDone()
-	st["steps"].([]map[string]any)[5] = step("login", "todo", "Check", "check", nil)
-	st["steps"].([]map[string]any)[6] = step("selftest", "done", "Passed", "", map[string]any{"projects": []any{row("done", "", "")}})
+	st["steps"].([]map[string]any)[4] = step("login", "todo", "Check", "check", nil)
+	st["steps"].([]map[string]any)[5] = step("selftest", "done", "Passed", "", map[string]any{"projects": []any{row("done", "", "")}})
 	f.setup.status = st
 	a = allActions(setupView(t, s, f))
 	if a["Check the sign-in"] == nil || a["Run self-test"] != nil || a["Sign in with a Claude subscription"] != nil {
 		t.Fatalf("%v", a)
 	}
-	st["steps"].([]map[string]any)[5] = step("login", "done", "Signed in", "login_again", map[string]any{"action2": "sign_out"})
+	st["steps"].([]map[string]any)[4] = step("login", "done", "Signed in", "login_again", map[string]any{"action2": "sign_out"})
 	a = allActions(setupView(t, s, f))
 	if a["Sign in again with a Claude subscription"] == nil || a["Sign out"] == nil {
 		t.Fatalf("%v", a)
@@ -364,10 +363,10 @@ func TestSetupOpsRouteToHome(t *testing.T) {
 
 func TestSetupAllNeverSkipsApprovals(t *testing.T) {
 	st := allDone()
-	st["steps"].([]map[string]any)[2] = step("network", "todo", "No network", "create", nil)
+	st["steps"].([]map[string]any)[0] = step("container", "todo", "Not installed", "install", nil)
 	f, s := setupFixture(t, st)
 	if _, err := s.panel(context.Background(), f, "setup_run", json.RawMessage(`{"device":"dev_mac","step":"all"}`)); err == nil {
-		t.Fatal("all ran with the network step not done")
+		t.Fatal("all ran with the container step not done")
 	}
 	if len(f.setup.called(opSetupRun)) != 0 {
 		t.Error("reached Home")
@@ -382,7 +381,6 @@ func TestSetupApprovals(t *testing.T) {
 	ctx := context.Background()
 	for _, c := range []struct{ op, kind, homeOp, key string }{
 		{"setup_install", kindSetupInstall, opSetupRun, "container"},
-		{"setup_network", kindSetupNetwork, opSetupRun, "network"},
 		{"setup_add", kindSetupProject, opSetupAdd, ""},
 	} {
 		if _, err := s.panel(ctx, f, c.op, json.RawMessage(`{"device":"dev_mac"}`)); err != nil {
@@ -403,8 +401,6 @@ func TestSetupApprovals(t *testing.T) {
 		switch c.op {
 		case "setup_install":
 			_, err = s.executeSetupInstall(ctx, f, tk)
-		case "setup_network":
-			_, err = s.executeSetupNetwork(ctx, f, tk)
 		default:
 			_, err = s.executeSetupProject(ctx, f, tk)
 		}
@@ -420,14 +416,14 @@ func TestSetupApprovals(t *testing.T) {
 	if _, err := s.executeSetupInstall(ctx, f, setupTicket{}); err == nil {
 		t.Error("empty payload")
 	}
-	// The manifest lists the three kinds as strong and locked.
+	// The manifest lists the two kinds as strong and locked.
 	kinds := map[string]bool{}
 	for _, a := range manifest().Actions {
-		if a.Kind == kindSetupInstall || a.Kind == kindSetupNetwork || a.Kind == kindSetupProject {
+		if a.Kind == kindSetupInstall || a.Kind == kindSetupProject {
 			kinds[a.Kind] = a.DefaultLevel == rubiplugin.Strong && a.Locked
 		}
 	}
-	if len(kinds) != 3 || !kinds[kindSetupInstall] || !kinds[kindSetupNetwork] || !kinds[kindSetupProject] {
+	if len(kinds) != 2 || !kinds[kindSetupInstall] || !kinds[kindSetupProject] {
 		t.Errorf("%v", kinds)
 	}
 }
@@ -475,36 +471,27 @@ func TestSetupCodeIsNeverKept(t *testing.T) {
 	}
 }
 
-func TestSetupAutoAddressOnlyWhenOffered(t *testing.T) {
+// A Home that still reports a network step shows it as a plain row: no button, and the plugin never runs it.
+func TestSetupNoNetworkStep(t *testing.T) {
 	ctx := context.Background()
-	run := `{"device":"dev_mac","step":"network","option":"auto-address"}`
-	// A network that isn't there (or any other action) is not created by this button.
-	for _, action := range []string{"create", "", "use_auto_address "} {
-		st := allDone()
-		st["steps"].([]map[string]any)[2] = step("network", "todo", "No network", action, nil)
-		f, s := setupFixture(t, st)
-		if _, err := s.panel(ctx, f, "setup_run", json.RawMessage(run)); err == nil {
-			t.Errorf("action %q: accepted", action)
-		}
-		if len(f.setup.called(opSetupRun)) != 0 {
-			t.Errorf("action %q: reached Home", action)
-		}
-	}
-	// Plain run of the network step is refused too.
-	f, s := setupFixture(t, allDone())
-	if _, err := s.panel(ctx, f, "setup_run", json.RawMessage(`{"device":"dev_mac","step":"network"}`)); err == nil {
-		t.Error("plain network run accepted")
-	}
-	// Offered by Home: it goes through, without an approval.
 	st := allDone()
-	st["steps"].([]map[string]any)[2] = step("network", "failed", "Proxy address set", "use_auto_address", nil)
-	f, s = setupFixture(t, st)
-	if _, err := s.panel(ctx, f, "setup_run", json.RawMessage(run)); err != nil {
-		t.Fatal(err)
+	st["steps"] = append([]map[string]any{st["steps"].([]map[string]any)[0], st["steps"].([]map[string]any)[1], step("network", "todo", "No network", "create", nil)},
+		st["steps"].([]map[string]any)[2:]...)
+	f, s := setupFixture(t, st)
+	a := allActions(setupView(t, s, f))
+	if a["Create"] != nil || a["Use the automatic address"] != nil {
+		t.Error("a network button is shown")
 	}
-	got := f.setup.called(opSetupRun)
-	if len(got) != 1 || got[0]["step"] != "network" || got[0]["option"] != "auto-address" || len(f.submits) != 0 {
-		t.Fatalf("%v", got)
+	for _, run := range []string{`{"device":"dev_mac","step":"network"}`, `{"device":"dev_mac","step":"network","option":"auto-address"}`} {
+		if _, err := s.panel(ctx, f, "setup_run", json.RawMessage(run)); err == nil {
+			t.Errorf("%s accepted", run)
+		}
+	}
+	if _, err := s.panel(ctx, f, "setup_network", json.RawMessage(`{"device":"dev_mac"}`)); err == nil {
+		t.Error("setup_network accepted")
+	}
+	if len(f.setup.called(opSetupRun)) != 0 || len(f.submits) != 0 {
+		t.Error("reached Home or asked for an approval")
 	}
 }
 
