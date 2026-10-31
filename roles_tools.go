@@ -10,6 +10,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"regexp"
 	"slices"
 	"strings"
@@ -25,7 +27,122 @@ var (
 	roleDenyRE  = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,63}(\([^\x00-\x1f\x7f]{1,200}\))?$`)
 	roleToolRE  = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,63}$`)
 	roleModelOK = []string{"inherit", "sonnet", "haiku", "opus"}
+	// roleHostRE is Rubi Home's host syntax (internal/home/agent/roles/validate.go): a name with at least one dot, an
+	// optional leading "*.".
+	roleHostRE = regexp.MustCompile(`^(\*\.)?[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$`)
+	labelRE    = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$`)
 )
+
+// approvalText is the check for a Bot's text that the user will read in an approval (a command, a URL, a host, a rule,
+// a source): valid UTF-8, one line of at most max bytes, and none of the format, control or private-use characters
+// (bidi overrides and zero-width characters) that make a line read differently from what it is. It returns the
+// reason, or "".
+func approvalText(what, v string, max int) string {
+	switch {
+	case !utf8.ValidString(v):
+		return what + " is not valid text"
+	case len(v) > max:
+		return fmt.Sprintf("%s is longer than %d bytes", what, max)
+	case hiddenChars(v):
+		return what + " has a hidden or control character (format, bidi or zero-width); use plain text"
+	}
+	return ""
+}
+
+// checkHost says whether h is a host name the way Rubi Home takes it (a leading "*." allowed).
+func checkHost(h string) string {
+	if r := approvalText("host", h, 253); r != "" {
+		return r
+	}
+	if !roleHostRE.MatchString(h) {
+		return "host " + clipOne(h, 64) + " is not a host name such as cdn.example.com (letters, digits, dots and hyphens, at least one dot)"
+	}
+	return ""
+}
+
+// checkMCP checks one MCP server the way Home will, before anyone is asked. A URL must be https without
+// credentials and with a real host; a command is a plain program name or path with plain args.
+func checkMCP(e roleMCP) []string {
+	var out []string
+	add := func(r string) {
+		if r != "" {
+			out = append(out, "MCP server "+clipOne(e.Name, 32)+": "+r)
+		}
+	}
+	for _, r := range []string{approvalText("name", e.Name, 64), approvalText("type", e.Type, 16), approvalText("url", e.URL, 500), approvalText("command", e.Command, 200)} {
+		add(r)
+	}
+	for _, a := range e.Args {
+		add(approvalText("an arg", a, 200))
+	}
+	if len(out) > 0 {
+		return out
+	}
+	if !roleNameRE.MatchString(e.Name) {
+		add("the name must be 1 to 32 characters of a-z, 0-9 and -")
+	}
+	switch e.Type {
+	case "http", "sse":
+		u, err := url.Parse(e.URL)
+		switch {
+		case err != nil || u.Scheme != "https" || u.Host == "":
+			add("an https URL is needed")
+		case u.User != nil:
+			add("the URL must not carry a user name or password")
+		case !hostnameOK(u.Hostname()):
+			add("the URL's host is not a valid host name")
+		}
+		if e.Command != "" || len(e.Args) > 0 {
+			add("a url server has no command or args")
+		}
+	case "stdio":
+		if e.Command == "" || e.URL != "" {
+			add("a command is needed (and no url)")
+		}
+		if len(e.Args) > 16 {
+			add("at most 16 args")
+		}
+	default:
+		add("type must be http, sse or stdio")
+	}
+	return out
+}
+
+func hostnameOK(h string) bool {
+	h = strings.ToLower(h)
+	return len(h) > 0 && len(h) <= 253 && (net.ParseIP(h) != nil || labelRE.MatchString(h))
+}
+
+// checkPlugin checks a Claude plugin: a plain name, and a source of one word (a marketplace name, owner/repo or an
+// https URL without credentials).
+func checkPlugin(e rolePlugin) []string {
+	var out []string
+	add := func(r string) {
+		if r != "" {
+			out = append(out, "plugin "+clipOne(e.Name, 32)+": "+r)
+		}
+	}
+	add(approvalText("name", e.Name, 64))
+	add(approvalText("source", e.Source, 200))
+	if len(out) > 0 {
+		return out
+	}
+	if !roleNameRE.MatchString(e.Name) {
+		add("the name must be 1 to 32 characters of a-z, 0-9 and -")
+	}
+	if e.Source == "" || strings.ContainsAny(e.Source, " \t\r\n") {
+		add("a source without spaces is needed")
+	} else if strings.Contains(e.Source, "://") {
+		u, err := url.Parse(e.Source)
+		switch {
+		case err != nil || u.Scheme != "https" || u.Host == "" || !hostnameOK(u.Hostname()):
+			add("a URL source must be https with a real host")
+		case u.User != nil:
+			add("the source URL must not carry a user name or password")
+		}
+	}
+	return out
+}
 
 // roleToolNames lists the tools this file registers (a test checks that none changes the limits).
 var roleToolNames = []string{"claude_code_role_create", "claude_code_role_update", "claude_code_role_archive", "claude_code_role_unarchive",
@@ -640,7 +757,7 @@ func (s *sisters) roleToolsSetTool(ctx context.Context, h sisterHost, in roleToo
 			var deny []roleDeny
 			for _, rule := range *in.Deny {
 				rule = strings.TrimSpace(rule)
-				if !roleDenyRE.MatchString(rule) {
+				if !roleDenyRE.MatchString(rule) || hiddenChars(rule) {
 					reasons = append(reasons, "bad deny rule "+clipOne(rule, 60)+" (Tool or Tool(pattern), for example Bash(git push:*))")
 					continue
 				}
@@ -690,8 +807,9 @@ func (s *sisters) roleMCPSetTool(ctx context.Context, h sisterHost, in roleMCPSe
 		var list []roleMCP
 		for _, m := range in.MCP {
 			e := roleMCP{Name: strings.TrimSpace(m.Name), Type: strings.TrimSpace(m.Type), URL: strings.TrimSpace(m.URL), Command: strings.TrimSpace(m.Command), Args: m.Args}
-			if !roleItemRE.MatchString(e.Name) {
-				reasons = append(reasons, "MCP server name "+clipOne(e.Name, 48)+" must be 1 to 48 characters of a-z, 0-9 and -")
+			reasons = append(reasons, checkMCP(e)...)
+			if slices.ContainsFunc(list, func(o roleMCP) bool { return o.Name == e.Name }) {
+				reasons = append(reasons, "MCP server "+clipOne(e.Name, 32)+" is listed twice")
 			}
 			// An unchanged server keeps the approval it was allowed with.
 			if i := slices.IndexFunc(cur.MCP, func(o roleMCP) bool { return sameMCP(o, e) }); i >= 0 {
@@ -710,8 +828,9 @@ func (s *sisters) rolePluginsSetTool(ctx context.Context, h sisterHost, in roleP
 		var list []rolePlugin
 		for _, p := range in.Plugins {
 			e := rolePlugin{Name: strings.TrimSpace(p.Name), Source: strings.TrimSpace(p.Source)}
-			if e.Name == "" || e.Source == "" {
-				reasons = append(reasons, "a plugin needs a name and a source")
+			reasons = append(reasons, checkPlugin(e)...)
+			if slices.ContainsFunc(list, func(o rolePlugin) bool { return o.Name == e.Name }) {
+				reasons = append(reasons, "plugin "+clipOne(e.Name, 32)+" is listed twice")
 			}
 			if i := slices.IndexFunc(cur.Plugins, func(o rolePlugin) bool { return o.Name == e.Name && o.Source == e.Source }); i >= 0 {
 				e = cur.Plugins[i]
@@ -725,15 +844,17 @@ func (s *sisters) rolePluginsSetTool(ctx context.Context, h sisterHost, in roleP
 
 func (s *sisters) roleHostsSetTool(ctx context.Context, h sisterHost, in roleHostsSetIn) (any, error) {
 	return s.roleEdit(ctx, h, in.roleWho, in.Role, "role.hosts.set", true, func(_ roleCaller, _, next *role) (map[string]string, []string, error) {
-		var hosts []string
+		var hosts, reasons []string
 		for _, x := range in.Hosts {
 			x = strings.ToLower(strings.TrimSpace(x))
-			if !slices.Contains(hosts, x) {
+			if r := checkHost(x); r != "" {
+				reasons = append(reasons, r)
+			} else if !slices.Contains(hosts, x) {
 				hosts = append(hosts, x)
 			}
 		}
 		next.Hosts = hosts
-		return nil, nil, nil
+		return nil, reasons, nil
 	})
 }
 

@@ -162,3 +162,54 @@ func TestApprovalHeadlinePutsWideningFirst(t *testing.T) {
 		t.Fatalf("the full list is in the preview: %s", ch)
 	}
 }
+
+// What the user reads in an approval is checked before anyone is asked: no hidden characters, real hosts, https URLs
+// without credentials, plain plugin sources.
+func TestApprovalTextIsCheckedBeforeAsking(t *testing.T) {
+	f, s, fr := roleFixture(t)
+	trustBot(t, s, botA, "p1")
+	id := mustCreate(t, s, f, botA, "design")
+	ctx := context.Background()
+	puts, subs := fr.putCount(), len(f.submits)
+	mcp := func(e roleMCPIn) map[string]any {
+		return asMap(t)(s.roleMCPSetTool(ctx, f, roleMCPSetIn{roleWho: who(botA), Role: id, MCP: []roleMCPIn{e}}))
+	}
+	cases := map[string]map[string]any{
+		"bidi in an arg":     mcp(roleMCPIn{Name: "a", Type: "stdio", Command: "npx", Args: []string{"safe‮evil"}}),
+		"zero width command": mcp(roleMCPIn{Name: "a", Type: "stdio", Command: "np​x"}),
+		"http url":           mcp(roleMCPIn{Name: "a", Type: "http", URL: "http://mcp.example.com/"}),
+		"userinfo":           mcp(roleMCPIn{Name: "a", Type: "sse", URL: "https://user:pw@mcp.example.com/"}),
+		"no host":            mcp(roleMCPIn{Name: "a", Type: "http", URL: "https:///path"}),
+		"bad host":           mcp(roleMCPIn{Name: "a", Type: "http", URL: "https://bad_host.example.com/"}),
+		"url with a command": mcp(roleMCPIn{Name: "a", Type: "http", URL: "https://mcp.example.com/", Command: "x"}),
+		"stdio without cmd":  mcp(roleMCPIn{Name: "a", Type: "stdio"}),
+		"long name":          mcp(roleMCPIn{Name: strings.Repeat("a", 40), Type: "stdio", Command: "x"}),
+		"bidi in the host":   asMap(t)(s.roleHostsSetTool(ctx, f, roleHostsSetIn{roleWho: who(botA), Role: id, Hosts: []string{"cdn.example.com‮"}})),
+		"host with a path":   asMap(t)(s.roleHostsSetTool(ctx, f, roleHostsSetIn{roleWho: who(botA), Role: id, Hosts: []string{"cdn.example.com/x"}})),
+		"one label host":     asMap(t)(s.roleHostsSetTool(ctx, f, roleHostsSetIn{roleWho: who(botA), Role: id, Hosts: []string{"localhost"}})),
+		"plugin hidden":      asMap(t)(s.rolePluginsSetTool(ctx, f, rolePluginsSetIn{roleWho: who(botA), Role: id, Plugins: []rolePluginIn{{Name: "p", Source: "own⁦er/repo"}}})),
+		"plugin space":       asMap(t)(s.rolePluginsSetTool(ctx, f, rolePluginsSetIn{roleWho: who(botA), Role: id, Plugins: []rolePluginIn{{Name: "p", Source: "owner/repo and more"}}})),
+		"plugin userinfo":    asMap(t)(s.rolePluginsSetTool(ctx, f, rolePluginsSetIn{roleWho: who(botA), Role: id, Plugins: []rolePluginIn{{Name: "p", Source: "https://tok@example.com/r.git"}}})),
+		"plugin bad name":    asMap(t)(s.rolePluginsSetTool(ctx, f, rolePluginsSetIn{roleWho: who(botA), Role: id, Plugins: []rolePluginIn{{Name: "P Q", Source: "o/r"}}})),
+		"deny hidden":        asMap(t)(s.roleToolsSetTool(ctx, f, roleToolsSetIn{roleWho: who(botA), Role: id, Deny: &[]string{"Bash(rm‮:*)"}})),
+	}
+	for name, m := range cases {
+		if status(m) != "rejected" {
+			t.Errorf("%s: %v", name, m)
+		}
+	}
+	if fr.putCount() != puts || len(f.submits) != subs {
+		t.Fatalf("something was put or asked: %d puts, %d approvals", fr.putCount()-puts, len(f.submits)-subs)
+	}
+	// Plain ones still reach the user.
+	for name, m := range map[string]map[string]any{
+		"https url": mcp(roleMCPIn{Name: "a", Type: "http", URL: "https://mcp.example.com/x?y=1"}),
+		"stdio":     mcp(roleMCPIn{Name: "b", Type: "stdio", Command: "npx", Args: []string{"-y", "@docs/server"}}),
+		"host":      asMap(t)(s.roleHostsSetTool(ctx, f, roleHostsSetIn{roleWho: who(botA), Role: id, Hosts: []string{"CDN.example.com", "*.example.org"}})),
+		"plugin":    asMap(t)(s.rolePluginsSetTool(ctx, f, rolePluginsSetIn{roleWho: who(botA), Role: id, Plugins: []rolePluginIn{{Name: "p", Source: "owner/repo"}, {Name: "q", Source: "https://example.com/r.git"}}})),
+	} {
+		if status(m) != "needs_approval" {
+			t.Errorf("%s: %v", name, m)
+		}
+	}
+}
