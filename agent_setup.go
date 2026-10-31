@@ -426,6 +426,9 @@ func (s *sisters) setupPage(ctx context.Context, h sisterHost, p panelPage) (any
 	if len(st.Steps) == 0 {
 		sections = append(sections, map[string]any{"title": "Steps", "empty": "This computer reported no steps."})
 	}
+	if sec := s.setupModeSection(ctx, h, d.ID); sec != nil {
+		sections = append(sections, sec)
+	}
 	page := map[string]any{"title": "Set up the agent path: " + oneLine(d.Name, 60), "up": upMain,
 		"note": "The sign-in is one for every project on this computer, with a Claude subscription, for your own personal use under Anthropic's terms (a per-project Console account sign-in is possible from Claude Code inside a project if you need it). Install shows macOS's own administrator dialog on the computer: this page never asks for a password. Install, Create (network) and Add a folder ask for your strong approval first.", "sections": sections}
 	if busy || st.Login != nil {
@@ -598,4 +601,33 @@ func (s *sisters) executeSetup(ctx context.Context, h sisterHost, t setupTicket,
 	cctx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
 	return s.setupDo(cctx, h, rubiplugin.HomeDevice{ID: t.Device, Name: t.DeviceName}, op, args, action, "", "user approved")
+}
+
+// setupModeSection is the usage mode of the computer (the default and what "all Bots" means), set here once for
+// all Bots: the user's own button, the same op as the modes page. Hidden when the computer lacks claude-agent.
+func (s *sisters) setupModeSection(ctx context.Context, h sisterHost, device string) map[string]any {
+	cctx, cancel := context.WithTimeout(ctx, panelListTimeout)
+	defer cancel()
+	if !s.agentCapable(cctx, h, device) {
+		return nil
+	}
+	st, err := s.agentStatus(cctx, h, device)
+	if err != nil {
+		return map[string]any{"title": "Usage mode", "empty": "Couldn't read the usage mode: " + oneLine(err.Error(), 160)}
+	}
+	if st.Usage.Default == "" {
+		return nil
+	}
+	var items []map[string]any
+	for _, m := range usageModes {
+		title := m.Label
+		if m.Key == st.Usage.Default {
+			title += " (the current default)"
+		}
+		items = append(items, map[string]any{"title": title, "detail": m.About,
+			"actions": []map[string]any{{"label": "Use for all Bots", "op": "usage_mode", "args": map[string]any{"device": device, "all": true, "mode": m.Key},
+				"confirm": "Set every Bot, and the default for new Bots, to " + m.Label + "? Running sessions are not stopped; the change applies to new ones."}}})
+	}
+	return map[string]any{"title": "Usage mode", "empty": "", "items": items,
+		"note": "How much of your Claude quota the agents may use. This sets one mode for every Bot and for new ones; you can change a single Bot later on the usage modes page. Only you change it: Bots cannot."}
 }

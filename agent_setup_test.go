@@ -594,3 +594,54 @@ func TestSetupLongNameAndLink(t *testing.T) {
 		t.Errorf("name not clipped: %q", r.Summary)
 	}
 }
+
+func TestSetupModeSection(t *testing.T) {
+	f, s := setupFixture(t, allDone())
+	// The fake agent reports no usage default: nothing to show.
+	pg := setupView(t, s, f)
+	secs := pg["sections"].([]map[string]any)
+	if secs[len(secs)-1]["title"] == "Usage mode" {
+		t.Error("section without a default mode")
+	}
+	f.agent.slots = []map[string]any{}
+	f.agent.modes = map[string]any{"default": "medium"}
+	pg = setupView(t, s, f)
+	secs = pg["sections"].([]map[string]any)
+	sec := secs[len(secs)-1]
+	if sec["title"] != "Usage mode" {
+		t.Fatalf("%v", sec["title"])
+	}
+	its := sec["items"].([]map[string]any)
+	if len(its) != 3 || !strings.HasPrefix(its[0]["title"].(string), "Maximum") || its[1]["title"] != "Medium (Recommended) (the current default)" || its[2]["title"] != "Light" {
+		t.Fatalf("%v", its)
+	}
+	for _, want := range []string{"fastest", "up to 4 sessions", "1 session"} {
+		found := false
+		for _, it := range its {
+			found = found || strings.Contains(strings.ToLower(it["detail"].(string)), want)
+		}
+		if !found {
+			t.Errorf("no %q in the descriptions", want)
+		}
+	}
+	btn := its[2]["actions"].([]map[string]any)[0]
+	if btn["label"] != "Use for all Bots" || btn["op"] != "usage_mode" {
+		t.Fatalf("%v", btn)
+	}
+	raw, _ := json.Marshal(btn["args"])
+	if _, err := s.panel(context.Background(), f, "usage_mode", raw); err != nil {
+		t.Fatal(err)
+	}
+	got := f.agent.called(opAgentUsageMode)
+	if len(got) != 1 || got[0]["mode"] != "light" || got[0]["all"] != true {
+		t.Fatalf("%v", got)
+	}
+	// Without the claude-agent capability the section is hidden (the setup page still works).
+	f.agent.failOp = map[string]error{opAgentStatus: errors.New("Rubi Home doesn't do claude-agent.status")}
+	s = newSisters(&store{})
+	pg = setupView(t, s, f)
+	secs = pg["sections"].([]map[string]any)
+	if secs[len(secs)-1]["title"] == "Usage mode" {
+		t.Error("section shown without claude-agent")
+	}
+}

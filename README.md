@@ -540,6 +540,12 @@ the sign-in link) is untrusted text: clipped, shown as item text only, and the l
 Anthropic's terms (a per-project Console account sign-in is possible from Claude Code inside a project if needed), and macOS shows its own administrator dialog on the computer for Install; the page never asks
 for a password. Actions are audited as `agent_setup_action`.
 
+The page ends with a **Usage mode** section when the computer also reports `claude-agent` and its status carries
+the usage modes: Maximum (fastest, uses the most quota), Medium (Recommended: up to 4 sessions, 4 subagents each)
+and Light (1 session, 2 subagents), the current default marked, and a "Use for all Bots" button per mode
+(`claude-agent.usage_mode {mode, all: true}`, the same user-only op as the usage modes page; a Bot has no tool for
+it).
+
 ### Events and items the plugin expects from Rubi Home (addendum to the contract)
 
 `claude-agent.next` returns `{items:[...]}`; each item has `type`:
