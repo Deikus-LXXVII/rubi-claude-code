@@ -147,7 +147,7 @@ func (s *sisters) startTool(ctx context.Context, h sisterHost, in startIn) (any,
 	if err != nil {
 		return nil, err
 	}
-	if !s.allow("start|"+strings.ToLower(sister), startsPerHour) {
+	if !s.allow("start|"+botID(sister), startsPerHour) {
 		return nil, fmt.Errorf("at most %d session starts per hour", startsPerHour)
 	}
 	if !s.allow("start|*", startsGlobal) {

@@ -366,7 +366,7 @@ func (s *sisters) changeRole(ctx context.Context, h sisterHost, rq roleChangeReq
 	project := next.Project
 	v := tierOf(rq.Cur, next, tierCtx{Bot: rq.Bot, Trust: rq.ByUser || s.botTrust(rq.Dev.ID, rq.Bot, project) != nil, Ceiling: rq.Lim.Ceiling,
 		Registered: s.registeredSSH(rq.Dev.ID), RevertOthers: rq.RevertOthers, ForceWiden: rq.ForceWiden, ByUser: rq.ByUser})
-	if !rq.ByUser && !s.allow("rolechg|"+strings.ToLower(strings.TrimSpace(rq.Bot)), rq.Lim.ChangesPerHour) {
+	if !rq.ByUser && !s.allow("rolechg|"+botID(rq.Bot), rq.Lim.ChangesPerHour) {
 		return rejected(fmt.Sprintf("%s: at most %d role changes per hour for one Bot", cfgRoleChanges, rq.Lim.ChangesPerHour)), nil
 	}
 	lines := describeRoleChange(rq.Cur, next)

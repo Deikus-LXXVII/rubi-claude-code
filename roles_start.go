@@ -48,7 +48,7 @@ func (s *sisters) roleStartTool(ctx context.Context, h sisterHost, in roleStartI
 	if !validRoleMode(mode) {
 		return nil, errors.New("the role's mode isn't one a session can start in")
 	}
-	if !s.allow("start|"+strings.ToLower(c.Bot), startsPerHour) {
+	if !s.allow("start|"+botID(c.Bot), startsPerHour) {
 		return nil, fmt.Errorf("at most %d session starts per hour", startsPerHour)
 	}
 	if !s.allow("start|*", startsGlobal) {

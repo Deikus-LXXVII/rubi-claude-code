@@ -282,3 +282,26 @@ func TestSkillsSetKeepsSkillsOthersWrote(t *testing.T) {
 		t.Fatalf("%v", m)
 	}
 }
+
+// Names that differ only in characters botID turns into "-" are one Bot to the roles (ownership, counts) and so to
+// the rate limits: they share one hourly budget.
+func TestRateLimitKeyIsTheBotID(t *testing.T) {
+	f, s, _ := roleFixture(t)
+	ch := cfgRoleHost{f, `{"role_changes_per_hour_per_bot":"2"}`}
+	trustBot(t, s, "my bot", "p1")
+	trustBot(t, s, "my-bot", "p1")
+	if botID("my bot") != botID("My-Bot") {
+		t.Fatal("test premise")
+	}
+	ctx := context.Background()
+	for i, name := range []string{"my bot", "My-Bot", "my bot"} {
+		m := asMap(t)(s.roleCreateTool(ctx, ch, roleCreateIn{roleWho: who(name), Project: "p1", Name: fmt.Sprintf("r%d", i)}))
+		want := "applied"
+		if i == 2 {
+			want = "rejected"
+		}
+		if status(m) != want {
+			t.Fatalf("%d: %v", i, m)
+		}
+	}
+}
