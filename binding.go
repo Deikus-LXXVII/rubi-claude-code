@@ -104,6 +104,8 @@ type sisters struct {
 	nameListAt time.Time
 	// caps remembers which computers' Rubi Home has the claude-agent capability (agent.go).
 	caps map[string]capEntry
+	// setupCaps remembers which computers have the agent-setup capability and their last setup status (agent_setup.go).
+	setupCaps map[string]setupCap
 }
 
 type askRef struct {

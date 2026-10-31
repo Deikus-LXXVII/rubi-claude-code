@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Deikus-LXXVII/rubi/sdk/rubiplugin"
 )
@@ -28,8 +29,10 @@ const (
 	opSetupCancel  = "agent-setup.cancel"
 	pageSetup      = "setup"
 	auditSetup     = "agent_setup_action"
-	setupStatusMax = 20 * time.Second // a status call probes the whole machine
-	setupAddWait   = 5 * time.Minute  // the folder chooser waits for the user
+	setupProbeWait = 15 * time.Second // a status call probes the whole machine
+	setupGrace     = 30 * time.Minute // a computer known to have the capability stays listed through a slow probe that long
+	setupURLRunes  = 450              // the panel cuts an item's detail at 600 characters
+	setupAddWait   = 11 * time.Minute // Rubi Home's folder chooser waits 10 minutes for the user
 	setupProgress  = 20               // progress lines shown per step
 	setupLineRunes = 200
 	setupMaxCode   = 512
@@ -114,6 +117,60 @@ var setupTitles = map[string]string{"container": "Apple container", "service": "
 
 var setupStates = map[string]string{"todo": "not done", "working": "working", "done": "done", "failed": "failed", "needs_user": "needs you"}
 
+// setupStatusReuse is how long a status is reused: the entry's probe and the page it opens share one. A var so
+// tests can switch it off.
+var setupStatusReuse = 2 * time.Second
+
+// setupCap is what is remembered of a computer's agent-setup capability and of its last status.
+type setupCap struct {
+	ok    bool
+	at    time.Time
+	st    setupStatus
+	stAt  time.Time
+	hasSt bool
+}
+
+// fetchSetup asks for the status (a full probe of the machine, so it gets a long wait) and remembers the answer.
+func (s *sisters) fetchSetup(ctx context.Context, h sisterHost, device string) (setupStatus, error) {
+	pctx, cancel := context.WithTimeout(ctx, setupProbeWait)
+	defer cancel()
+	var raw json.RawMessage
+	err := h.HomeCall(pctx, device, opSetupStatus, map[string]any{}, &raw)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.setupCaps == nil {
+		s.setupCaps = map[string]setupCap{}
+	}
+	now := s.now()
+	switch {
+	case err == nil:
+		st := decodeSetup(raw)
+		s.setupCaps[device] = setupCap{ok: true, at: now, st: st, stAt: now, hasSt: true}
+		return st, nil
+	case isUnknownOp(err):
+		s.setupCaps[device] = setupCap{at: now}
+	}
+	return setupStatus{}, err
+}
+
+// setupCapable says whether the computer's Rubi Home has the capability. A slow or failed probe does not hide a
+// computer that was known to have it recently.
+func (s *sisters) setupCapable(ctx context.Context, h sisterHost, device string) bool {
+	s.mu.Lock()
+	e := s.setupCaps[device]
+	now := s.now()
+	s.mu.Unlock()
+	if e.ok && now.Sub(e.at) < capYes || !e.ok && !e.at.IsZero() && now.Sub(e.at) < capNo {
+		return e.ok
+	}
+	if _, err := s.fetchSetup(ctx, h, device); err == nil {
+		return true
+	} else if isUnknownOp(err) || ctx.Err() != nil {
+		return false
+	}
+	return e.ok && now.Sub(e.at) < setupGrace
+}
+
 // setupDevices lists the computers whose Rubi Home has the agent-setup capability.
 func (s *sisters) setupDevices(ctx context.Context, h sisterHost) []rubiplugin.HomeDevice {
 	devs, err := h.HomeDevices()
@@ -122,7 +179,7 @@ func (s *sisters) setupDevices(ctx context.Context, h sisterHost) []rubiplugin.H
 	}
 	var out []rubiplugin.HomeDevice
 	for _, d := range devs {
-		if s.capProbe(ctx, h, d.ID, "setup|"+d.ID, opSetupStatus) {
+		if s.setupCapable(ctx, h, d.ID) {
 			out = append(out, d)
 		}
 	}
@@ -142,8 +199,6 @@ func (s *sisters) setupDevice(ctx context.Context, h sisterHost, device string) 
 
 // setupLinkSection is the entry on the plugin's first page; empty when no computer has the capability.
 func (s *sisters) setupLinkSection(ctx context.Context, h sisterHost) []map[string]any {
-	ctx, cancel := context.WithTimeout(ctx, panelListTimeout)
-	defer cancel()
 	var items []map[string]any
 	for _, d := range s.setupDevices(ctx, h) {
 		items = append(items, map[string]any{"title": "Set up the agent path", "detail": oneLine("On "+d.Name+": Apple's container tool, the network, the runner image, a folder, Claude's sign-in and a self-test, with buttons only.", 300),
@@ -155,14 +210,43 @@ func (s *sisters) setupLinkSection(ctx context.Context, h sisterHost) []map[stri
 	return []map[string]any{{"title": "First-time setup", "empty": "", "items": items}}
 }
 
-func (s *sisters) setupStatus(ctx context.Context, h sisterHost, device string) (setupStatus, error) {
-	ctx, cancel := context.WithTimeout(ctx, setupStatusMax)
-	defer cancel()
-	var raw json.RawMessage
-	if err := h.HomeCall(ctx, device, opSetupStatus, map[string]any{}, &raw); err != nil {
-		return setupStatus{}, err
+// setupStatus is the computer's status: the one the entry's probe just read, unless fresh is asked for.
+func (s *sisters) setupStatus(ctx context.Context, h sisterHost, device string, fresh bool) (setupStatus, error) {
+	s.mu.Lock()
+	e := s.setupCaps[device]
+	ok := !fresh && e.hasSt && s.now().Sub(e.stAt) < setupStatusReuse
+	s.mu.Unlock()
+	if ok {
+		return e.st, nil
 	}
-	return decodeSetup(raw), nil
+	return s.fetchSetup(ctx, h, device)
+}
+
+// hasProject says whether a project id is one of the status' rows.
+func (st setupStatus) hasProject(id string) bool {
+	for _, x := range st.Steps {
+		for _, pr := range x.Projects {
+			if pr.ID == id {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// checkProject refuses a project id of a odd shape or one the computer's fresh status doesn't list.
+func (s *sisters) checkProject(ctx context.Context, h sisterHost, device, id string) error {
+	if id == "" || len(id) > 128 || strings.Trim(id, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:-") != "" {
+		return errors.New("no such project")
+	}
+	st, err := s.setupStatus(ctx, h, device, true)
+	if err != nil {
+		return errors.New("couldn't read the setup status: " + oneLine(err.Error(), 160))
+	}
+	if !st.hasProject(id) {
+		return errors.New("no such project")
+	}
+	return nil
 }
 
 func act(label, op string, args map[string]any) map[string]any {
@@ -174,7 +258,7 @@ func (s *sisters) setupPage(ctx context.Context, h sisterHost, p panelPage) (any
 	if err != nil {
 		return nil, err
 	}
-	st, err := s.setupStatus(ctx, h, d.ID)
+	st, err := s.setupStatus(ctx, h, d.ID, false)
 	if err != nil {
 		return nil, errors.New("couldn't read the setup status: " + oneLine(err.Error(), 160))
 	}
@@ -319,7 +403,10 @@ func (s *sisters) setupPage(ctx context.Context, h sisterHost, p panelPage) (any
 			detail := "Waiting for Claude's sign-in link."
 			var wact []map[string]any
 			if u := strings.TrimSpace(st.Login.URL); strings.HasPrefix(u, "https://") {
-				detail = "Sign-in page (open it with the button): " + oneLine(u, 300)
+				detail = "Sign-in page (open it with the button): " + oneLine(u, setupURLRunes)
+				if utf8.RuneCountInString(u) > setupURLRunes {
+					detail += " (shortened here; the button opens the whole link)"
+				}
 				wact = append(wact, act("Open the sign-in page", "setup_open", map[string]any{"device": d.ID, "project": st.Login.Project}))
 			}
 			if st.Login.WantsCode {
@@ -360,6 +447,7 @@ func (s *sisters) panelSetup(ctx context.Context, h sisterHost, op string, a set
 	if err != nil {
 		return nil, err
 	}
+	d.Name = oneLine(d.Name, 60)
 	switch op {
 	case "setup_install":
 		return s.askSetup(ctx, h, d, kindSetupInstall, "Install Apple's container tool on "+d.Name,
@@ -374,25 +462,36 @@ func (s *sisters) panelSetup(ctx context.Context, h sisterHost, op string, a set
 		args := map[string]any{"step": a.Step}
 		switch a.Step {
 		case "service", "image":
-		case "network": // only the option that clears the proxy settings; creating the network needs the approval
-			if a.Option != "auto-address" {
+		case "network":
+			// Only the option that clears the proxy address settings, and only when the network is there to be
+			// used (Rubi Home offers use_auto_address): creating the network asks for the approval.
+			st, err := s.setupStatus(ctx, h, d.ID, true)
+			if err != nil {
+				return nil, errors.New("couldn't read the setup status: " + oneLine(err.Error(), 160))
+			}
+			n, nok := st.step("network")
+			if a.Option != "auto-address" || !nok || n.Action != "use_auto_address" {
 				return nil, errors.New("creating the network asks for your approval")
 			}
 			args["option"] = a.Option
 		case "selftest":
-			if a.Project == "" {
-				return nil, errors.New("no project")
+			if err := s.checkProject(ctx, h, d.ID, a.Project); err != nil {
+				return nil, err
 			}
 		case "login": // no method only checks the sign-in
-			if a.Project == "" || a.Method != "" && a.Method != "claudeai" && a.Method != "console" {
-				return nil, errors.New("no project or sign-in method")
+			if a.Method != "" && a.Method != "claudeai" && a.Method != "console" {
+				return nil, errors.New("no such sign-in method")
+			}
+			if err := s.checkProject(ctx, h, d.ID, a.Project); err != nil {
+				return nil, err
 			}
 			if a.Method != "" {
 				args["method"] = a.Method
 			}
 		case "all":
-			// The container and the network ask for an approval first: refuse unless both are done now.
-			st, err := s.setupStatus(ctx, h, d.ID)
+			// The container and the network ask for an approval first: refuse unless both are done now. (Rubi Home's
+			// "all" no longer runs those two steps at all, so this is a second lock, not the only one.)
+			st, err := s.setupStatus(ctx, h, d.ID, true)
 			if err != nil {
 				return nil, errors.New("couldn't read the setup status: " + oneLine(err.Error(), 160))
 			}
@@ -409,8 +508,8 @@ func (s *sisters) panelSetup(ctx context.Context, h sisterHost, op string, a set
 		}
 		return s.setupCall(ctx, h, d, opSetupRun, args, "run "+a.Step, a.Project)
 	case "setup_open":
-		if a.Project == "" {
-			return nil, errors.New("no project")
+		if err := s.checkProject(ctx, h, d.ID, a.Project); err != nil {
+			return nil, err
 		}
 		return s.setupCall(ctx, h, d, opSetupOpen, map[string]any{"project": a.Project}, "open the sign-in page", a.Project)
 	case "setup_code":
@@ -418,8 +517,8 @@ func (s *sisters) panelSetup(ctx context.Context, h sisterHost, op string, a set
 			return nil, errors.New("this Rubi's panel can't ask for the code; update Rubi")
 		}
 		code := strings.TrimSpace(*a.Code)
-		if a.Project == "" || code == "" {
-			return nil, errors.New("no project or no code")
+		if code == "" {
+			return nil, errors.New("no code")
 		}
 		if len(code) > setupMaxCode {
 			return nil, fmt.Errorf("at most %d characters", setupMaxCode)
@@ -429,10 +528,13 @@ func (s *sisters) panelSetup(ctx context.Context, h sisterHost, op string, a set
 				return nil, errors.New("the code is plain characters without spaces")
 			}
 		}
+		if err := s.checkProject(ctx, h, d.ID, a.Project); err != nil {
+			return nil, err
+		}
 		// The code goes to Rubi Home and nowhere else: the audit and every error leave it out.
 		return s.setupCall(ctx, h, d, opSetupCode, map[string]any{"project": a.Project, "code": code}, "sign-in code sent", a.Project)
 	case "setup_remove":
-		st, err := s.setupStatus(ctx, h, d.ID)
+		st, err := s.setupStatus(ctx, h, d.ID, true)
 		if err != nil {
 			return nil, errors.New("couldn't read the setup status: " + oneLine(err.Error(), 160))
 		}

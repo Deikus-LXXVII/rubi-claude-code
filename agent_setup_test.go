@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Deikus-LXXVII/rubi/sdk/rubiplugin"
 )
@@ -95,6 +96,9 @@ func setupFixture(t *testing.T, st map[string]any) (*fakeHost, *sisters) {
 	t.Helper()
 	f, s, _ := agentFixture(t)
 	f.setup = &fakeSetup{status: st}
+	old := setupStatusReuse
+	setupStatusReuse = 0 // every view reads the status again
+	t.Cleanup(func() { setupStatusReuse = old })
 	return f, s
 }
 
@@ -307,7 +311,6 @@ func TestSetupOpsRouteToHome(t *testing.T) {
 		{"setup_run", `{"device":"dev_mac","step":"image"}`, opSetupRun, map[string]any{"step": "image"}},
 		{"setup_run", `{"device":"dev_mac","step":"selftest","project":"p1"}`, opSetupRun, map[string]any{"step": "selftest", "project": "p1"}},
 		{"setup_run", `{"device":"dev_mac","step":"all"}`, opSetupRun, map[string]any{"step": "all"}},
-		{"setup_run", `{"device":"dev_mac","step":"network","option":"auto-address"}`, opSetupRun, map[string]any{"step": "network", "option": "auto-address"}},
 		{"setup_run", `{"device":"dev_mac","step":"login","project":"p1"}`, opSetupRun, map[string]any{"step": "login", "project": "p1"}},
 		{"setup_run", `{"device":"dev_mac","step":"login","project":"p1","method":"claudeai"}`, opSetupRun, map[string]any{"step": "login", "project": "p1", "method": "claudeai"}},
 		{"setup_run", `{"device":"dev_mac","step":"login","project":"p1","method":"console"}`, opSetupRun, map[string]any{"step": "login", "project": "p1", "method": "console"}},
@@ -464,5 +467,126 @@ func TestSetupCodeIsNeverKept(t *testing.T) {
 	}
 	if !strings.Contains(string(everything), "sign-in code sent") {
 		t.Error("no audit line")
+	}
+}
+
+func TestSetupAutoAddressOnlyWhenOffered(t *testing.T) {
+	ctx := context.Background()
+	run := `{"device":"dev_mac","step":"network","option":"auto-address"}`
+	// A network that isn't there (or any other action) is not created by this button.
+	for _, action := range []string{"create", "", "use_auto_address "} {
+		st := allDone()
+		st["steps"].([]map[string]any)[2] = step("network", "todo", "No network", action, nil)
+		f, s := setupFixture(t, st)
+		if _, err := s.panel(ctx, f, "setup_run", json.RawMessage(run)); err == nil {
+			t.Errorf("action %q: accepted", action)
+		}
+		if len(f.setup.called(opSetupRun)) != 0 {
+			t.Errorf("action %q: reached Home", action)
+		}
+	}
+	// Plain run of the network step is refused too.
+	f, s := setupFixture(t, allDone())
+	if _, err := s.panel(ctx, f, "setup_run", json.RawMessage(`{"device":"dev_mac","step":"network"}`)); err == nil {
+		t.Error("plain network run accepted")
+	}
+	// Offered by Home: it goes through, without an approval.
+	st := allDone()
+	st["steps"].([]map[string]any)[2] = step("network", "failed", "Proxy address set", "use_auto_address", nil)
+	f, s = setupFixture(t, st)
+	if _, err := s.panel(ctx, f, "setup_run", json.RawMessage(run)); err != nil {
+		t.Fatal(err)
+	}
+	got := f.setup.called(opSetupRun)
+	if len(got) != 1 || got[0]["step"] != "network" || got[0]["option"] != "auto-address" || len(f.submits) != 0 {
+		t.Fatalf("%v", got)
+	}
+}
+
+func TestSetupProjectIDsAreChecked(t *testing.T) {
+	f, s := setupFixture(t, allDone())
+	ctx := context.Background()
+	for _, id := range []string{"nope", "", "p1 ", "p1/../x", strings.Repeat("p", 200), "p1\u202e"} {
+		for _, c := range []struct{ op, extra string }{{"setup_run", `"step":"selftest",`}, {"setup_run", `"step":"login",`}, {"setup_run", `"step":"login","method":"console",`},
+			{"setup_open", ""}, {"setup_code", `"code":"abc",`}} {
+			raw := `{"device":"dev_mac",` + c.extra + `"project":"` + id + `"}`
+			if _, err := s.panel(ctx, f, c.op, json.RawMessage(raw)); err == nil {
+				t.Errorf("%s %s accepted", c.op, raw)
+			}
+		}
+	}
+	for _, op := range []string{opSetupRun, opSetupOpen, opSetupCode} {
+		if len(f.setup.called(op)) != 0 {
+			t.Errorf("%s reached Home", op)
+		}
+	}
+}
+
+func TestSetupProbeIsSharedAndSlowDoesNotHide(t *testing.T) {
+	f, s := setupFixture(t, allDone())
+	setupStatusReuse = time.Minute
+	main := view(t, s, f, `{}`)
+	if len(items(t, main, 1)) != 1 {
+		t.Fatal("no entry")
+	}
+	view(t, s, f, `{"page":"setup","device":"dev_mac"}`)
+	if n := len(f.setup.called(opSetupStatus)); n != 1 {
+		t.Errorf("%d status calls for the entry and the page", n)
+	}
+	// An action reads a fresh status.
+	if _, err := s.panel(context.Background(), f, "setup_open", json.RawMessage(`{"device":"dev_mac","project":"p1"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(f.setup.called(opSetupStatus)); n != 2 {
+		t.Errorf("%d status calls", n)
+	}
+	// Known recently: a probe that times out later doesn't hide the entry; one never answered does.
+	now := time.Now()
+	s.now = func() time.Time { return now }
+	s.setupCaps = map[string]setupCap{"dev_mac": {ok: true, at: now.Add(-10 * time.Minute)}}
+	f.setup.failOp = map[string]error{opSetupStatus: context.DeadlineExceeded}
+	if len(s.setupDevices(context.Background(), f)) != 1 {
+		t.Error("a slow probe hid a known computer")
+	}
+	s.setupCaps = map[string]setupCap{"dev_mac": {ok: true, at: now.Add(-2 * time.Hour)}}
+	if len(s.setupDevices(context.Background(), f)) != 0 {
+		t.Error("a long-gone answer kept the entry")
+	}
+	s.setupCaps = nil
+	if len(s.setupDevices(context.Background(), f)) != 0 {
+		t.Error("never answered, yet listed")
+	}
+	if setupProbeWait < 15*time.Second || setupAddWait < 11*time.Minute {
+		t.Error("waits too short")
+	}
+}
+
+func TestSetupLongNameAndLink(t *testing.T) {
+	long := "https://claude.com/oauth/authorize?state=" + strings.Repeat("a", 900)
+	st := allDone(map[string]any{"login": map[string]any{"project": "p1", "url": long, "wants_code": false}})
+	f, s := setupFixture(t, st)
+	f.devices = []rubiplugin.HomeDevice{{ID: "dev_mac", Name: strings.Repeat("N", 200)}}
+	pg := view(t, s, f, `{"page":"setup","device":"dev_mac"}`)
+	found := false
+	for _, sec := range pg["sections"].([]map[string]any) {
+		its, _ := sec["items"].([]map[string]any)
+		for _, it := range its {
+			if d, _ := it["detail"].(string); strings.Contains(d, "https://claude.com/") {
+				found = true
+				if len([]rune(d)) > 600 || !strings.Contains(d, "shortened") {
+					t.Errorf("link detail %d runes", len([]rune(d)))
+				}
+			}
+		}
+	}
+	if !found {
+		t.Error("no link")
+	}
+	if _, err := s.panel(context.Background(), f, "setup_install", json.RawMessage(`{"device":"dev_mac"}`)); err != nil {
+		t.Fatal(err)
+	}
+	r := lastSubmit(t, f)
+	if len([]rune(r.Summary)) > 100 || len([]rune(r.Preview.(map[string]any)["computer"].(string))) > 60 {
+		t.Errorf("name not clipped: %q", r.Summary)
 	}
 }

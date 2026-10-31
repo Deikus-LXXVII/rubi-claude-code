@@ -499,11 +499,14 @@ When a computer's Rubi Home reports `agent-setup` (probed with `agent-setup.stat
 step: Apple's container tool, its service, the host-only network, the runner image, the project folders, Claude's
 sign-in per project and a self-test per project (the contract is `docs/design/home-setup-wizard.md` in the Rubi
 repository). Each step shows its state and reason, the last 20 progress lines while it works, and its buttons;
-the page reloads itself every 3 seconds while a job runs or a sign-in waits, and not otherwise. A button is drawn
+the status is a full probe of the machine, so its capability probe waits 15 seconds, a status is reused for 2
+seconds, and a computer known to have the capability stays listed through a slow probe; a project id is checked
+against a fresh status before it is forwarded; the page reloads itself every 3 seconds while a job runs or a sign-in waits, and not otherwise. A button is drawn
 from the `action` Rubi Home names on a step row (`install`, `upgrade`, `start`, `create`, `use_auto_address`,
 `build`, `add`) or a project row (`remove`, `check`, `login`, `login_again`, `selftest`); no `action`, no button.
 "Use the automatic address" (`run {step: network, option: auto-address}`) only clears the proxy address settings
-and needs no approval; "Check the sign-in" runs `login` without a method, which only probes.
+and needs no approval; the plugin sends it only when a fresh status shows the network step offering
+`use_auto_address` (a network that doesn't exist yet is created only through the approval); "Check the sign-in" runs `login` without a method, which only probes.
 
 Approvals: **Install / Upgrade** (`claude-code.setup.install`), **Create** the network (`claude-code.setup.network`)
 and **Add a folder** (`claude-code.setup.project`) are strong approvals; the call to Rubi Home
