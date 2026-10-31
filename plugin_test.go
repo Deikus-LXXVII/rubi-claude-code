@@ -45,17 +45,31 @@ type fakeHost struct {
 	bound     []map[string]any
 	createFn  func(ctx context.Context, args map[string]any) (map[string]any, error) // claude-sessions.create (nil: an old Rubi Home)
 	creates   []map[string]any
-	saveErr   error      // SaveState fails
-	listCut   bool       // claude-sessions.list says truncated
-	listCalls int        // claude-sessions.list calls
-	listArch  []bool     // include_archived of each claude-sessions.list call
-	agent     *fakeAgent // the claude-agent operations (nil: a Rubi Home without the capability)
-	setup     *fakeSetup // the agent-setup operations (nil: a Rubi Home without the capability)
+	saveErr   error        // SaveState fails
+	listCut   bool         // claude-sessions.list says truncated
+	listCalls int          // claude-sessions.list calls
+	listArch  []bool       // include_archived of each claude-sessions.list call
+	agent     *fakeAgent   // the claude-agent operations (nil: a Rubi Home without the capability)
+	setup     *fakeSetup   // the agent-setup operations (nil: a Rubi Home without the capability)
+	library   *fakeLibrary // the host method library.get (nil: none)
 }
 
 type decided struct {
 	device string
 	answer
+}
+
+// LibraryGet plays the host method library.get.
+func (f *fakeHost) LibraryGet(_ context.Context, id string, version int, out any) error {
+	if f.library == nil {
+		return errors.New("library.get is not available")
+	}
+	v, err := f.library.get(id, version)
+	if err != nil {
+		return err
+	}
+	b, _ := json.Marshal(v)
+	return json.Unmarshal(b, out)
 }
 
 func (f *fakeHost) HomeDevices() ([]rubiplugin.HomeDevice, error) { return f.devices, nil }

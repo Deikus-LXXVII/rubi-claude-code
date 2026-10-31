@@ -255,6 +255,8 @@ type roleChangeReq struct {
 	// ByUser is the user's own change from the panel (Bot is panelUser): the Bot-only rules (trust of the project,
 	// the per-Bot counts and the hourly rate) don't apply, the diff-based tier does.
 	ByUser bool
+	// Summary replaces the generated one-line summary of a tier 1 change when set (a library update says "id 3 -> 4").
+	Summary string
 }
 
 // panelUser is the "Bot" of a change the user made on the panel. It is a reserved name: a Bot can't take it.
@@ -371,6 +373,9 @@ func (s *sisters) changeRole(ctx context.Context, h sisterHost, rq roleChangeReq
 	}
 	lines := describeRoleChange(rq.Cur, next)
 	summary := joinSummary(lines, 200)
+	if rq.Summary != "" {
+		summary = oneLine(rq.Summary, 200)
+	}
 	if v.Tier == 1 {
 		base, id := 0, ""
 		if rq.Cur != nil {

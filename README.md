@@ -491,13 +491,23 @@ argument is never used, and a call without a verified Bot fails). A project's de
 | `claude_code_role_create {project, name, description?, from_role?}` | new role; `from_role` (same project) copies instructions, tools, deny rules, subagents and mode, not skills, MCP, plugins, hosts or SSH | 1 with a live project trust held by this Bot for the project, else 2 (`claude-code.role_foreign`) |
 | `claude_code_role_update {role, name?, description?, instructions?, project_instructions?, default_mode?, revert_to?}` | text, rename, mode up to the ceiling; `revert_to` makes a new version with an older version's content (alone, without the other fields) | 1; a mode above the ceiling, or a revert over changes that weren't this Bot's own tier 1 changes, or a revert that widens: 2 (`role_widen`) |
 | `claude_code_role_archive` / `_unarchive {role}` | | 1 |
-| `claude_code_role_skills_set {role, skills:[{name, description?, content}]}`, `_skills_add {role, name, description?, content}`, `_skills_remove {role, name}` | ad-hoc, content-only skills; the text goes to Home as content-addressed blobs and is never put in the audit | 1 (a skill's text grants nothing: frontmatter is stripped and the body is context); a skill the scan flags is saved but **held** until the user accepts it; `library:` sources answer "not available yet" (R8/R9) |
+| `claude_code_role_skills_set {role, skills:[{name, description?, content}]}`, `_skills_add {role, name, description?, content}`, `_skills_remove {role, name}` | ad-hoc, content-only skills; the text goes to Home as content-addressed blobs and is never put in the audit | 1 (a skill's text grants nothing: frontmatter is stripped and the body is context); a skill the scan flags is saved but **held** until the user accepts it |
+| `claude_code_role_skills_add {role, library: "id" \| "id@3"}` | a shared library skill (R9): `id` follows the latest admitted version, `id@3` pins version 3. The plugin reads it with the host method `library.get`, puts it in the role with `source: "library"`, the library id, the pin (none = follow), the resolved version, the hash and Rubi's signature, and Rubi Home verifies the signature against the key it pinned | 1 (admitted means trusted); refused when the skill or version isn't admitted, and a deprecated version takes no new attachments |
 | `claude_code_role_tools_set {role, tools?, deny?}` | built-in tools and deny rules (each leaving the other as it is when omitted) | 1 for the safe set (Read, Edit, Write, Glob, Grep, Bash, Agent, Skill, WebFetch, WebSearch), added deny rules and removing deny rules this Bot added; 2 for any other tool or removing a deny rule the user (or another Bot) set |
 | `claude_code_role_agents_set {role, agents}` | subagent definitions | 1 |
 | `claude_code_role_mcp_set`, `_plugins_set`, `_hosts_set {role, ...}` | MCP servers, Claude plugins, extra network hosts | always 2 (`role_widen`) |
 | `claude_code_role_ssh_grant` / `_revoke {role, target}` | SSH target grants | answer "not available yet" until the SSH registry (R11/R12); the tier logic is in place: a registered target is 1, an unregistered one 2 |
 | `claude_code_role_start {role, prompt, name?}` | a session in the role's VM (`claude-agent.start` with `role`), the Bot bound to it | as `claude_code_start`: one strong approval (`claude-code.start`), or none with a live project trust held by this Bot, never for a `bypassPermissions` role; same hidden-text checks and 5 an hour |
 | `claude_code_role_list {project?}`, `_get {role, version?}`, `_history {role}` | read | none |
+
+**Library skills follow or pin (R9).** A role that follows a skill is re-materialized as a new role version when a newer
+version is admitted (audit and history say `design-tokens 3 -> 4`; the change is by `library`, tier 1, never touches tools,
+hosts or MCP servers, and Revert undoes it). The check runs when the role's page is opened (at most every 30 seconds per
+role) and every 10 minutes from the plugin's poll loop (at most 12 roles and 40 library calls each time). A withdrawn
+version is dropped at the next check, audited per role (`role.library_dropped`); a deprecated one stays. A failure to
+reach the library (Rubi locked, no answer) is never read as a withdrawal. The panel's role page has **Pin to this
+version** and **Follow the latest** per library skill. Submitting an ad-hoc skill to the library is the Bot tool
+`rubi_library_submit` in Rubi's core; nothing in this plugin does it.
 
 **The tier comes from the difference, not from the tool.** The plugin reads the current version, builds the proposed
 one, and compares. It is tier 2 when anything grows in `mcp`, `plugins` or `hosts`; when a tool outside the safe set

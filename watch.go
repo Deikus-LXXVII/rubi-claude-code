@@ -124,6 +124,17 @@ func (w *watcher) refresh(ctx context.Context) {
 			agent[d.ID] = w.s.agentCapable(ctx, w.h, d.ID)
 		}
 	}
+	if w.s != nil {
+		var ids []string
+		for _, d := range devs {
+			if agent[d.ID] {
+				ids = append(ids, d.ID)
+			}
+		}
+		if len(ids) > 0 {
+			w.wg.Go(func() { w.s.libraryTick(ctx, w.h, ids) })
+		}
+	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	ops := []string{opNext}

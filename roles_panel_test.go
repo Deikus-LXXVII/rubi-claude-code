@@ -43,7 +43,7 @@ func seedRole(t *testing.T, f *fakeHost, s *sisters, fr *fakeRoles) string {
 	r := fr.cur(id)
 	fr.blobs[shaOf("lib text")] = "lib text"
 	r.Description = injection
-	r.Skills = append(r.Skills, roleSkill{Name: "lint-rules", Source: "library", LibraryID: "lint", Pin: "2", SHA256: shaOf("lib text"), State: "active"})
+	r.Skills = append(r.Skills, roleSkill{Name: "lint-rules", Source: "library", LibraryID: "lint", Pin: "2", Resolved: "2", SHA256: shaOf("lib text"), Sig: fakeLibSig("lint", "2", shaOf("lib text")), State: "active"})
 	r.Tools = append(r.Tools, "Monitor")
 	r.Deny = []roleDeny{{Rule: "Bash(rm:*)", By: "user"}, {Rule: "WebFetch", By: botA}, {Rule: "Task", By: "library"}}
 	r.MCP = []roleMCP{{Name: "docs", Type: "http", URL: "https://docs.example/mcp", Approval: "ap_1"}}
@@ -64,16 +64,22 @@ func allLabels(t *testing.T, page map[string]any, untrusted ...string) []map[str
 		for _, a := range as {
 			acts = append(acts, a)
 			texts := []string{fmt.Sprint(a["label"]), fmt.Sprint(a["confirm"])}
+			// The panel refuses a prompt that mentions a password, passkey, PIN or Rubi (it could pass as an unlock
+			// prompt); a button's label may say "Pin to this version".
+			words := []string{"password", "passkey", "rubi"}
 			if pr, ok := a["prompt"].(map[string]any); ok {
 				l := fmt.Sprint(pr["label"])
 				if len([]rune(l)) > 200 {
 					t.Errorf("prompt label too long: %q", l)
 				}
+				if low := strings.ToLower(l + " " + fmt.Sprint(pr["value"])); strings.Contains(low, "pin") {
+					t.Errorf("prompt %q mentions pin", l)
+				}
 				texts = append(texts, l, fmt.Sprint(pr["value"]))
 			}
 			for _, x := range texts {
 				low := strings.ToLower(x)
-				for _, bad := range []string{"password", "passkey", "pin", "rubi"} {
+				for _, bad := range words {
 					if strings.Contains(low, bad) {
 						t.Errorf("%q mentions %q", x, bad)
 					}

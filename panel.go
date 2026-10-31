@@ -107,6 +107,8 @@ func (s *sisters) panel(ctx context.Context, h sisterHost, op string, args json.
 	case "role_archive", "role_unarchive", "role_skill_remove", "role_tool", "role_deny_add", "role_deny_remove", "role_mcp_remove",
 		"role_plugin_remove", "role_host_remove", "role_agent_remove", "role_mode", "role_pinstr":
 		return s.panelRoleItem(ctx, h, op, a.Device, a.Role, a.Item, a.Mode, a.On, a.Text)
+	case "role_skill_pin", "role_skill_follow":
+		return s.panelSkillPin(ctx, h, a.Device, a.Role, a.Item, op == "role_skill_pin")
 	case "role_skill_accept":
 		return s.panelSkillAccept(ctx, h, a.Device, a.Role, a.Item)
 	case "role_revert":

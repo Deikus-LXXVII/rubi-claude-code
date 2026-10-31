@@ -63,7 +63,7 @@ func skillTag(k roleSkill) string {
 		if k.Pin != "" {
 			parts = append(parts, "library "+clipOne(k.LibraryID, 40)+"@"+clipOne(k.Pin, 12)+" (pinned)")
 		} else {
-			parts = append(parts, "library "+clipOne(k.LibraryID, 40)+" (following the latest)")
+			parts = append(parts, "library "+clipOne(k.LibraryID, 40)+" (following the latest admitted, now version "+clipOne(k.Resolved, 12)+")")
 		}
 	case "adhoc":
 		parts = append(parts, "written by "+clipOne(firstNonEmpty(k.AddedBy, "a Bot"), 40))
@@ -88,6 +88,13 @@ func skillTag(k roleSkill) string {
 // skillUnreviewed: a Bot-written skill that passed the scan and that no person has looked at.
 func skillUnreviewed(k roleSkill) bool {
 	return k.Source == "adhoc" && k.State != "held" && k.AddedBy != panelUser && len(k.Accepted) == 0
+}
+
+func ifElseAction(c bool, a, b map[string]any) map[string]any {
+	if c {
+		return a
+	}
+	return b
 }
 
 func plural(n int, one, many string) string {
@@ -241,6 +248,8 @@ func (s *sisters) rolePage(ctx context.Context, h sisterHost, p panelPage) (any,
 	if err != nil {
 		return nil, err
 	}
+	// A role that follows library skills is brought up to date when it is looked at (the check is bounded).
+	updated := s.followOnView(ctx, h, d.ID, p.Role)
 	r, err := s.getRole(ctx, h, d.ID, p.Role, 0)
 	if err != nil {
 		return nil, err
@@ -292,12 +301,23 @@ func (s *sisters) rolePage(ctx context.Context, h sisterHost, p panelPage) (any,
 		if k.State == "held" {
 			it["warn"] = true
 			it["actions"] = remove("role_skill_remove", k.Name, map[string]any{"label": "Accept", "op": "role_skill_accept", "args": args("item", k.Name)})
+		} else if k.Source == "library" {
+			it["actions"] = remove("role_skill_remove", k.Name,
+				ifElseAction(k.Pin == "", map[string]any{"label": "Pin to this version", "op": "role_skill_pin", "args": args("item", k.Name)},
+					map[string]any{"label": "Follow the latest", "op": "role_skill_follow", "args": args("item", k.Name)}))
 		} else {
 			it["actions"] = remove("role_skill_remove", k.Name)
 		}
 		skills = append(skills, it)
 	}
-	skNote := "A skill is text Claude reads; it grants no tools, hosts or permissions. Bots add skills; you can remove them, and accept a held one."
+	skNote := "A skill is text Claude reads; it grants no tools, hosts or permissions. Bots add skills; you can remove them, and accept a held one. A library skill is shared and signed by Rubi: one that follows the latest is updated here when a newer version is admitted (the History shows each update and can revert it) and dropped if the curator withdraws it; pinning keeps its version. A Bot shares a skill it wrote by submitting it to the library (rubi_library_submit), which the curator Bot then admits; nothing on this page does that."
+	if len(updated) > 0 {
+		var parts []string
+		for _, c := range updated {
+			parts = append(parts, c.text())
+		}
+		skNote += " Just updated from the library: " + strings.Join(parts, "; ") + "."
+	}
 	if held+un > 0 {
 		skNote += fmt.Sprintf(" %d held, %d unreviewed.", held, un)
 	}
@@ -713,6 +733,19 @@ func (s *sisters) panelRoleItem(ctx context.Context, h sisterHost, op, device, r
 			var ok bool
 			if n.Agents, ok = removeBy(n.Agents, func(a roleAgent) bool { return a.Name == item }); !ok {
 				return errNoItem
+			}
+			return nil
+		})
+	case "role_skill_pin", "role_skill_follow":
+		return edit(func(n *role) error {
+			i := slices.IndexFunc(n.Skills, func(k roleSkill) bool { return k.Name == item && k.Source == "library" })
+			if i < 0 {
+				return errNoItem
+			}
+			if op == "role_skill_pin" {
+				n.Skills[i].Pin = n.Skills[i].Resolved
+			} else {
+				n.Skills[i].Pin = ""
 			}
 			return nil
 		})

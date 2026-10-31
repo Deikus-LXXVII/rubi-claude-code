@@ -372,9 +372,9 @@ func TestSkillsAreContentNotGrants(t *testing.T) {
 	if m := asMap(t)(s.roleSkillsRemoveTool(context.Background(), f, roleSkillsRemoveIn{roleWho: who(botA), Role: id, Name: "plain"})); status(m) != "applied" || len(fr.current(id).Skills) != 1 {
 		t.Fatalf("%v", m)
 	}
-	m = asMap(t)(s.roleSkillsAddTool(context.Background(), f, roleSkillsAddIn{roleWho: who(botA), Role: id, Library: "design-tokens@3"}))
-	if status(m) != "rejected" || !strings.Contains(strings.Join(m["reasons"].([]string), " "), "not available yet") {
-		t.Fatalf("%v", m)
+	// A library skill needs the library (this fake host has none): a failure, not a rejection of the skill.
+	if _, err := s.roleSkillsAddTool(context.Background(), f, roleSkillsAddIn{roleWho: who(botA), Role: id, Library: "design-tokens@3"}); err == nil || !strings.Contains(err.Error(), "skill library") {
+		t.Fatalf("%v", err)
 	}
 }
 

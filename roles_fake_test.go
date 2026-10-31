@@ -194,6 +194,19 @@ func (f *fakeRoles) put(raw []byte) (any, error) {
 	}
 	for i := range r.Skills {
 		k := &r.Skills[i]
+		if k.Source == "library" {
+			if !fakeItemRE.MatchString(k.LibraryID) || !fakeNumRE.MatchString(k.Resolved) || k.Pin != "" && !fakeNumRE.MatchString(k.Pin) {
+				why = append(why, "skill "+k.Name+": a library skill needs a valid library_id and resolved version")
+				continue
+			}
+			if k.Sig != fakeLibSig(k.LibraryID, k.Resolved, k.SHA256) {
+				why = append(why, "skill "+k.Name+": library signature refused: not signed for this id, version and hash")
+				continue
+			}
+		} else if k.LibraryID != "" || k.Sig != "" || k.Pin != "" || k.Resolved != "" {
+			why = append(why, "skill "+k.Name+": library fields on an ad-hoc skill")
+			continue
+		}
 		text, ok := newBlobs[k.SHA256]
 		if !ok {
 			text, ok = f.blobs[k.SHA256]
@@ -268,6 +281,11 @@ func (f *fakeRoles) putCount() int {
 // ---- Home's approval rules (internal/home/agent/roles/approvals.go and validate.go, mirrored: the plugin can't
 // import them, they are internal to the Rubi module). An addition names an approval id of ^[A-Za-z0-9_-]{1,64}$ and
 // an id is spent once, by the version that commits with it. ----
+
+var (
+	fakeItemRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,47}$`)
+	fakeNumRE  = regexp.MustCompile(`^[0-9]{1,6}$`)
+)
 
 var fakeApprovalRE = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 

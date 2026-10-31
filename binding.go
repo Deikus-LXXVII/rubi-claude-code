@@ -108,6 +108,10 @@ type sisters struct {
 	setupCaps map[string]setupCap
 	// rc caches the roles of each computer (roles.go).
 	rc roleCache
+	// libSeen is when a role's library skills were last checked on its page; libTickAt the last periodic check
+	// (roles_library.go).
+	libSeen   map[string]time.Time
+	libTickAt time.Time
 }
 
 type askRef struct {

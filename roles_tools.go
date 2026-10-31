@@ -201,7 +201,7 @@ type roleSkillsAddIn struct {
 	Name        string `json:"name,omitempty"`
 	Description string `json:"description,omitempty"`
 	Content     string `json:"content,omitempty"`
-	Library     string `json:"library,omitempty" jsonschema:"a shared library skill, id or id@version (not available yet)"`
+	Library     string `json:"library,omitempty" jsonschema:"a shared library skill: id follows the latest admitted version, id@3 pins version 3; instead of name, description and content. Only admitted skills can be attached"`
 }
 
 type roleSkillsRemoveIn struct {
@@ -311,11 +311,11 @@ func registerRoleTools(p *rubiplugin.Plugin, s *sisters) {
 		func(ctx context.Context, h *rubiplugin.Host, in roleRefIn) (any, error) {
 			return s.roleArchiveTool(ctx, h, in, false)
 		})
-	rubiplugin.AddTool(p, "claude_code_role_skills_set", "Set a role's ad-hoc skills (text only: Claude reads them as context; they grant nothing). A skill the scan flags is saved but held until the user accepts it. Library skills are not available yet."+roleTierNote,
+	rubiplugin.AddTool(p, "claude_code_role_skills_set", "Set a role's ad-hoc skills (text only: Claude reads them as context; they grant nothing). A skill the scan flags is saved but held until the user accepts it. Library skills are added with claude_code_role_skills_add."+roleTierNote,
 		func(ctx context.Context, h *rubiplugin.Host, in roleSkillsSetIn) (any, error) {
 			return s.roleSkillsSetTool(ctx, h, in)
 		})
-	rubiplugin.AddTool(p, "claude_code_role_skills_add", "Add or replace one ad-hoc skill of a role. Library skills (library: id or id@version) are not available yet.",
+	rubiplugin.AddTool(p, "claude_code_role_skills_add", "Add or replace one ad-hoc skill of a role (name, description, content), or attach a shared library skill (library: id follows the latest admitted version, id@3 pins version 3; only admitted skills, signed by Rubi). A followed skill is updated by Rubi when a newer version is admitted, and dropped if withdrawn. To share a skill you wrote, submit it to the library with rubi_library_submit."+roleTierNote,
 		func(ctx context.Context, h *rubiplugin.Host, in roleSkillsAddIn) (any, error) {
 			return s.roleSkillsAddTool(ctx, h, in)
 		})
@@ -385,8 +385,8 @@ func (s *sisters) who(h sisterHost, w roleWho) (roleCaller, error) {
 	if bot == "" || len(bot) > 64 || botID(bot) == "" {
 		return roleCaller{}, errors.New(notVerified)
 	}
-	if botID(bot) == panelUser {
-		return roleCaller{}, errors.New("that Bot name is reserved for the user's own changes on the panel; connect under another name")
+	if botID(bot) == panelUser || botID(bot) == libraryActor {
+		return roleCaller{}, errors.New("that Bot name is reserved for the user's own changes on the panel and the skill library's updates; connect under another name")
 	}
 	d, err := s.pickDevice(h, w.Device)
 	if err != nil {
@@ -713,10 +713,7 @@ func (s *sisters) roleSkillsSetTool(ctx context.Context, h sisterHost, in roleSk
 
 func (s *sisters) roleSkillsAddTool(ctx context.Context, h sisterHost, in roleSkillsAddIn) (any, error) {
 	if strings.TrimSpace(in.Library) != "" {
-		if _, err := s.who(h, in.roleWho); err != nil {
-			return nil, err
-		}
-		return rejected("library skills are not available yet"), nil
+		return s.roleSkillsAddLibrary(ctx, h, in)
 	}
 	return s.roleEdit(ctx, h, in.roleWho, in.Role, "role.skills.add", false, func(c roleCaller, cur, next *role) (map[string]string, []string, error) {
 		b, r := applySkills(c, cur, next, []roleSkillIn{{Name: in.Name, Description: in.Description, Content: in.Content}}, false)
