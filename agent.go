@@ -111,7 +111,31 @@ type agentProject struct {
 	Queue    int    `json:"queue,omitempty"`
 	// SessionsRunning is how many top-level sessions run in the project (a newer Rubi Home).
 	SessionsRunning int `json:"sessions_running,omitempty"`
+	// Role is the role this row is about (a newer Rubi Home has one row for the legacy role, whose id is the
+	// project's, and one for each isolated role that has activity; all rows of a project share its id).
+	Role     string `json:"role,omitempty"`
+	RoleName string `json:"role_name,omitempty"`
 }
+
+// normRole is the isolated role's id, or "" for the project's legacy role (an older Rubi Home sends no role; the
+// legacy role's id is the project's).
+func normRole(project, role string) string {
+	if role == project {
+		return ""
+	}
+	return role
+}
+
+// withRole adds the role to the arguments of a claude-agent operation when the session is in an isolated role.
+func withRole(args map[string]any, role string) map[string]any {
+	if role != "" {
+		args["role"] = role
+	}
+	return args
+}
+
+// isolated says whether the row is about a stored (isolated) role.
+func (p agentProject) isolated() bool { return normRole(p.ID, p.Role) != "" }
 
 // agentSess is one agent session (claude-agent.sessions). Name is the runner's (renameSession); the Rubi alias
 // is kept in the plugin's store.
@@ -123,6 +147,8 @@ type agentSess struct {
 	Mode         string    `json:"mode,omitempty"`
 	Busy         bool      `json:"busy,omitempty"`
 	Project      string    `json:"-"`
+	Role         string    `json:"-"` // the isolated role's id, "" for the legacy role
+	RoleName     string    `json:"-"`
 }
 
 type agentDevice struct {
@@ -164,12 +190,19 @@ func (s *sisters) listAgent(ctx context.Context, h sisterHost, device string) []
 				var sr struct {
 					Sessions []agentSess `json:"sessions"`
 				}
-				if err := h.HomeCall(dctx, ad.device.ID, opAgentSessions, map[string]any{"project": p.ID}, &sr); err != nil {
+				args := map[string]any{"project": p.ID}
+				if p.isolated() {
+					args["role"] = p.Role
+				}
+				if err := h.HomeCall(dctx, ad.device.ID, opAgentSessions, args, &sr); err != nil {
 					ad.err = fmt.Errorf("project %s: %w", p.ID, err)
 					continue
 				}
 				for _, x := range sr.Sessions {
 					x.Project = p.ID
+					if p.isolated() {
+						x.Role, x.RoleName = p.Role, p.RoleName
+					}
 					ad.sessions = append(ad.sessions, x)
 				}
 			}
@@ -186,6 +219,32 @@ func (ad agentDevice) project(id string) agentProject {
 		}
 	}
 	return agentProject{ID: id}
+}
+
+// projectGroup is one project with all of its rows: the legacy role's first, then the isolated roles'. Its
+// embedded row is the legacy one (or the first), with the queue and running counts of all.
+type projectGroup struct {
+	agentProject
+	rows []agentProject
+}
+
+func (ad agentDevice) groups() []projectGroup {
+	var out []projectGroup
+	at := map[string]int{}
+	for _, p := range ad.projects {
+		i, ok := at[p.ID]
+		if !ok {
+			at[p.ID] = len(out)
+			out = append(out, projectGroup{agentProject: p, rows: []agentProject{p}})
+			continue
+		}
+		g := &out[i]
+		g.rows = append(g.rows, p)
+		g.Queue += p.Queue
+		g.SessionsRunning += p.SessionsRunning
+		g.SlotBusy = g.SlotBusy || p.SlotBusy
+	}
+	return out
 }
 
 // matchProject finds a project by id or directory.

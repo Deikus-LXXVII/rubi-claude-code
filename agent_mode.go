@@ -35,6 +35,7 @@ type modeTicket struct {
 	Device     string `json:"device"`
 	DeviceName string `json:"device_name"`
 	Project    string `json:"project"`
+	Role       string `json:"role,omitempty"`
 	SessionID  string `json:"session_id"`
 	From       string `json:"from"`
 	To         string `json:"to"`
@@ -69,7 +70,7 @@ func (s *sisters) changeMode(ctx context.Context, h sisterHost, sister, device, 
 	if known && from == to {
 		return map[string]any{"changed": false, "mode": mode}, nil
 	}
-	t := modeTicket{Sister: sister, Device: ref.ad.device.ID, DeviceName: ref.ad.device.Name, Project: ref.proj.ID, SessionID: ref.sess.ID, From: ref.sess.Mode, To: mode}
+	t := modeTicket{Sister: sister, Device: ref.ad.device.ID, DeviceName: ref.ad.device.Name, Project: ref.proj.ID, Role: ref.sess.Role, SessionID: ref.sess.ID, From: ref.sess.Mode, To: mode}
 	if known && to < from { // stricter
 		if !byUser {
 			bound := false
@@ -95,7 +96,7 @@ func (s *sisters) executeMode(ctx context.Context, h sisterHost, t modeTicket, w
 	if _, ok := modeRank[t.To]; !ok || t.Device == "" || t.Project == "" || t.SessionID == "" {
 		return nil, errors.New("bad payload")
 	}
-	if err := h.HomeCall(ctx, t.Device, opAgentMode, map[string]any{"project": t.Project, "id": t.SessionID, "mode": t.To}, nil); err != nil {
+	if err := h.HomeCall(ctx, t.Device, opAgentMode, withRole(map[string]any{"project": t.Project, "id": t.SessionID, "mode": t.To}, t.Role), nil); err != nil {
 		return nil, err
 	}
 	h.Audit(auditModeSet, map[string]any{"device": t.Device, "project": t.Project, "session": t.SessionID, "from": t.From, "to": t.To, "sister": t.Sister, "approval": why})

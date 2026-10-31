@@ -453,6 +453,7 @@ type renameTicket struct {
 	Name         string `json:"name,omitempty"`
 	Clear        bool   `json:"clear,omitempty"`
 	Project      string `json:"project,omitempty"` // an agent project (claude-agent)
+	Role         string `json:"role,omitempty"`    // the isolated role of that session
 }
 
 // freeName checks a name against the session ids the list showed (a name that equals an id is refused).
@@ -493,9 +494,11 @@ func (s *sisters) renameTool(ctx context.Context, h sisterHost, in renameIn) (an
 		err  error
 		// project is set when the session is an agent session (claude-agent).
 		project string
+		role    string // and its isolated role, if any
 	)
 	agentTarget := func(ref agentRef) {
 		d, sess, all, project = ref.ad.device, ref.sess.asSession(ref.proj.Dir), asDeviceSessions([]agentDevice{ref.ad}), ref.proj.ID
+		role = ref.sess.Role
 	}
 	if in.SessionID == "" && in.SessionName == "" {
 		// The Bot's own session.
@@ -541,7 +544,7 @@ func (s *sisters) renameTool(ctx context.Context, h sisterHost, in renameIn) (an
 			return nil, err
 		}
 	}
-	t := renameTicket{Sister: sister, Device: d.ID, DeviceName: d.Name, SessionID: sess.SessionID, AppSessionID: sess.AppSessionID, Name: name, Clear: in.Clear, Project: project}
+	t := renameTicket{Sister: sister, Device: d.ID, DeviceName: d.Name, SessionID: sess.SessionID, AppSessionID: sess.AppSessionID, Name: name, Clear: in.Clear, Project: project, Role: role}
 	old, _ := s.st.aliasFor(d.ID, sess)
 	if in.Clear && old.Name == "" {
 		return map[string]any{"cleared": false, "session_id": sess.SessionID, "note": "that session has no name"}, nil
@@ -637,7 +640,7 @@ func (s *sisters) executeRename(ctx context.Context, h sisterHost, t renameTicke
 		}
 		rctx, cancel := context.WithTimeout(ctx, panelListTimeout)
 		defer cancel()
-		if err := h.HomeCall(rctx, t.Device, opAgentRename, map[string]any{"project": t.Project, "id": t.SessionID, "name": name}, nil); err != nil {
+		if err := h.HomeCall(rctx, t.Device, opAgentRename, withRole(map[string]any{"project": t.Project, "id": t.SessionID, "name": name}, t.Role), nil); err != nil {
 			return nil, fmt.Errorf("Rubi Home didn't rename the session (%v); nothing changed", err)
 		}
 		all = nil

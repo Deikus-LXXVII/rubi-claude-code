@@ -34,6 +34,7 @@ type forkTicket struct {
 	Device     string `json:"device"`
 	DeviceName string `json:"device_name"`
 	Project    string `json:"project"`
+	Role       string `json:"role,omitempty"` // the isolated role the session runs in
 	SessionID  string `json:"session_id"`
 	Name       string `json:"name,omitempty"`
 	Mode       string `json:"mode"` // the source session's mode, asked of Rubi Home explicitly so a fork never loosens it
@@ -93,7 +94,7 @@ func (s *sisters) forkTool(ctx context.Context, h sisterHost, in forkIn) (any, e
 	for _, b := range s.st.bindings() {
 		own = own || sameBot(b.Sister, sister) && b.Device == d.ID && b.Project == proj.ID && b.SessionID == sess.ID
 	}
-	t := forkTicket{Sister: sister, Device: d.ID, DeviceName: d.Name, Project: proj.ID, SessionID: sess.ID, Name: name, Mode: sess.Mode}
+	t := forkTicket{Sister: sister, Device: d.ID, DeviceName: d.Name, Project: proj.ID, Role: sess.Role, SessionID: sess.ID, Name: name, Mode: sess.Mode}
 	kind := kindFork
 	if own {
 		kind = kindForkOwn
@@ -113,7 +114,7 @@ func (s *sisters) executeFork(ctx context.Context, h sisterHost, t forkTicket) (
 	var res struct {
 		ID string `json:"id"`
 	}
-	args := map[string]any{"project": t.Project, "id": t.SessionID, "mode": t.Mode}
+	args := withRole(map[string]any{"project": t.Project, "id": t.SessionID, "mode": t.Mode}, t.Role)
 	if t.Name != "" {
 		args["name"] = t.Name
 	}

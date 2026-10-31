@@ -588,3 +588,120 @@ func TestBotIDGoesToRubiHomeWithStartAndSend(t *testing.T) {
 		t.Fatalf("%v", c)
 	}
 }
+
+// twoRoles makes the fake report project p1 with its legacy role and an isolated role "reviewer" with a session
+// of its own: the same project id on two rows.
+func twoRoles(f *fakeHost) {
+	f.agent.mu.Lock()
+	defer f.agent.mu.Unlock()
+	f.agent.projects = []agentProject{
+		{ID: "p1", Dir: "/home/alice/my-project", VMState: "running", Role: "p1", RoleName: "default"},
+		{ID: "p1", Dir: "/home/alice/my-project", VMState: "stopped", Role: "r_aaaaaaaa", RoleName: "reviewer", Queue: 1},
+	}
+	f.agent.rsessions = map[string][]agentSess{"r_aaaaaaaa": {{ID: "rs-1", Name: "review of PR 7", Mode: "plan"}}}
+	f.agent.slots = []map[string]any{{"project": "p1", "role": "r_aaaaaaaa", "role_name": "reviewer", "session": "rs-1", "busy": true, "subagents": 1}}
+	f.agent.limits = map[string]any{"per_project": 0, "total": 4}
+	f.agent.modes = map[string]any{"default": "medium", "modes": []string{"maximum", "medium", "light"}, "bots": []map[string]any{}}
+	f.agent.queue = []map[string]any{{"project": "p1", "role": "r_aaaaaaaa", "op": "start", "position": 1, "reason": "waiting: the role has a session"}}
+}
+
+func TestPanelGroupsByRoleWithDuplicateProjectIDs(t *testing.T) {
+	f, s, _ := agentFixture(t)
+	twoRoles(f)
+	pg := view(t, s, f, `{"page":"agent"}`)
+	secs := pg["sections"].([]map[string]any)
+	// One summary and ONE section for the project, though Rubi Home sent two rows with the same id.
+	if len(secs) != 2 || secs[1]["title"] != "/home/alice/my-project" {
+		t.Fatalf("%v", secs)
+	}
+	note := secs[1]["note"].(string)
+	if !strings.Contains(note, "VM: running") || !strings.Contains(note, "role reviewer VM: stopped") {
+		t.Errorf("note: %q", note)
+	}
+	var text strings.Builder
+	for _, x := range secs[1]["items"].([]map[string]any) {
+		text.WriteString(x["title"].(string) + " | " + x["detail"].(string) + "\n")
+	}
+	for _, want := range []string{"main work | idle", "review of PR 7 | RUNNING now · 1 subagent · mode plan · role reviewer", "Waiting #1: a new session in the role reviewer"} {
+		if !strings.Contains(text.String(), want) {
+			t.Errorf("lacks %q in\n%s", want, text.String())
+		}
+	}
+	var rs map[string]any
+	for _, x := range secs[1]["items"].([]map[string]any) {
+		if x["title"] == "review of PR 7" {
+			rs = x
+		}
+	}
+	if c := actionByLabel(t, rs, "Open chat")["open"].(map[string]any); c["role"] != "r_aaaaaaaa" || c["session_id"] != "rs-1" {
+		t.Fatalf("%v", c)
+	}
+	// The sessions page: the default role first, then one section per role.
+	sp := view(t, s, f, `{"page":"sessions","device":"dev_mac","project":"p1"}`)
+	ss := sp["sections"].([]map[string]any)
+	if len(ss) != 2 || ss[0]["title"] != "Sessions of the default role" || ss[1]["title"] != "Role reviewer" {
+		t.Fatalf("%v", ss)
+	}
+	if got := len(ss[0]["items"].([]map[string]any)); got != 2 {
+		t.Errorf("default role sessions: %d", got)
+	}
+	ri := ss[1]["items"].([]map[string]any)
+	if len(ri) != 1 {
+		t.Fatalf("%v", ri)
+	}
+	for _, label := range []string{"Rename", "Fork", "Close", "Mode: default (asks you)"} {
+		if a := actionByLabel(t, ri[0], label); a["args"].(map[string]any)["role"] != "r_aaaaaaaa" {
+			t.Errorf("%s carries no role: %v", label, a)
+		}
+	}
+	// The chat names the role and reads the role's messages.
+	chat := view(t, s, f, `{"page":"chat","device":"dev_mac","project":"p1","session_id":"rs-1","role":"r_aaaaaaaa"}`)
+	if !strings.HasPrefix(chat["note"].(string), "Role: reviewer") || chat["title"] != "review of PR 7" {
+		t.Errorf("%v", chat["note"])
+	}
+	if c := f.agent.called(opAgentMessages); len(c) != 1 || c[0]["role"] != "r_aaaaaaaa" {
+		t.Fatalf("%v", c)
+	}
+	legacy := view(t, s, f, `{"page":"chat","device":"dev_mac","project":"p1","session_id":"s-1"}`)
+	if !strings.HasPrefix(legacy["note"].(string), "Role: default") {
+		t.Errorf("%v", legacy["note"])
+	}
+	if c := f.agent.called(opAgentMessages); len(c) != 2 || c[1]["role"] != nil {
+		t.Fatalf("a legacy chat sends a role: %v", c)
+	}
+}
+
+func TestPanelSessionActionsCarryTheRole(t *testing.T) {
+	f, s, _ := agentFixture(t)
+	twoRoles(f)
+	ctx := context.Background()
+	call := func(op, args string) {
+		t.Helper()
+		if _, err := s.panel(ctx, f, op, json.RawMessage(args)); err != nil {
+			t.Fatalf("%s: %v", op, err)
+		}
+	}
+	base := `"device":"dev_mac","project":"p1","session_id":"rs-1","role":"r_aaaaaaaa"`
+	call("send", `{`+base+`,"text":"hi"}`)
+	call("interrupt", `{`+base+`}`)
+	call("close", `{`+base+`}`)
+	call("fork", `{`+base+`}`)
+	call("rename", `{`+base+`,"name":"pr seven"}`)
+	for _, op := range []string{opAgentSend, opAgentInterrupt, opAgentClose, opAgentFork, opAgentRename} {
+		if c := f.agent.called(op); len(c) != 1 || c[0]["role"] != "r_aaaaaaaa" || c[0]["id"] != "rs-1" {
+			t.Errorf("%s: %v", op, c)
+		}
+	}
+	// A looser mode goes through the approval and then to the role's session.
+	call("mode", `{`+base+`,"mode":"plan"}`)
+	if c := f.agent.called(opAgentMode); len(c) != 0 { // already plan: nothing to do
+		t.Errorf("%v", c)
+	}
+	call("mode", `{`+base+`,"mode":"default"}`)
+	if got := lastSubmit(t, f); got.Kind != kindMode {
+		t.Fatalf("%+v", got)
+	}
+	if tk, _ := lastSubmit(t, f).Payload.(modeTicket); tk.Role != "r_aaaaaaaa" {
+		t.Errorf("ticket %+v", lastSubmit(t, f).Payload)
+	}
+}

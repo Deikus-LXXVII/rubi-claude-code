@@ -74,6 +74,8 @@ func (s *sisters) panel(ctx context.Context, h sisterHost, op string, args json.
 		Option    string  `json:"option"`
 		Code      *string `json:"code"`
 		Bot       string  `json:"bot"`
+		Role      string  `json:"role"`
+		Version   int     `json:"version"`
 		Default   bool    `json:"default"`
 		All       bool    `json:"all"`
 	}
@@ -85,12 +87,12 @@ func (s *sisters) panel(ctx context.Context, h sisterHost, op string, args json.
 	switch op {
 	case "view":
 		if a.Page != "" {
-			return s.agentPage(ctx, h, panelPage{Page: a.Page, Device: a.Device, Project: a.Project, Session: a.SessionID})
+			return s.agentPage(ctx, h, panelPage{Page: a.Page, Device: a.Device, Project: a.Project, Session: a.SessionID, Role: a.Role, Version: a.Version})
 		}
 	case "setup_install", "setup_network", "setup_add", "setup_run", "setup_open", "setup_code", "setup_remove", "setup_cancel":
 		return s.panelSetup(ctx, h, op, setupArgs{Device: a.Device, Step: a.Step, Project: a.Project, Method: a.Method, Option: a.Option, Code: a.Code})
 	case "interrupt", "close":
-		return s.panelAgentSimple(ctx, h, "claude-agent."+op, a.Device, a.Project, a.SessionID)
+		return s.panelAgentSimple(ctx, h, "claude-agent."+op, a.Device, a.Project, a.Role, a.SessionID)
 	case "fork":
 		return s.panelAgentFork(ctx, h, a.Device, a.Project, a.SessionID)
 	case "new": // a new session in a project, the first message typed on the page

@@ -44,6 +44,8 @@ type panelPage struct {
 	Device  string
 	Project string
 	Session string
+	Role    string // an isolated role's id
+	Version int    // a role version (history and diff pages)
 }
 
 func (p panelPage) open() map[string]any {
@@ -56,6 +58,12 @@ func (p panelPage) open() map[string]any {
 	}
 	if p.Session != "" {
 		m["session_id"] = p.Session
+	}
+	if p.Role != "" {
+		m["role"] = p.Role
+	}
+	if p.Version != 0 {
+		m["version"] = p.Version
 	}
 	return m
 }
@@ -99,6 +107,8 @@ func (s *sisters) agentLinkSection(ctx context.Context, h sisterHost) []map[stri
 // agentSlot is a running top-level session (claude-agent.status "slots").
 type agentSlot struct {
 	Project    string `json:"project"`
+	Role       string `json:"role,omitempty"`
+	RoleName   string `json:"role_name,omitempty"`
 	Session    string `json:"session"`
 	Bot        string `json:"bot"`
 	Busy       bool   `json:"busy"`
@@ -136,6 +146,7 @@ type agentStatus struct {
 	} `json:"usage"`
 	Queue []struct {
 		Project  string `json:"project"`
+		Role     string `json:"role"`
 		Session  string `json:"session"`
 		Op       string `json:"op"`
 		From     string `json:"from"`
@@ -227,7 +238,7 @@ func (s *sisters) projectsPage(ctx context.Context, h sisterHost) (any, error) {
 			summary["note"] = note + ". A new session over a limit waits in the queue and says what it waits for."
 		}
 		sections = append(sections, summary)
-		for _, pr := range ad.projects {
+		for _, pr := range ad.groups() {
 			var items []map[string]any
 			var mine []agentSess
 			for _, x := range ad.sessions {
@@ -243,7 +254,7 @@ func (s *sisters) projectsPage(ctx context.Context, h sisterHost) (any, error) {
 			for _, x := range mine {
 				var slot *agentSlot
 				for i := range running {
-					if running[i].Project == pr.ID && running[i].Session == x.ID {
+					if running[i].Project == pr.ID && running[i].Session == x.ID && normRole(pr.ID, running[i].Role) == x.Role {
 						slot = &running[i]
 					}
 				}
@@ -257,8 +268,8 @@ func (s *sisters) projectsPage(ctx context.Context, h sisterHost) (any, error) {
 				case x.Busy:
 					state = "busy"
 				}
-				items = append(items, map[string]any{"title": s.sessLabel(d.ID, x), "detail": oneLine(fmt.Sprintf("%s · mode %s", state, firstNonEmpty(x.Mode, "unknown")), 200),
-					"actions": []map[string]any{{"label": "Open chat", "open": panelPage{Page: pageChat, Device: d.ID, Project: pr.ID, Session: x.ID}.open()}}})
+				items = append(items, map[string]any{"title": s.sessLabel(d.ID, x), "detail": oneLine(fmt.Sprintf("%s · mode %s%s", state, firstNonEmpty(x.Mode, "unknown"), roleTag(x.Role, x.RoleName)), 200),
+					"actions": []map[string]any{{"label": "Open chat", "open": panelPage{Page: pageChat, Device: d.ID, Project: pr.ID, Session: x.ID, Role: x.Role}.open()}}})
 			}
 			for _, sl := range running { // a running session the list doesn't have yet (just started)
 				if sl.Project != pr.ID {
@@ -269,8 +280,9 @@ func (s *sisters) projectsPage(ctx context.Context, h sisterHost) (any, error) {
 					seen = seen || x.ID == sl.Session
 				}
 				if !seen && sl.Session != "" && more == 0 {
-					items = append(items, map[string]any{"title": oneLine(sl.Session, 60), "detail": "RUNNING now",
-						"actions": []map[string]any{{"label": "Open chat", "open": panelPage{Page: pageChat, Device: d.ID, Project: pr.ID, Session: sl.Session}.open()}}})
+					sr := normRole(pr.ID, sl.Role)
+					items = append(items, map[string]any{"title": oneLine(sl.Session, 60), "detail": "RUNNING now" + roleTag(sr, sl.RoleName),
+						"actions": []map[string]any{{"label": "Open chat", "open": panelPage{Page: pageChat, Device: d.ID, Project: pr.ID, Session: sl.Session, Role: sr}.open()}}})
 				}
 			}
 			for _, q := range st.Queue {
@@ -287,6 +299,9 @@ func (s *sisters) projectsPage(ctx context.Context, h sisterHost) (any, error) {
 					}
 					what = "a message to " + oneLine(name, 40)
 				}
+				if qr := normRole(pr.ID, q.Role); qr != "" {
+					what += " in the role " + oneLine(roleNameOf(pr.rows, qr), 32)
+				}
 				items = append(items, map[string]any{"title": fmt.Sprintf("Waiting #%d: %s", max(q.Position, 1), what),
 					"detail": oneLine(firstNonEmpty(q.Reason, "waiting for a free place")+ifElse(q.From != "", " · from "+oneLine(q.From, 40), " · from you"), 300), "warn": true})
 			}
@@ -294,9 +309,12 @@ func (s *sisters) projectsPage(ctx context.Context, h sisterHost) (any, error) {
 				items = append(items, map[string]any{"title": fmt.Sprintf("%d waiting in the queue", pr.Queue), "detail": "Rubi Home gave no reason."})
 			}
 			title := firstNonEmpty(pr.Dir, pr.ID)
-			note := fmt.Sprintf("VM: %s · %d running", firstNonEmpty(pr.VMState, "unknown"), countProject(running, pr.ID))
+			note := fmt.Sprintf("VM: %s · %d running", firstNonEmpty(pr.rows[0].VMState, "unknown"), countProject(running, pr.ID))
 			if pr.SessionsRunning > countProject(running, pr.ID) { // an older reading of the same
-				note = fmt.Sprintf("VM: %s · %d running", firstNonEmpty(pr.VMState, "unknown"), pr.SessionsRunning)
+				note = fmt.Sprintf("VM: %s · %d running", firstNonEmpty(pr.rows[0].VMState, "unknown"), pr.SessionsRunning)
+			}
+			for _, r := range pr.rows[1:] {
+				note += fmt.Sprintf(" · role %s VM: %s", oneLine(firstNonEmpty(r.RoleName, r.Role), 32), firstNonEmpty(r.VMState, "unknown"))
 			}
 			if st.Limits.PerProject > 0 {
 				note += fmt.Sprintf(" of %d at a time", st.Limits.PerProject)
@@ -316,6 +334,23 @@ func (s *sisters) projectsPage(ctx context.Context, h sisterHost) (any, error) {
 		sections = []map[string]any{{"title": "Projects", "empty": "No computer reports the claude-agent capability."}}
 	}
 	return map[string]any{"title": "Claude in project VMs", "refresh": 15, "up": upMain, "sections": sections}, nil
+}
+
+// roleTag is " · role NAME" for a session of an isolated role, else nothing.
+func roleTag(role, name string) string {
+	if role == "" {
+		return ""
+	}
+	return " · role " + oneLine(firstNonEmpty(name, role), 32)
+}
+
+func roleNameOf(rows []agentProject, role string) string {
+	for _, r := range rows {
+		if normRole(r.ID, r.Role) == role {
+			return firstNonEmpty(r.RoleName, role)
+		}
+	}
+	return role
 }
 
 func countProject(slots []agentSlot, project string) int {
@@ -355,9 +390,11 @@ func (s *sisters) sessionsPage(ctx context.Context, h sisterHost, p panelPage) (
 		note += fmt.Sprintf(" Showing %d of %d: the most recent.", maxSessItems, len(list))
 		list = list[:maxSessItems]
 	}
-	var items []map[string]any
+	itemsOf := map[string][]map[string]any{} // by role id, "" for the legacy role
+	roleNames := map[string]string{}
 	for _, x := range list {
-		base := panelPage{Device: p.Device, Project: proj.ID, Session: x.ID}
+		base := panelPage{Device: p.Device, Project: proj.ID, Session: x.ID, Role: x.Role}
+		roleNames[x.Role] = x.RoleName
 		sister := ""
 		for _, b := range s.st.bindings() {
 			if b.Device == p.Device && b.Project == proj.ID && b.SessionID == x.ID {
@@ -374,7 +411,7 @@ func (s *sisters) sessionsPage(ctx context.Context, h sisterHost, p panelPage) (
 			cur = a.Name
 		}
 		actions := []map[string]any{
-			{"label": "Open chat", "open": panelPage{Page: pageChat, Device: p.Device, Project: proj.ID, Session: x.ID}.open()},
+			{"label": "Open chat", "open": panelPage{Page: pageChat, Device: p.Device, Project: proj.ID, Session: x.ID, Role: x.Role}.open()},
 			{"label": "Rename", "op": "rename", "args": base.args(), "prompt": map[string]any{"arg": "name", "label": "Name for this session (up to 64 characters; leave empty to remove the name)", "value": cur}},
 			{"label": "Fork", "op": "fork", "args": base.args(), "confirm": "Make a branch of this conversation as a new, idle session?"},
 		}
@@ -395,11 +432,26 @@ func (s *sisters) sessionsPage(ctx context.Context, h sisterHost, p panelPage) (
 			actions = append(actions, map[string]any{"label": label, "op": "mode", "args": args})
 		}
 		actions = append(actions, map[string]any{"label": "Close", "op": "close", "args": base.args(), "danger": true, "confirm": "Close this session? Its history stays; it stops running."})
-		items = append(items, map[string]any{"title": s.sessLabel(p.Device, x), "detail": oneLine(detail, 300), "actions": actions})
+		itemsOf[x.Role] = append(itemsOf[x.Role], map[string]any{"title": s.sessLabel(p.Device, x), "detail": oneLine(detail, 300), "actions": actions})
+	}
+	// One section per role, the project's own (legacy) role first.
+	sections := []map[string]any{{"title": "Sessions", "note": note, "empty": "No sessions.", "items": itemsOf[""]}}
+	var ids []string
+	for id := range itemsOf {
+		if id != "" {
+			ids = append(ids, id)
+		}
+	}
+	slices.SortFunc(ids, func(a, b string) int { return strings.Compare(roleNames[a]+"/"+a, roleNames[b]+"/"+b) })
+	for _, id := range ids {
+		sections = append(sections, map[string]any{"title": "Role " + oneLine(firstNonEmpty(roleNames[id], id), 32), "empty": "No sessions.", "items": itemsOf[id]})
+	}
+	if len(ids) > 0 {
+		sections[0]["title"] = "Sessions of the default role"
 	}
 	return map[string]any{"title": firstNonEmpty(oneLine(proj.Dir, 80), proj.ID) + ": sessions", "refresh": 15,
 		"up":       map[string]any{"label": "Projects", "open": panelPage{Page: pageAgent}.open()},
-		"sections": []map[string]any{{"title": "Sessions", "note": note, "empty": "No sessions.", "items": items}}}, nil
+		"sections": sections}, nil
 }
 
 // chatItem is one line of the chat as the panel draws it.
@@ -542,16 +594,16 @@ func (s *sisters) chatPage(ctx context.Context, h sisterHost, p panelPage) (any,
 	var res struct {
 		Messages []json.RawMessage `json:"messages"`
 	}
-	if err := h.HomeCall(cctx, p.Device, opAgentMessages, map[string]any{"project": p.Project, "id": p.Session, "limit": chatMessages * 3}, &res); err != nil {
+	if err := h.HomeCall(cctx, p.Device, opAgentMessages, withRole(map[string]any{"project": p.Project, "id": p.Session, "limit": chatMessages * 3}, p.Role), &res); err != nil {
 		return nil, errors.New("couldn't read the messages: " + oneLine(err.Error(), 160))
 	}
-	title, mode, busy := oneLine(p.Session, 40), "", false
+	title, mode, busy, roleName := oneLine(p.Session, 40), "", false, ""
 	lctx, lcancel := context.WithTimeout(ctx, panelListTimeout)
 	defer lcancel()
 	for _, ad := range s.listAgent(lctx, h, p.Device) {
 		for _, x := range ad.sessions {
-			if x.Project == p.Project && x.ID == p.Session {
-				title, mode, busy = s.sessLabel(p.Device, x), x.Mode, x.Busy
+			if x.Project == p.Project && x.ID == p.Session && x.Role == p.Role {
+				title, mode, busy, roleName = s.sessLabel(p.Device, x), x.Mode, x.Busy, x.RoleName
 			}
 		}
 	}
@@ -562,6 +614,11 @@ func (s *sisters) chatPage(ctx context.Context, h sisterHost, p panelPage) (any,
 		}
 	}
 	note := fmt.Sprintf("Mode: %s · %s.", firstNonEmpty(mode, "unknown"), map[bool]string{true: "busy", false: "idle"}[busy])
+	if p.Role != "" {
+		note = "Role: " + oneLine(firstNonEmpty(roleName, p.Role), 32) + " (its own VM, skills and tools). " + note
+	} else {
+		note = "Role: default (the project's own .claude). " + note
+	}
 	if sisters != "" {
 		note += " Bound Bot: " + oneLine(sisters, 60) + "."
 	}
@@ -687,7 +744,7 @@ func (s *sisters) panelAgentRename(ctx context.Context, h sisterHost, device, pr
 	if !found {
 		return nil, errors.New("no such agent session")
 	}
-	t := renameTicket{Device: ref.ad.device.ID, DeviceName: ref.ad.device.Name, SessionID: ref.sess.ID, Project: ref.proj.ID}
+	t := renameTicket{Device: ref.ad.device.ID, DeviceName: ref.ad.device.Name, SessionID: ref.sess.ID, Project: ref.proj.ID, Role: ref.sess.Role}
 	if strings.TrimSpace(*name) == "" {
 		t.Clear = true
 	} else if t.Name, err = checkAliasName(*name); err != nil {
@@ -709,22 +766,22 @@ func (s *sisters) panelAgentFork(ctx context.Context, h sisterHost, device, proj
 	if _, ok := modeRank[ref.sess.Mode]; !ok {
 		return nil, errors.New("Rubi Home didn't report that session's permission mode, so a fork could end up looser than it; try again later")
 	}
-	return s.executeFork(ctx, h, forkTicket{Device: ref.ad.device.ID, DeviceName: ref.ad.device.Name, Project: ref.proj.ID, SessionID: ref.sess.ID, Mode: ref.sess.Mode})
+	return s.executeFork(ctx, h, forkTicket{Device: ref.ad.device.ID, DeviceName: ref.ad.device.Name, Project: ref.proj.ID, Role: ref.sess.Role, SessionID: ref.sess.ID, Mode: ref.sess.Mode})
 }
 
 // panelAgentSimple is interrupt and close: one call to Rubi Home, audited.
-func (s *sisters) panelAgentSimple(ctx context.Context, h sisterHost, op, device, project, id string) (any, error) {
+func (s *sisters) panelAgentSimple(ctx context.Context, h sisterHost, op, device, project, role, id string) (any, error) {
 	if device == "" || project == "" || id == "" {
 		return nil, errors.New("no session")
 	}
 	cctx, cancel := context.WithTimeout(ctx, panelListTimeout)
 	defer cancel()
 	action := strings.TrimPrefix(op, "claude-agent.")
-	if err := h.HomeCall(cctx, device, op, map[string]any{"project": project, "id": id}, nil); err != nil {
-		h.Audit(auditPanelAgent, map[string]any{"action": action, "device": device, "project": project, "session": id, "by": "user", "failed": oneLine(err.Error(), 160)})
+	if err := h.HomeCall(cctx, device, op, withRole(map[string]any{"project": project, "id": id}, role), nil); err != nil {
+		h.Audit(auditPanelAgent, withRole(map[string]any{"action": action, "device": device, "project": project, "session": id, "by": "user", "failed": oneLine(err.Error(), 160)}, role))
 		return nil, err
 	}
-	h.Audit(auditPanelAgent, map[string]any{"action": action, "device": device, "project": project, "session": id, "by": "user"})
+	h.Audit(auditPanelAgent, withRole(map[string]any{"action": action, "device": device, "project": project, "session": id, "by": "user"}, role))
 	return map[string]any{"ok": true}, nil
 }
 
@@ -759,7 +816,7 @@ func (s *sisters) panelAgentSend(ctx context.Context, h sisterHost, device, proj
 	}
 	cctx, cancel := context.WithTimeout(ctx, panelListTimeout)
 	defer cancel()
-	if err := h.HomeCall(cctx, device, opAgentSend, map[string]any{"project": project, "id": id, "text": t}, &res); err != nil {
+	if err := h.HomeCall(cctx, device, opAgentSend, withRole(map[string]any{"project": project, "id": id, "text": t}, ref.sess.Role), &res); err != nil {
 		return nil, err
 	}
 	h.Audit("message_sent", map[string]any{"by": "user", "session": id, "project": project, "chars": utf8.RuneCountInString(t), "position": res.Position})

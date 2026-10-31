@@ -17,6 +17,7 @@ type fakeAgent struct {
 	mu        sync.Mutex
 	projects  []agentProject
 	sessions  map[string][]agentSess // by project id
+	rsessions map[string][]agentSess // by role id (the sessions of an isolated role)
 	items     []agentItem            // handed out by claude-agent.next, one list per call
 	decisions []agentDecision
 	calls     []fakeCall
@@ -113,6 +114,9 @@ func (a *fakeAgent) call(ctx context.Context, op string, args, out any) error {
 		a.mu.Lock()
 		defer a.mu.Unlock()
 		p, _ := m["project"].(string)
+		if r, _ := m["role"].(string); r != "" {
+			return reply(map[string]any{"sessions": a.rsessions[r]})
+		}
 		return reply(map[string]any{"sessions": a.sessions[p]})
 	case opAgentNext:
 		a.mu.Lock()
