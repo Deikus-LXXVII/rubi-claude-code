@@ -365,7 +365,7 @@ func (s *sisters) changeRole(ctx context.Context, h sisterHost, rq roleChangeReq
 	}
 	project := next.Project
 	v := tierOf(rq.Cur, next, tierCtx{Bot: rq.Bot, Trust: rq.ByUser || s.botTrust(rq.Dev.ID, rq.Bot, project) != nil, Ceiling: rq.Lim.Ceiling,
-		Registered: s.registeredSSH(rq.Dev.ID), RevertOthers: rq.RevertOthers, ForceWiden: rq.ForceWiden})
+		Registered: s.registeredSSH(rq.Dev.ID), RevertOthers: rq.RevertOthers, ForceWiden: rq.ForceWiden, ByUser: rq.ByUser})
 	if !rq.ByUser && !s.allow("rolechg|"+strings.ToLower(strings.TrimSpace(rq.Bot)), rq.Lim.ChangesPerHour) {
 		return rejected(fmt.Sprintf("%s: at most %d role changes per hour for one Bot", cfgRoleChanges, rq.Lim.ChangesPerHour)), nil
 	}
@@ -490,8 +490,9 @@ func (s *sisters) askRoleChange(ctx context.Context, h sisterHost, rq roleChange
 	if err := s.st.addRolePending(p, s.now()); err != nil {
 		return rejected(err.Error()), nil
 	}
+	// Both at once (a project without trust and a widening) is the widening's kind, the stronger of the two.
 	kind := kindRoleWiden
-	if v.Foreign {
+	if v.Foreign && !v.Widen {
 		kind = kindRoleForeign
 	}
 	name := next.Name

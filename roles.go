@@ -459,6 +459,8 @@ type tierCtx struct {
 	RevertOthers bool
 	// ForceWiden: the tool always asks (mcp_set, plugins_set, hosts_set).
 	ForceWiden bool
+	// ByUser: the change is the user's own, from the panel: the rules about what other Bots made don't apply.
+	ByUser bool
 }
 
 // tierVerdict is the result of comparing the current version with the proposed one.
@@ -530,6 +532,23 @@ func tierOf(cur, next *role, c tierCtx) tierVerdict {
 		}
 	}
 	me := botID(c.Bot)
+	if cur != nil && !c.ByUser {
+		// A Bot changes, archives and unarchives only the roles it created; the others' (the user's too) are the
+		// user's to agree to. What other hands put in a role it created is protected the same way.
+		if cur.CreatedBy != me {
+			v.widen("changes the role %s, which %s created, not you", clipOne(cur.Name, 40), whoSet(cur.CreatedBy))
+		}
+		for _, k := range cur.Skills {
+			j := slices.IndexFunc(next.Skills, func(n roleSkill) bool { return n.Name == k.Name })
+			switch {
+			case k.AddedBy == me:
+			case j < 0:
+				v.widen("removes the skill %s that %s wrote", clipOne(k.Name, 48), whoSet(k.AddedBy))
+			case next.Skills[j].SHA256 != k.SHA256 || next.Skills[j].Pin != k.Pin:
+				v.widen("changes the skill %s that %s wrote", clipOne(k.Name, 48), whoSet(k.AddedBy))
+			}
+		}
+	}
 	for _, d := range base.Deny {
 		if !slices.ContainsFunc(next.Deny, func(n roleDeny) bool { return n.Rule == d.Rule }) && (d.By == "" || d.By != me) {
 			v.widen("removes the deny rule %s that %s set", clipOne(d.Rule, 60), whoSet(d.By))

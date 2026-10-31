@@ -107,7 +107,7 @@ func ptr[T any](v T) *T { return &v }
 
 func TestTierTable(t *testing.T) {
 	base := func() *role {
-		return &role{Project: "p1", Name: "n", Status: "active", Tools: []string{"Read", "Edit"}, DefaultMode: "default", ProjectInstructions: true,
+		return &role{Project: "p1", Name: "n", Status: "active", CreatedBy: "bot-a", Tools: []string{"Read", "Edit"}, DefaultMode: "default", ProjectInstructions: true,
 			Deny: []roleDeny{{Rule: "Bash(rm:*)", By: "user"}, {Rule: "WebFetch", By: "bot-a"}}}
 	}
 	ctx := tierCtx{Bot: "Bot-A", Trust: true, Ceiling: "acceptEdits", Registered: map[string]bool{"web-1": true}}
@@ -128,7 +128,7 @@ func TestTierTable(t *testing.T) {
 		{name: "mode bypass under the default ceiling", mutate: func(r *role) { r.DefaultMode = "bypassPermissions" }, ctx: func(c *tierCtx) { c.Ceiling = "bypassPermissions" }, tier: 1},
 		{name: "unknown mode", mutate: func(r *role) { r.DefaultMode = "dontAsk" }, tier: 2},
 		{name: "archive", mutate: func(r *role) { r.Status = "archived" }, tier: 1},
-		{name: "skills", mutate: func(r *role) { r.Skills = []roleSkill{{Name: "s", Source: "adhoc", SHA256: "x"}} }, tier: 1},
+		{name: "skills", mutate: func(r *role) { r.Skills = append(r.Skills, roleSkill{Name: "s", Source: "adhoc", SHA256: "x"}) }, tier: 1},
 		{name: "safe tools", mutate: func(r *role) {
 			r.Tools = []string{"Read", "Write", "Bash", "WebFetch", "WebSearch", "Skill", "Agent", "Glob", "Grep"}
 		}, tier: 1},
@@ -149,11 +149,18 @@ func TestTierTable(t *testing.T) {
 		{name: "create without trust", create: true, mutate: func(r *role) {}, ctx: func(c *tierCtx) { c.Trust = false }, tier: 2, foreign: true},
 		{name: "create with a host", create: true, mutate: func(r *role) { r.Hosts = []string{"a.example.com"} }, tier: 2},
 		{name: "revert over others' changes", mutate: func(r *role) { r.Description = "old" }, ctx: func(c *tierCtx) { c.RevertOthers = true }, tier: 2},
+		{name: "a role of another Bot", mutate: func(r *role) { r.Description = "x" }, ctx: func(c *tierCtx) { c.Bot = "bot-b" }, tier: 2},
+		{name: "a role of the user", mutate: func(r *role) { r.Status = "archived" }, ctx: func(c *tierCtx) { c.Bot = "bot-b" }, tier: 2},
+		{name: "the user's own change on a Bot's role", mutate: func(r *role) { r.Description = "x" }, ctx: func(c *tierCtx) { c.Bot, c.ByUser = "user", true }, tier: 1},
+		{name: "a skill another hand wrote is removed", mutate: func(r *role) { r.Skills = nil }, ctx: func(c *tierCtx) {}, tier: 2},
+		{name: "a skill another hand wrote is changed", mutate: func(r *role) { r.Skills[1].SHA256 = "new" }, ctx: func(c *tierCtx) {}, tier: 2},
+		{name: "a skill of its own is removed", mutate: func(r *role) { r.Skills = r.Skills[1:] }, ctx: func(c *tierCtx) {}, tier: 1},
 		{name: "always-ask tools", mutate: func(r *role) { r.Description = "x" }, ctx: func(c *tierCtx) { c.ForceWiden = true }, tier: 2},
 	}
 	for _, c := range cases {
 		cur := base()
 		cur.Tools = append(cur.Tools, "ToolSearch") // already there: not growth
+		cur.Skills = []roleSkill{{Name: "mine", Source: "adhoc", SHA256: "m", AddedBy: "bot-a"}, {Name: "theirs", Source: "adhoc", SHA256: "t", AddedBy: "bot-b"}}
 		next := cur.clone()
 		c.mutate(next)
 		var cp *role = cur
@@ -680,7 +687,14 @@ func TestIdentityComesOnlyFromTheVerifiedAgent(t *testing.T) {
 	trustBot(t, s, botA, "p1")
 	id := mustCreate(t, s, f, botA, "mine")
 	trustBot(t, s, "bot-b", "p1")
-	asMap(t)(s.roleToolsSetTool(context.Background(), f, roleToolsSetIn{roleWho: who("bot-b"), Role: id, Deny: &[]string{"WebFetch"}}))
+	// bot-b is not the creator, so its rule goes through the user's approval.
+	if m := asMap(t)(s.roleToolsSetTool(context.Background(), f, roleToolsSetIn{roleWho: who("bot-b"), Role: id, Deny: &[]string{"WebFetch"}})); status(m) != "needs_approval" {
+		t.Fatalf("%v", m)
+	}
+	asMap(t)(s.executeRoleChange(context.Background(), f, lastTicket(t, f)))
+	if d := fr.current(id).Deny; len(d) != 1 || d[0].By != "bot-b" {
+		t.Fatalf("%+v", d)
+	}
 	if m := asMap(t)(s.roleToolsSetTool(context.Background(), f, roleToolsSetIn{roleWho: who(botA), Role: id, Deny: &[]string{}})); status(m) != "needs_approval" {
 		t.Fatalf("%v", m)
 	}
@@ -756,7 +770,8 @@ func TestRevertAcrossOthersChangesAsks(t *testing.T) {
 	trustBot(t, s, botA, "p1")
 	trustBot(t, s, "bot-b", "p1")
 	id := mustCreate(t, s, f, botA, "design")                                                                                          // v1
-	asMap(t)(s.roleUpdateTool(context.Background(), f, roleUpdateIn{roleWho: who("bot-b"), Role: id, Description: ptr("b was here")})) // v2 by bot-b
+	asMap(t)(s.roleUpdateTool(context.Background(), f, roleUpdateIn{roleWho: who("bot-b"), Role: id, Description: ptr("b was here")})) // asks: not bot-b's role
+	asMap(t)(s.executeRoleChange(context.Background(), f, lastTicket(t, f)))                                                           // v2 by bot-b
 	m := edit(t, s, f, id, roleUpdateIn{RevertTo: 1})
 	if status(m) != "needs_approval" || fr.current(id).Version != 2 {
 		t.Fatalf("%v", m)

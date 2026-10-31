@@ -213,3 +213,72 @@ func TestApprovalTextIsCheckedBeforeAsking(t *testing.T) {
 		}
 	}
 }
+
+// A Bot changes only roles it created; skills another hand wrote stay unless the user agrees.
+func TestBotsOwnOnlyTheRolesTheyCreated(t *testing.T) {
+	f, s, fr := roleFixture(t)
+	ctx := context.Background()
+	trustBot(t, s, botA, "p1")
+	trustBot(t, s, "bot-b", "p1")
+	id := mustCreate(t, s, f, botA, "design")
+	// Another Bot (with its own trust) edits, archives: all ask; nothing is put.
+	puts := fr.putCount()
+	for name, m := range map[string]map[string]any{
+		"edit":      asMap(t)(s.roleUpdateTool(ctx, f, roleUpdateIn{roleWho: who("bot-b"), Role: id, Description: ptr("mine now")})),
+		"archive":   asMap(t)(s.roleArchiveTool(ctx, f, roleRefIn{who("bot-b"), id}, true)),
+		"unarchive": asMap(t)(s.roleArchiveTool(ctx, f, roleRefIn{who("bot-b"), id}, false)),
+		"skill":     asMap(t)(s.roleSkillsAddTool(ctx, f, roleSkillsAddIn{roleWho: who("bot-b"), Role: id, Name: "x", Description: "d", Content: "c"})),
+	} {
+		if name == "unarchive" {
+			continue // nothing differs on an active role
+		}
+		if status(m) != "needs_approval" || !strings.Contains(fmt.Sprint(m["reasons"]), "which bot-a created") {
+			t.Errorf("%s: %v", name, m)
+		}
+		if k := lastSubmit(t, f).Kind; k != kindRoleWiden {
+			t.Errorf("%s: kind %s", name, k)
+		}
+	}
+	if fr.putCount() != puts {
+		t.Fatal("a put was made")
+	}
+	// The user's role, made on the panel, is not a Bot's either.
+	fr.mu.Lock()
+	fr.roles[id][len(fr.roles[id])-1].CreatedBy = "user"
+	fr.mu.Unlock()
+	s.rc.forget("dev_mac")
+	if m := asMap(t)(s.roleUpdateTool(ctx, f, roleUpdateIn{roleWho: who(botA), Role: id, Description: ptr("x")})); status(m) != "needs_approval" || !strings.Contains(fmt.Sprint(m["reasons"]), "the user created") {
+		t.Fatalf("%v", m)
+	}
+}
+
+func TestSkillsSetKeepsSkillsOthersWrote(t *testing.T) {
+	f, s, fr := roleFixture(t)
+	ctx := context.Background()
+	trustBot(t, s, botA, "p1")
+	trustBot(t, s, "bot-b", "p1")
+	id := mustCreate(t, s, f, botA, "design")
+	asMap(t)(s.roleSkillsAddTool(ctx, f, roleSkillsAddIn{roleWho: who(botA), Role: id, Name: "mine", Description: "d", Content: "c"}))
+	// bot-b adds a skill to bot-a's role with the user's approval.
+	asMap(t)(s.roleSkillsAddTool(ctx, f, roleSkillsAddIn{roleWho: who("bot-b"), Role: id, Name: "theirs", Description: "d", Content: "c"}))
+	asMap(t)(s.executeRoleChange(ctx, f, lastTicket(t, f)))
+	if len(fr.current(id).Skills) != 2 {
+		t.Fatalf("%+v", fr.current(id).Skills)
+	}
+	// bot-a replaces the whole list with its own: dropping bot-b's skill asks.
+	puts := fr.putCount()
+	m := asMap(t)(s.roleSkillsSetTool(ctx, f, roleSkillsSetIn{roleWho: who(botA), Role: id, Skills: []roleSkillIn{{Name: "mine", Description: "d", Content: "c"}}}))
+	if status(m) != "needs_approval" || !strings.Contains(fmt.Sprint(m["reasons"]), "removes the skill theirs that bot-b wrote") || fr.putCount() != puts {
+		t.Fatalf("%v", m)
+	}
+	// Keeping it (listed with the same text) and changing its own skill is the Bot's own.
+	m = asMap(t)(s.roleSkillsSetTool(ctx, f, roleSkillsSetIn{roleWho: who(botA), Role: id, Skills: []roleSkillIn{{Name: "mine", Description: "d", Content: "c2"}, {Name: "theirs", Description: "d", Content: "c"}}}))
+	if status(m) != "applied" {
+		t.Fatalf("%v", m)
+	}
+	// Rewriting bot-b's skill asks too.
+	m = asMap(t)(s.roleSkillsAddTool(ctx, f, roleSkillsAddIn{roleWho: who(botA), Role: id, Name: "theirs", Description: "d", Content: "other text"}))
+	if status(m) != "needs_approval" || !strings.Contains(fmt.Sprint(m["reasons"]), "changes the skill theirs that bot-b wrote") {
+		t.Fatalf("%v", m)
+	}
+}
