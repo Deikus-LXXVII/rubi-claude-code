@@ -80,7 +80,7 @@ func TestAgentBindSendStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := st.(map[string]any)
-	if m["state"] != "idle" || m["in_slot"] != false || m["slot_busy"] != true || !strings.Contains(m["eta"].(string), "slot") || m["name"] != "main work" {
+	if m["state"] != "idle" || m["in_slot"] != false || m["slot_busy"] != true || !strings.Contains(m["eta"].(string), "frees up") || m["name"] != "main work" {
 		t.Fatalf("%v", m)
 	}
 	// The wrong code is refused.

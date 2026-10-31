@@ -476,9 +476,21 @@ fork a session whose mode it doesn't know), so a fork never runs looser than its
 ### Panel pages for the agent path (M6)
 
 When a computer reports `claude-agent`, the plugin's page gets a "Claude in project VMs" section linking to
-four pages (drill-down views of the same page; they need a Rubi whose panel knows `open` and `kind: "chat"`,
-see its plugin design note). **Projects**: per project the VM state, who holds the agent slot (busy with which
-session) and the queue with positions (`claude-agent.projects` + `.status`). **Sessions**: name, sister bound,
+five pages (drill-down views of the same page; they need a Rubi whose panel knows `open` and `kind: "chat"`,
+see its plugin design note). **Projects**: sessions grouped by project, one section per project (VM state, how
+many sessions run of the per-project limit), the running ones marked "RUNNING now" with their subagent count,
+what waits in the queue with the plain reason Rubi Home gives ("waiting: project my-project already has 1
+session"), an Open chat button per session, **New session** per project (the panel asks for the first message in
+a box and starts a session in that project as you: mode `default`, no `from`, no `bot`, so it counts under the
+default usage mode) and Manage (the sessions page). A summary line says how many sessions run on the computer
+(`claude-agent.projects`, `.sessions` + `.status` `slots`/`limits`; an older Rubi Home with only the single
+`slot` still works). **Usage modes**: each Bot's mode, Maximum / Medium (Recommended) / Light, in plain words
+(quota against speed), with live counters (sessions x of y, subagents per session limit, the subagents running in
+each session), "Custom" when a limit in Rubi Home's configuration overrides the mode, a button per other mode for
+each Bot, one for the default (new Bots and your own sessions) and one that sets all Bots at once (with a
+confirmation). A change applies to new sessions: nothing running is stopped. The switch exists only as a button on
+this page (op `usage_mode`, audited as `agent_usage_mode_changed`): **no Bot tool changes a mode**, a test
+checks that the tools file never mentions it. **Sessions**: name, sister bound,
 mode and state, with Open chat, Rename (prompt), Fork (the source's mode, no approval: the page is the user's
 own request), Interrupt, Close and a mode picker (a stricter mode applies at once, a looser one goes through the
 strong approval, labelled "asks you"). **Chat**: the last 100 messages of `claude-agent.messages`, read
@@ -490,7 +502,13 @@ dollars, or an object with `estimate_usd`/`cost_usd`/`total_cost_usd` and tokens
 setting `usage_warn_usd` (default 10; never blocks), and the login state from `login` (`logged_in`, `plan`,
 `account`). When signed out the page explains Anthropic's own sign-in on the computer running Rubi Home; it has
 no button and Rubi never handles the credentials. A user-role message counts as the user's own only if it has no `from` and its text does not start with the runner's first line `[message from <from>]` (the plugin depends on that runner prefix; see the runner's README); anything with either, or in a shape the plugin doesn't know, is shown as another sender's ("Bot: name") and untrusted. Tool lines show the full command or URL (up to 300 characters), so the user sees what Claude ran. Interrupt, close (also when Home refuses), send, fork and rename are audited
-(`agent_panel_action`, `message_sent`, `session_forked`, `session_renamed`).
+(`agent_panel_action`, `message_sent`, `session_forked`, `session_renamed`). Starting a session from a project's New
+session button is audited as `agent_panel_action` (`start`).
+
+`claude-agent.start` and `.send` from a Bot carry `bot`, a stable id the plugin derives from the Bot's name
+(lower case, other characters become `-`, at most 64, a short hash when nothing is left), next to `from`, so Rubi
+Home applies that Bot's mode to the session and its subagents. The plugin never sends limits itself: Rubi Home
+keeps the table of modes.
 
 ### Setting up the agent path (the setup page)
 
@@ -548,10 +566,12 @@ The plugin does not check a digest of the tool input on this path: Rubi Home's `
 once per `ask_id` and Home hands each `ask_id` out once, so an approval can answer only the question it was
 made for. The plugin keeps a hash of the input in the approval's payload for the audit trail only.
 
-Results the plugin reads: `claude-agent.projects` `{projects:[{id, dir, vm_state, slot_busy, queue}]}`;
+Results the plugin reads: `claude-agent.projects` `{projects:[{id, dir, vm_state, slot_busy (the project's slots are full), sessions_running, queue}]}`;
 `claude-agent.sessions` `{sessions:[{id, name, created, last_activity, mode, busy}]}`;
-`claude-agent.status` `{login:{logged_in}, slot:{busy, project, session}, queue:[{project, session,
-position}]}`; `claude-agent.start` `{id}` or `{queued:true, position}`; `claude-agent.send`
+`claude-agent.status` `{login:{logged_in}, slots:[{project, session, bot, busy, background, subagents}],
+limits:{per_project, total}, usage:{default, modes, bots:[{id, mode, custom, sessions_running, sessions_limit,
+subagents_per_session}]}, slot:{busy, project, session} (the first busy slot, for older readers), queue:[{project,
+session, op, from, position, reason}]}`; `claude-agent.usage_mode {mode, bot | default | all}` (panel only); `claude-agent.start` `{id}` or `{queued:true, position}`; `claude-agent.send`
 `{queued, position, delivered?}`; `claude-agent.fork` `{id}`.
 
 ## Set up on a Mac

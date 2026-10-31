@@ -1,8 +1,8 @@
 package main
 
 // Sisters on the agent path. A Bot binds to an agent session (project id + session id) with the same strong
-// approval as before, sends it messages with claude-agent.send (they wait in Rubi Home's queue while another
-// session holds the agent slot), asks how it stands, and starts new sessions. What the session says comes back
+// approval as before, sends it messages with claude-agent.send (they wait in Rubi Home's queue while the project's
+// sessions are all running), asks how it stands, and starts new sessions. What the session says comes back
 // as runner events (routeAgent in agent.go). A binding with Project set is an agent binding; the tools pick the
 // path from it, so bindings made on the hook path keep working as they are.
 
@@ -81,7 +81,7 @@ func (s *sisters) bindAgent(ctx context.Context, h sisterHost, sister string, re
 
 func queueHint(position int) string {
 	if position > 0 {
-		return fmt.Sprintf("Waiting in Rubi Home's queue (position %d): another session holds the agent slot. It is delivered when the slot frees up; its answer comes as a claude_reply event.", position)
+		return fmt.Sprintf("Waiting in Rubi Home's queue (position %d): the project already has its sessions running (or a limit is reached). It is delivered when a place frees up; its answer comes as a claude_reply event.", position)
 	}
 	return "Delivered to the session (it wakes by itself if idle). Its answer comes as a claude_reply event; delivery states come as claude_message events."
 }
@@ -103,7 +103,7 @@ func (s *sisters) sendAgent(ctx context.Context, h sisterHost, b binding, text, 
 		Delivered *bool `json:"delivered"`
 	}
 	// No steer: a message never interrupts what the session is doing.
-	if err := h.HomeCall(ctx, b.Device, opAgentSend, map[string]any{"project": project, "id": target, "text": text, "from": b.Sister}, &res); err != nil {
+	if err := h.HomeCall(ctx, b.Device, opAgentSend, map[string]any{"project": project, "id": target, "text": text, "from": b.Sister, "bot": botID(b.Sister)}, &res); err != nil {
 		return nil, err
 	}
 	h.Audit("message_sent", map[string]any{"sister": b.Sister, "session": target, "project": project, "chars": len([]rune(text)), "position": res.Position})
@@ -115,19 +115,7 @@ func (s *sisters) sendAgent(ctx context.Context, h sisterHost, b binding, text, 
 }
 
 func (s *sisters) statusAgent(ctx context.Context, h sisterHost, b binding) (any, error) {
-	var st struct {
-		Login json.RawMessage `json:"login"`
-		Slot  struct {
-			Busy    bool   `json:"busy"`
-			Project string `json:"project"`
-			Session string `json:"session"`
-		} `json:"slot"`
-		Queue []struct {
-			Project  string `json:"project"`
-			Session  string `json:"session"`
-			Position int    `json:"position"`
-		} `json:"queue"`
-	}
+	var st agentStatus
 	cctx, cancel := context.WithTimeout(ctx, listTimeout)
 	defer cancel()
 	if err := h.HomeCall(cctx, b.Device, opAgentStatus, map[string]any{}, &st); err != nil {
@@ -148,14 +136,24 @@ func (s *sisters) statusAgent(ctx context.Context, h sisterHost, b binding) (any
 	if sess == nil {
 		return nil, errors.New("the bound session isn't there any more; bind to a live one (claude_code_sessions)")
 	}
-	inSlot := st.Slot.Busy && st.Slot.Project == b.Project && st.Slot.Session == b.SessionID
-	pos := 0
+	running := st.slotList()
+	inSlot := false
+	for _, sl := range running {
+		inSlot = inSlot || sl.Project == b.Project && sl.Session == b.SessionID
+	}
+	// The project's places are full: its limit when Home reports one, else (an older Home) any busy slot.
+	full := st.Slot.Busy && st.Slots == nil
+	if st.Limits.PerProject > 0 {
+		full = countProject(running, b.Project) >= st.Limits.PerProject
+	}
+	pos, reason := 0, ""
 	for _, q := range st.Queue {
 		if q.Project == b.Project && q.Session == b.SessionID {
 			pos = max(pos, q.Position)
 			if q.Position == 0 {
 				pos++
 			}
+			reason = q.Reason
 		}
 	}
 	var login struct {
@@ -166,8 +164,8 @@ func (s *sisters) statusAgent(ctx context.Context, h sisterHost, b binding) (any
 	switch {
 	case inSlot || sess.Busy:
 		state, eta = "busy", "after its current turn"
-	case st.Slot.Busy:
-		eta = "when the agent slot frees up (another session is working)"
+	case full:
+		eta = "when a place frees up in this project (another session is working there)"
 	}
 	if pos > 0 {
 		eta = "when its place in Rubi Home's queue comes"
@@ -176,7 +174,10 @@ func (s *sisters) statusAgent(ctx context.Context, h sisterHost, b binding) (any
 		eta = "not before the user signs in to Claude on that computer"
 	}
 	out := map[string]any{"session_id": sess.ID, "project": b.Project, "device": b.Device, "state": state, "mode": sess.Mode, "in_slot": inSlot,
-		"slot_busy": st.Slot.Busy, "queue_position": pos, "eta": eta}
+		"slot_busy": full, "queue_position": pos, "eta": eta}
+	if reason != "" {
+		out["queue_reason"] = oneLine(reason, 200)
+	}
 	if a, ok := s.st.aliasFor(b.Device, session{SessionID: sess.ID}); ok {
 		out["name"] = a.Name
 	} else if sess.Name != "" {
@@ -258,7 +259,7 @@ func (s *sisters) startAgent(ctx context.Context, h sisterHost, sister string, d
 		return res, err
 	}
 	preview := map[string]any{"bot": sister, "computer": d.Name, "project": proj.Dir, "project_id": proj.ID, "mode": mode, "first_message_from_bot": task,
-		"what_it_does": fmt.Sprintf("Starts a NEW Claude session in the project %s on %s in permission mode %s. Its first message is the text under first_message_from_bot, from %s (a Bot; the text is not yours), labelled as the Bot's by Rubi Home. If another session holds the agent slot it waits in the queue. Then %s is bound to the session.", proj.Dir, d.Name, mode, sister, sister),
+		"what_it_does": fmt.Sprintf("Starts a NEW Claude session in the project %s on %s in permission mode %s. Its first message is the text under first_message_from_bot, from %s (a Bot; the text is not yours), labelled as the Bot's by Rubi Home. If a limit is reached (one session per project by default) it waits in the queue. Then %s is bound to the session.", proj.Dir, d.Name, mode, sister, sister),
 		"warning":      "Mode " + mode + ": " + map[bool]string{true: agentBypassNote, false: "Claude asks before commands as that mode says; push, sudo, the network outside the allow-list, paths outside /work and edits of .rubi/.claude always ask."}[mode == "bypassPermissions"]}
 	for _, b := range s.st.bindings() {
 		if sameBot(b.Sister, sister) {
@@ -281,7 +282,7 @@ func (s *sisters) executeStartAgent(ctx context.Context, h sisterHost, t startTi
 	}
 	cctx, cancel := context.WithTimeout(ctx, createTimeout)
 	defer cancel()
-	err := h.HomeCall(cctx, t.Device, opAgentStart, map[string]any{"project": t.Project, "prompt": t.Task, "from": t.Sister, "mode": t.Mode}, &res)
+	err := h.HomeCall(cctx, t.Device, opAgentStart, map[string]any{"project": t.Project, "prompt": t.Task, "from": t.Sister, "bot": botID(t.Sister), "mode": t.Mode}, &res)
 	if err != nil {
 		if isUnknownOp(err) || rubiplugin.ErrorCode(err) == rubiplugin.CodeHomeFailed || rubiplugin.ErrorCode(err) == rubiplugin.CodeHomeNotPaired {
 			h.Audit("session_start_failed", map[string]any{"sister": t.Sister, "device": t.Device, "project": t.Project})
@@ -298,7 +299,7 @@ func (s *sisters) executeStartAgent(ctx context.Context, h sisterHost, t startTi
 	if res.ID == "" {
 		out["bound"] = false
 		out["position"] = res.Position
-		out["next_step"] = fmt.Sprintf("Another session holds the agent slot, so the new one waits in Rubi Home's queue (position %d). When it appears in claude_code_sessions, call claude_code_bind with its session_id: that is a new approval.", res.Position)
+		out["next_step"] = fmt.Sprintf("A limit is reached (by default one session per project), so the new one waits in Rubi Home's queue (position %d). When it appears in claude_code_sessions, call claude_code_bind with its session_id: that is a new approval.", res.Position)
 		return out, nil
 	}
 	out["session_id"] = res.ID

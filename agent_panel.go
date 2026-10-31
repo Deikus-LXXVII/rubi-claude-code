@@ -88,26 +88,69 @@ func (s *sisters) agentLinkSection(ctx context.Context, h sisterHost) []map[stri
 	if len(s.agentDevices(ctx, h)) == 0 {
 		return nil
 	}
-	return []map[string]any{{"title": "Claude in project VMs", "note": "Claude run through the Agent SDK in a VM per project on your computer: the agent slot and queue, sessions with their chat, usage and sign-in.", "empty": "",
+	return []map[string]any{{"title": "Claude in project VMs", "note": "Claude run through the Agent SDK in a VM per project on your computer: the running sessions and queue, sessions with their chat, usage modes, usage and sign-in.", "empty": "",
 		"items": []map[string]any{
-			{"title": "Projects and sessions", "detail": "VM state, who holds the agent slot, the queue, and each project's sessions.", "actions": []map[string]any{{"label": "Open", "open": panelPage{Page: pageAgent}.open()}}},
+			{"title": "Projects and sessions", "detail": "Each project's sessions with the running ones marked, what is waiting and why, and a button to start a new session.", "actions": []map[string]any{{"label": "Open", "open": panelPage{Page: pageAgent}.open()}}},
+			{"title": "Usage modes", "detail": "How much each Bot may run at once: Maximum, Medium (Recommended) or Light. Only you change it.", "actions": []map[string]any{{"label": "Open", "open": panelPage{Page: pageModes}.open()}}},
 			{"title": "Usage and sign-in", "detail": "Today's estimate and whether Claude is signed in.", "actions": []map[string]any{{"label": "Open", "open": panelPage{Page: pageUsage}.open()}}},
 		}}}
 }
 
+// agentSlot is a running top-level session (claude-agent.status "slots").
+type agentSlot struct {
+	Project    string `json:"project"`
+	Session    string `json:"session"`
+	Bot        string `json:"bot"`
+	Busy       bool   `json:"busy"`
+	Background int    `json:"background"`
+	Subagents  int    `json:"subagents"`
+}
+
+// botUsage is one Bot's row of claude-agent.status "usage.bots".
+type botUsage struct {
+	ID                  string `json:"id"`
+	Mode                string `json:"mode"`
+	Custom              bool   `json:"custom"`
+	SessionsRunning     int    `json:"sessions_running"`
+	SessionsLimit       int    `json:"sessions_limit"`
+	SubagentsPerSession int    `json:"subagents_per_session"`
+}
+
 type agentStatus struct {
 	Login json.RawMessage `json:"login"`
-	Slot  struct {
+	// Slot is the single slot of an older Rubi Home (the first busy one); Slots and Limits are the per-project
+	// slots of a newer one (nil Slots = an older Home).
+	Slot struct {
 		Busy    bool   `json:"busy"`
 		Project string `json:"project"`
 		Session string `json:"session"`
 	} `json:"slot"`
+	Slots  []agentSlot `json:"slots"`
+	Limits struct {
+		PerProject int `json:"per_project"`
+		Total      int `json:"total"` // on the computer, 0 = no cap
+	} `json:"limits"`
+	Usage struct {
+		Default string     `json:"default"`
+		Bots    []botUsage `json:"bots"`
+	} `json:"usage"`
 	Queue []struct {
 		Project  string `json:"project"`
 		Session  string `json:"session"`
+		Op       string `json:"op"`
+		From     string `json:"from"`
 		Position int    `json:"position"`
+		Reason   string `json:"reason"`
 	} `json:"queue"`
-	Usage json.RawMessage `json:"usage_today"`
+	UsageToday json.RawMessage `json:"usage_today"`
+}
+
+// slotList is the running sessions: "slots", else the older single "slot".
+func (st agentStatus) slotList() []agentSlot {
+	if st.Slots != nil || !st.Slot.Busy {
+		return st.Slots
+	}
+	return []agentSlot{{Project: st.Slot.Project, Session: st.Slot.Session, Busy: true}}
 }
 
 func (s *sisters) agentStatus(ctx context.Context, h sisterHost, device string) (agentStatus, error) {
@@ -139,57 +182,150 @@ func (s *sisters) agentPage(ctx context.Context, h sisterHost, p panelPage) (any
 		return s.usagePage(ctx, h)
 	case pageSetup:
 		return s.setupPage(ctx, h, p)
+	case pageModes:
+		return s.modesPage(ctx, h)
 	}
 	return nil, fmt.Errorf("unknown page %q", p.Page)
 }
 
 var upMain = map[string]any{"label": "Claude Code", "open": map[string]any{}}
 
+const maxProjectSessions = 12 // the sessions one project's section lists; Manage shows the rest
+
+// projectsPage lists the sessions grouped by project, one section per project, the running ones marked, with
+// what waits in the queue and why, and a button to start a new session in the project.
 func (s *sisters) projectsPage(ctx context.Context, h sisterHost) (any, error) {
 	var sections []map[string]any
 	for _, d := range s.agentDevices(ctx, h) {
-		projects, err := s.agentProjects(ctx, h, d.ID)
-		if err != nil {
-			sections = append(sections, map[string]any{"title": d.Name, "empty": "Couldn't read the projects: " + oneLine(err.Error(), 160)})
+		lctx, cancel := context.WithTimeout(ctx, panelListTimeout)
+		lists := s.listAgent(lctx, h, d.ID)
+		cancel()
+		if len(lists) == 0 || lists[0].err != nil && len(lists[0].projects) == 0 {
+			msg := "no answer"
+			if len(lists) > 0 {
+				msg = oneLine(lists[0].err.Error(), 160)
+			}
+			sections = append(sections, map[string]any{"title": d.Name, "empty": "Couldn't read the projects: " + msg})
 			continue
 		}
+		ad := lists[0]
 		st, serr := s.agentStatus(ctx, h, d.ID)
-		note := ""
-		if serr != nil {
-			note = "Couldn't read the agent slot: " + oneLine(serr.Error(), 160)
-		}
-		var items []map[string]any
-		for _, pr := range projects {
-			detail := "VM: " + firstNonEmpty(pr.VMState, "unknown")
-			switch {
-			case st.Slot.Busy && st.Slot.Project == pr.ID:
-				detail += " · agent slot: busy with " + oneLine(firstNonEmpty(s.st.nameOf(d.ID, st.Slot.Session), st.Slot.Session), 60)
-			case st.Slot.Busy:
-				detail += " · agent slot: held by another project"
-			case serr == nil:
-				detail += " · agent slot: free"
+		running := st.slotList()
+		summary := map[string]any{"title": d.Name, "empty": ""}
+		switch {
+		case serr != nil:
+			summary["note"] = "Couldn't read the running sessions: " + oneLine(serr.Error(), 160)
+		default:
+			total := "no cap"
+			if st.Limits.Total > 0 {
+				total = fmt.Sprint(st.Limits.Total)
 			}
-			var waiting []string
-			for _, q := range st.Queue {
-				if q.Project == pr.ID {
-					waiting = append(waiting, fmt.Sprintf("#%d %s", max(q.Position, 1), oneLine(firstNonEmpty(s.st.nameOf(d.ID, q.Session), q.Session), 40)))
+			note := fmt.Sprintf("%d session%s running of %s on this computer", len(running), ifElse(len(running) == 1, "", "s"), total)
+			if st.Limits.PerProject > 0 {
+				note += fmt.Sprintf(", %d at a time per project", st.Limits.PerProject)
+			}
+			summary["note"] = note + ". A new session over a limit waits in the queue and says what it waits for."
+		}
+		sections = append(sections, summary)
+		for _, pr := range ad.projects {
+			var items []map[string]any
+			var mine []agentSess
+			for _, x := range ad.sessions {
+				if x.Project == pr.ID {
+					mine = append(mine, x)
 				}
 			}
-			switch {
-			case len(waiting) > 0:
-				detail += " · queue: " + strings.Join(waiting, ", ")
-			case pr.Queue > 0:
-				detail += fmt.Sprintf(" · %d waiting in the queue", pr.Queue)
+			slices.SortStableFunc(mine, func(a, b agentSess) int { return b.LastActivity.Compare(a.LastActivity) })
+			more := 0
+			if len(mine) > maxProjectSessions {
+				more, mine = len(mine)-maxProjectSessions, mine[:maxProjectSessions]
 			}
-			items = append(items, map[string]any{"title": firstNonEmpty(pr.Dir, pr.ID), "detail": oneLine(detail, 400),
-				"actions": []map[string]any{{"label": "Sessions", "open": panelPage{Page: pageSessions, Device: d.ID, Project: pr.ID}.open()}}})
+			for _, x := range mine {
+				var slot *agentSlot
+				for i := range running {
+					if running[i].Project == pr.ID && running[i].Session == x.ID {
+						slot = &running[i]
+					}
+				}
+				state := "idle"
+				switch {
+				case slot != nil:
+					state = "RUNNING now"
+					if slot.Subagents > 0 {
+						state += fmt.Sprintf(" · %d subagent%s", slot.Subagents, ifElse(slot.Subagents == 1, "", "s"))
+					}
+				case x.Busy:
+					state = "busy"
+				}
+				items = append(items, map[string]any{"title": s.sessLabel(d.ID, x), "detail": oneLine(fmt.Sprintf("%s · mode %s", state, firstNonEmpty(x.Mode, "unknown")), 200),
+					"actions": []map[string]any{{"label": "Open chat", "open": panelPage{Page: pageChat, Device: d.ID, Project: pr.ID, Session: x.ID}.open()}}})
+			}
+			for _, sl := range running { // a running session the list doesn't have yet (just started)
+				if sl.Project != pr.ID {
+					continue
+				}
+				seen := false
+				for _, x := range mine {
+					seen = seen || x.ID == sl.Session
+				}
+				if !seen && sl.Session != "" && more == 0 {
+					items = append(items, map[string]any{"title": oneLine(sl.Session, 60), "detail": "RUNNING now",
+						"actions": []map[string]any{{"label": "Open chat", "open": panelPage{Page: pageChat, Device: d.ID, Project: pr.ID, Session: sl.Session}.open()}}})
+				}
+			}
+			for _, q := range st.Queue {
+				if q.Project != pr.ID {
+					continue
+				}
+				what := "a new session"
+				if q.Op == "send" || q.Op == "" && q.Session != "" {
+					name := q.Session
+					for _, x := range mine {
+						if x.ID == q.Session {
+							name = s.sessLabel(d.ID, x)
+						}
+					}
+					what = "a message to " + oneLine(name, 40)
+				}
+				items = append(items, map[string]any{"title": fmt.Sprintf("Waiting #%d: %s", max(q.Position, 1), what),
+					"detail": oneLine(firstNonEmpty(q.Reason, "waiting for a free place")+ifElse(q.From != "", " · from "+oneLine(q.From, 40), " · from you"), 300), "warn": true})
+			}
+			if pr.Queue > 0 && len(st.Queue) == 0 {
+				items = append(items, map[string]any{"title": fmt.Sprintf("%d waiting in the queue", pr.Queue), "detail": "Rubi Home gave no reason."})
+			}
+			title := firstNonEmpty(pr.Dir, pr.ID)
+			note := fmt.Sprintf("VM: %s · %d running", firstNonEmpty(pr.VMState, "unknown"), countProject(running, pr.ID))
+			if pr.SessionsRunning > countProject(running, pr.ID) { // an older reading of the same
+				note = fmt.Sprintf("VM: %s · %d running", firstNonEmpty(pr.VMState, "unknown"), pr.SessionsRunning)
+			}
+			if st.Limits.PerProject > 0 {
+				note += fmt.Sprintf(" of %d at a time", st.Limits.PerProject)
+			}
+			if more > 0 {
+				note += fmt.Sprintf(" · %d older sessions are under Manage", more)
+			}
+			sections = append(sections, map[string]any{"title": title, "note": note, "empty": "No sessions yet.", "items": items,
+				"actions": []map[string]any{
+					{"label": "New session", "op": "new", "args": panelPage{Device: d.ID, Project: pr.ID}.args(),
+						"prompt": map[string]any{"arg": "text", "label": "First message for Claude in this project (sent as you)", "value": ""}},
+					{"label": "Manage", "open": panelPage{Page: pageSessions, Device: d.ID, Project: pr.ID}.open()},
+				}})
 		}
-		sections = append(sections, map[string]any{"title": d.Name, "note": note, "empty": "No projects.", "items": items})
 	}
 	if len(sections) == 0 {
 		sections = []map[string]any{{"title": "Projects", "empty": "No computer reports the claude-agent capability."}}
 	}
 	return map[string]any{"title": "Claude in project VMs", "refresh": 15, "up": upMain, "sections": sections}, nil
+}
+
+func countProject(slots []agentSlot, project string) int {
+	n := 0
+	for _, sl := range slots {
+		if sl.Project == project {
+			n++
+		}
+	}
+	return n
 }
 
 func (s *sisters) sessionsPage(ctx context.Context, h sisterHost, p panelPage) (any, error) {
@@ -496,7 +632,7 @@ func (s *sisters) usagePage(ctx context.Context, h sisterHost) (any, error) {
 			usage = append(usage, map[string]any{"title": d.Name, "detail": "Couldn't read the status: " + oneLine(err.Error(), 160)})
 			continue
 		}
-		if usd, tok, ok := parseUsage(st.Usage); ok {
+		if usd, tok, ok := parseUsage(st.UsageToday); ok {
 			it := map[string]any{"title": fmt.Sprintf("%s: about $%.2f today", d.Name, usd)}
 			detail := "An estimate; Anthropic's own numbers are the real ones."
 			if tok > 0 {

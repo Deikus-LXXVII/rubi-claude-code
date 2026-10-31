@@ -28,6 +28,10 @@ type fakeAgent struct {
 	messages  []json.RawMessage // claude-agent.messages answer
 	login     any               // claude-agent.status "login" (default: signed in)
 	usage     any               // claude-agent.status "usage_today"
+	// A newer Rubi Home's status: per-project slots, limits and the Bots' modes (nil slots = the older single slot).
+	slots  []map[string]any
+	limits map[string]any
+	modes  map[string]any // claude-agent.status "usage"
 }
 
 type fakeCall struct {
@@ -81,7 +85,11 @@ func (a *fakeAgent) call(ctx context.Context, op string, args, out any) error {
 		if login == nil {
 			login = map[string]any{"logged_in": true}
 		}
-		return reply(map[string]any{"login": login, "slot": a.slot, "queue": a.queue, "usage_today": a.usage})
+		st := map[string]any{"login": login, "slot": a.slot, "queue": a.queue, "usage_today": a.usage}
+		if a.slots != nil {
+			st["slots"], st["limits"], st["usage"] = a.slots, a.limits, a.modes
+		}
+		return reply(st)
 	case opAgentMessages:
 		a.mu.Lock()
 		defer a.mu.Unlock()
@@ -129,7 +137,7 @@ func (a *fakeAgent) call(ctx context.Context, op string, args, out any) error {
 		return reply(map[string]any{"id": "s-new"})
 	case opAgentSend:
 		return reply(map[string]any{"queued": true, "position": 0, "delivered": true})
-	case opAgentRename, opAgentMode:
+	case opAgentRename, opAgentMode, opAgentUsageMode:
 		return reply(map[string]any{"ok": true})
 	case opAgentFork:
 		return reply(map[string]any{"id": "s-fork"})

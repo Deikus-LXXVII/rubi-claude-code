@@ -107,8 +107,10 @@ type agentProject struct {
 	ID       string `json:"id"`
 	Dir      string `json:"dir"`
 	VMState  string `json:"vm_state,omitempty"`
-	SlotBusy bool   `json:"slot_busy,omitempty"`
+	SlotBusy bool   `json:"slot_busy,omitempty"` // the project's slots are full
 	Queue    int    `json:"queue,omitempty"`
+	// SessionsRunning is how many top-level sessions run in the project (a newer Rubi Home).
+	SessionsRunning int `json:"sessions_running,omitempty"`
 }
 
 // agentSess is one agent session (claude-agent.sessions). Name is the runner's (renameSession); the Rubi alias
