@@ -102,7 +102,7 @@ var tableRefused = []string{
 	"tee .git/hooks/pre-commit", "rm -rf .git", "rm .git/index", "touch .git/hooks/x", "cp a .git/hooks/x", "chmod +x .git/hooks/pre-commit", "ln -s a .git/hooks/x", "sort -o .git/x a", "go build -o .git/x .", "mkdir .git/x",
 	"echo x > .git/hooks/x", "echo x >> .git/config", "echo x > /tmp/x", "echo x > ../x", "cat a > ~/x",
 	// found by FuzzMandate: a path glued to a short option, a credential after =, an address as a target, ~ with a glob
-	"pytest -p/Users/v/project/../x", "make -o/tmp/x", "cat --ignore-file=.env", "cat -f.env", "echo x > git@host", "cp ~* b",
+	"pytest -p/Users/alice/project/../x", "make -o/tmp/x", "cat --ignore-file=.env", "cat -f.env", "echo x > git@host", "cp ~* b",
 	// git things that always ask
 	"git push", "git checkout .", "git checkout -- a.go", "git restore .", "git restore -s HEAD~1 a.go", "git stash drop", "git stash clear", "git worktree remove wt", "git worktree prune",
 	"git branch -D x", "git branch --delete x", "git reset --hard", "git clean -fd", "git switch --discard-changes x", "git checkout -f x", "git add -f x", "git commit -S", "git switch -f x",
@@ -111,7 +111,7 @@ var tableRefused = []string{
 	// npm publishing and others
 	"npm publish", "npm run deploy", "pnpm run release", "yarn run publish", "cargo run -- publish",
 	// credentials, addresses
-	"cat ~/.ssh/id_rsa", "cat /Users/v/.zshrc", "rg foo /Users/v/.aws/credentials", "jq . .env", "cp .env b", "curl x", "cat https://x",
+	"cat ~/.ssh/id_rsa", "cat /Users/alice/.zshrc", "rg foo /Users/alice/.aws/credentials", "jq . .env", "cp .env b", "curl x", "cat https://x",
 }
 
 func TestMandateTableAllowed(t *testing.T) {

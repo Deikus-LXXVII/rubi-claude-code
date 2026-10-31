@@ -24,40 +24,40 @@ func boundCalls(f *fakeHost) []string {
 // Rubi Home is told about every binding change, so the sister tools inside Claude Code can name her.
 func TestRubiHomeIsToldAboutBindings(t *testing.T) {
 	f, s, code := boundFixture(t)
-	if got := boundCalls(f); !slices.Equal(got, []string{"Citri|cli-1|bound"}) {
+	if got := boundCalls(f); !slices.Equal(got, []string{"Alice|cli-1|bound"}) {
 		t.Fatalf("after binding: %v", got)
 	}
 	// The Bot ends the binding.
-	if _, err := s.unbindTool(context.Background(), f, unbindIn{Sister: "Citri", BindCode: code}); err != nil {
+	if _, err := s.unbindTool(context.Background(), f, unbindIn{Sister: "Alice", BindCode: code}); err != nil {
 		t.Fatal(err)
 	}
-	if got := boundCalls(f); !slices.Equal(got, []string{"Citri|cli-1|bound", "Citri|cli-1|unbound"}) {
+	if got := boundCalls(f); !slices.Equal(got, []string{"Alice|cli-1|bound", "Alice|cli-1|unbound"}) {
 		t.Fatalf("after unbind: %v", got)
 	}
 	// Binding again to another session of the same Bot: the old one is released first, then the new one is set.
-	bindAs(t, f, s, "Citri", "local_a")
+	bindAs(t, f, s, "Alice", "local_a")
 	f.mu.Lock()
 	f.bound = nil
 	f.mu.Unlock()
-	bindAs(t, f, s, "Citri", "cli-2")
-	if got := boundCalls(f); !slices.Equal(got, []string{"Citri|cli-1|unbound", "Citri|cli-2|bound"}) {
+	bindAs(t, f, s, "Alice", "cli-2")
+	if got := boundCalls(f); !slices.Equal(got, []string{"Alice|cli-1|unbound", "Alice|cli-2|bound"}) {
 		t.Fatalf("after re-binding: %v", got)
 	}
 	// The user unbinds in the panel.
 	f.mu.Lock()
 	f.bound = nil
 	f.mu.Unlock()
-	if _, err := s.panel(context.Background(), f, "unbind", json.RawMessage(`{"sister":"citri"}`)); err != nil {
+	if _, err := s.panel(context.Background(), f, "unbind", json.RawMessage(`{"sister":"alice"}`)); err != nil {
 		t.Fatal(err)
 	}
-	if got := boundCalls(f); !slices.Equal(got, []string{"Citri|cli-2|unbound"}) {
+	if got := boundCalls(f); !slices.Equal(got, []string{"Alice|cli-2|unbound"}) {
 		t.Fatalf("after the panel's unbind: %v", got)
 	}
 	// Unbinding what isn't bound tells nobody.
 	f.mu.Lock()
 	f.bound = nil
 	f.mu.Unlock()
-	_, _ = s.panel(context.Background(), f, "unbind", json.RawMessage(`{"sister":"Citri"}`))
+	_, _ = s.panel(context.Background(), f, "unbind", json.RawMessage(`{"sister":"Alice"}`))
 	if got := boundCalls(f); len(got) != 0 {
 		t.Fatalf("%v", got)
 	}
@@ -69,10 +69,10 @@ func TestRubiHomeIsToldWhenABindingFollowsItsSession(t *testing.T) {
 	f.sessions[0].SessionID = "cli-1b"
 	f.bound = nil
 	f.mu.Unlock()
-	if _, err := s.sendTool(context.Background(), f, sendIn{Sister: "Citri", BindCode: code, Text: "again"}); err != nil {
+	if _, err := s.sendTool(context.Background(), f, sendIn{Sister: "Alice", BindCode: code, Text: "again"}); err != nil {
 		t.Fatal(err)
 	}
-	if got := boundCalls(f); !slices.Equal(got, []string{"Citri|cli-1|unbound", "Citri|cli-1b|bound"}) {
+	if got := boundCalls(f); !slices.Equal(got, []string{"Alice|cli-1|unbound", "Alice|cli-1b|bound"}) {
 		t.Fatalf("after following: %v", got)
 	}
 }
@@ -83,7 +83,7 @@ func TestBoundCallsAreToleratedByAnOldRubiHome(t *testing.T) {
 	if err := s.st.load(f); err != nil {
 		t.Fatal(err)
 	}
-	bindAs(t, f, s, "Citri", "local_a")
+	bindAs(t, f, s, "Alice", "local_a")
 	bindAs(t, f, s, "Vega", "cli-2")
 	if len(s.st.bindings()) != 2 {
 		t.Fatal("binding failed on an old Rubi Home")
@@ -129,7 +129,7 @@ func TestWatcherSyncsBindingsOnStart(t *testing.T) {
 	}
 	cancel()
 	<-done
-	if got := boundCalls(f); len(got) == 0 || got[0] != "Citri|cli-1|bound" {
+	if got := boundCalls(f); len(got) == 0 || got[0] != "Alice|cli-1|bound" {
 		t.Fatalf("%v", got)
 	}
 }
@@ -141,10 +141,10 @@ func TestToolMadeAsksAndRepliesRoute(t *testing.T) {
 	ctx := context.Background()
 	n := len(f.events)
 	s.route(ctx, f, mac, outMsg{ID: "co_1", Kind: "ask", SessionID: "cli-1", Cwd: "/work", AskKind: "audit", Text: "check the diff on branch x"})
-	s.route(ctx, f, mac, outMsg{ID: "co_2", Kind: "reply", SessionID: "cli-1", To: "Citri", InReplyTo: []string{"cm_9"}, Text: "early answer"})
+	s.route(ctx, f, mac, outMsg{ID: "co_2", Kind: "reply", SessionID: "cli-1", To: "Alice", InReplyTo: []string{"cm_9"}, Text: "early answer"})
 	s.route(ctx, f, mac, outMsg{ID: "co_3", Kind: "reply", SessionID: "cli-1", To: "Mallory", InReplyTo: []string{"cm_8"}, Text: "x"})
 	got := f.events[n:]
-	if len(got) != 2 || got[0]["_type"] != eventAsk || got[0]["kind"] != "audit" || got[0]["_agent"] != "Citri" ||
+	if len(got) != 2 || got[0]["_type"] != eventAsk || got[0]["kind"] != "audit" || got[0]["_agent"] != "Alice" ||
 		got[1]["_type"] != eventReply || got[1]["text"] != "early answer" {
 		t.Fatalf("routed: %+v", got)
 	}
@@ -159,7 +159,7 @@ func TestEntriesForLocalSendersAreNeverRouted(t *testing.T) {
 	f, s, _ := boundFixture(t)
 	ctx := context.Background()
 	n := len(f.events)
-	for _, to := range []string{"local:Citri", "LOCAL:x", "local:"} {
+	for _, to := range []string{"local:Alice", "LOCAL:x", "local:"} {
 		s.route(ctx, f, mac, outMsg{ID: "co_9", Kind: "reply", SessionID: "cli-1", To: to, InReplyTo: []string{"cm_9"}, Text: "private answer"})
 		s.route(ctx, f, mac, outMsg{ID: "cm_9", Kind: "status", State: "answered", SessionID: "cli-1", To: to})
 	}
@@ -175,7 +175,7 @@ func TestBoundIsRetriedAfterRubiHomeIsUpdated(t *testing.T) {
 	if err := s.st.load(f); err != nil {
 		t.Fatal(err)
 	}
-	bindAs(t, f, s, "Citri", "local_a")
+	bindAs(t, f, s, "Alice", "local_a")
 	if len(boundCalls(f)) != 0 {
 		t.Fatal("an old Rubi Home accepted it")
 	}
@@ -183,7 +183,7 @@ func TestBoundIsRetriedAfterRubiHomeIsUpdated(t *testing.T) {
 	f.oldHome = false // Rubi Home was updated
 	f.mu.Unlock()
 	s.syncBound(context.Background(), f, mac.ID)
-	if got := boundCalls(f); !slices.Equal(got, []string{"Citri|cli-1|bound"}) {
+	if got := boundCalls(f); !slices.Equal(got, []string{"Alice|cli-1|bound"}) {
 		t.Fatalf("after the re-poll: %v", got)
 	}
 }

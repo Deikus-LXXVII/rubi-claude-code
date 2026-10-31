@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-const root = "/Users/v/project"
+const root = "/Users/alice/project"
 
 var mandateAllowedCases = []string{
 	"ls -la",
@@ -132,7 +132,7 @@ func TestMandateScope(t *testing.T) {
 	if !m.covers("dev_mac", r) {
 		t.Fatal("subdirectory not covered")
 	}
-	for _, bad := range []request{{SessionID: "s2", Cwd: root}, {SessionID: "s1", Cwd: "/Users/v/project2"}, {SessionID: "s1", Cwd: "/Users/v"}} {
+	for _, bad := range []request{{SessionID: "s2", Cwd: root}, {SessionID: "s1", Cwd: "/Users/alice/project2"}, {SessionID: "s1", Cwd: "/Users/alice"}} {
 		if m.covers("dev_mac", bad) {
 			t.Errorf("%+v covered", bad)
 		}
@@ -249,26 +249,26 @@ func TestMandateWritesAndRunsOnlyInside(t *testing.T) {
 // escapeProbes are the escapes the 2026-10-30 audit found; each must ask. They seed FuzzMandate.
 var escapeProbes = []string{
 	// writes outside the directory
-	"sort -o /Users/v/.zshrc notes.txt",
+	"sort -o /Users/alice/.zshrc notes.txt",
 	"sort --output=/tmp/x notes.txt",
 	"sort -uo /tmp/x notes.txt",
 	"sort -T /tmp notes.txt",
-	"uniq notes.txt /Users/v/.zprofile",
+	"uniq notes.txt /Users/alice/.zprofile",
 	"uniq -f 1 notes.txt /tmp/out",
-	"xxd -r dump.hex /Users/v/bin/tool",
+	"xxd -r dump.hex /Users/alice/bin/tool",
 	"xxd in.bin ../out.hex",
 	"tree -o /tmp/out.txt",
 	"go build -o /usr/local/bin/rubi-home ./cmd/x",
 	"go build -o=../bin/x .",
 	"go test -coverprofile=/tmp/c.out ./...",
 	"go test -cpuprofile /tmp/cpu.out ./...",
-	"find . -fprint0 /Users/v/x",
+	"find . -fprint0 /Users/alice/x",
 	"git worktree add /tmp/elsewhere",
 	"git worktree add ../sibling -b x",
 	"git worktree move wt /tmp/wt",
 	"cargo build --target-dir /tmp/t",
 	"npm run build --prefix ../other",
-	"pytest --basetemp=/Users/v/Documents",
+	"pytest --basetemp=/Users/alice/Documents",
 	"pytest --cov-report=html:/tmp/cov",
 	"pytest -o cache_dir=/tmp/c",
 	"cp --target-directory=/tmp a.txt",
@@ -303,20 +303,20 @@ var escapeProbes = []string{
 // wherever they are named (an argument, an option value, a redirection); project files don't.
 func TestMandateSecretPaths(t *testing.T) {
 	for _, c := range []string{
-		"cat /Users/v/.zshrc",
+		"cat /Users/alice/.zshrc",
 		"cat ~/.zprofile",
-		"cp /Users/v/.bash_profile notes.txt",
-		"head -5 /Users/v/.profile",
-		"cat /Users/v/.gitconfig",
-		"cat /Users/v/.config/gh/hosts.yml",
-		"cat /Users/v/.vault-token",
-		"cat /Users/v/.pgpass",
-		"cat /Users/v/Library/Cookies/Cookies.binarycookies",
-		"cat '/Users/v/Library/Application Support/Google/Chrome/Default/Cookies'",
-		"cat '/Users/v/Library/Application Support/Google/Chrome/Default/Login Data'",
-		"xxd /Users/v/Library/Application Support/Firefox/Profiles/x/cookies.sqlite",
-		"rg --files-from=/Users/v/.zshrc foo",
-		"wc -l < /Users/v/.bashrc",
+		"cp /Users/alice/.bash_profile notes.txt",
+		"head -5 /Users/alice/.profile",
+		"cat /Users/alice/.gitconfig",
+		"cat /Users/alice/.config/gh/hosts.yml",
+		"cat /Users/alice/.vault-token",
+		"cat /Users/alice/.pgpass",
+		"cat /Users/alice/Library/Cookies/Cookies.binarycookies",
+		"cat '/Users/alice/Library/Application Support/Google/Chrome/Default/Cookies'",
+		"cat '/Users/alice/Library/Application Support/Google/Chrome/Default/Login Data'",
+		"xxd /Users/alice/Library/Application Support/Firefox/Profiles/x/cookies.sqlite",
+		"rg --files-from=/Users/alice/.zshrc foo",
+		"wc -l < /Users/alice/.bashrc",
 	} {
 		if ok, _ := mandateAllows(c, root, root); ok {
 			t.Errorf("%q: allowed, want refused", c)

@@ -115,19 +115,19 @@ func TestOptionAndOfferModesMustMatch(t *testing.T) {
 func TestUnlimitedTrustViaTool(t *testing.T) {
 	f, s, code := ptBot(t)
 	ctx := context.Background()
-	if _, err := s.trustTool(ctx, f, trustIn{VerifiedAgent: "Citri", BindCode: code, Until: "forever"}); err == nil {
+	if _, err := s.trustTool(ctx, f, trustIn{VerifiedAgent: "Alice", BindCode: code, Until: "forever"}); err == nil {
 		t.Fatal("a made-up until accepted")
 	}
 	if len(f.submits) != 0 {
 		t.Fatal("asked for a refused call")
 	}
 	// The default and "0400" stay as before.
-	res, err := s.trustTool(ctx, f, trustIn{VerifiedAgent: "Citri", BindCode: code, Until: "0400"})
+	res, err := s.trustTool(ctx, f, trustIn{VerifiedAgent: "Alice", BindCode: code, Until: "0400"})
 	if err != nil || res.(map[string]any)["status"] != "awaiting_approval" || f.submits[0].Options[0].Key != optionTrustProject {
 		t.Fatalf("%v %v", res, err)
 	}
 	f.submits = nil
-	res, err = s.trustTool(ctx, f, trustIn{VerifiedAgent: "Citri", BindCode: code, Until: " Revoked "})
+	res, err = s.trustTool(ctx, f, trustIn{VerifiedAgent: "Alice", BindCode: code, Until: " Revoked "})
 	if err != nil || res.(map[string]any)["status"] != "awaiting_approval" || len(f.submits) != 1 {
 		t.Fatalf("%v %v", res, err)
 	}
@@ -136,7 +136,7 @@ func TestUnlimitedTrustViaTool(t *testing.T) {
 		t.Fatalf("%+v", sub)
 	}
 	text, _ := json.Marshal(sub.Preview)
-	for _, want := range []string{"UNTIL REVOKED — no end time", ptRoot, "Citri", "Still asks"} {
+	for _, want := range []string{"UNTIL REVOKED — no end time", ptRoot, "Alice", "Still asks"} {
 		if !strings.Contains(string(text)+sub.Summary+sub.Options[0].Label+sub.Options[0].Meaning, want) {
 			t.Errorf("approval lacks %q: %s", want, text)
 		}
@@ -155,7 +155,7 @@ func TestUnlimitedTrustViaTool(t *testing.T) {
 		t.Fatal(err)
 	}
 	pts := s.st.projects(s.now())
-	if len(pts) != 1 || !pts[0].Unlimited || pts[0].Sister != "Citri" || out.(map[string]any)["until"] != "revoked" {
+	if len(pts) != 1 || !pts[0].Unlimited || pts[0].Sister != "Alice" || out.(map[string]any)["until"] != "revoked" {
 		t.Fatalf("%+v %v", pts, out)
 	}
 	// A late answer is no problem for a trust without an end, and a Bot's own start under it needs no approval.
@@ -251,7 +251,7 @@ func TestUnlimitedTrustStillAsks(t *testing.T) {
 		{ptRoot, "sudo ls"},
 		{ptRoot, "curl https://example.com"},
 		{ptRoot, "npm install left-pad"},
-		{"/Users/v/other", "ls"},                  // outside the root
+		{"/Users/alice/other", "ls"},              // outside the root
 		{ptRoot, "rm -rf ../x"},                   // writes outside
 		{ptRoot, "git switch main"},               // a foreign branch
 		{ptRoot, "git checkout -b dev"},           // creating one
@@ -353,7 +353,7 @@ func TestReplacementBetweenModes(t *testing.T) {
 	g, s2, code := ptBot(t)
 	grantForever(t, g, s2, "cli-1", ptRoot)
 	g.submits = nil
-	if _, err := s2.trustTool(context.Background(), g, trustIn{VerifiedAgent: "Citri", BindCode: code}); err != nil {
+	if _, err := s2.trustTool(context.Background(), g, trustIn{VerifiedAgent: "Alice", BindCode: code}); err != nil {
 		t.Fatal(err)
 	}
 	if p := g.submits[0].Preview.(map[string]any); !strings.Contains(fmt.Sprint(p["replaces"]), "until revoked") {
@@ -365,16 +365,16 @@ func TestUnlimitedTrustIsNeverPruned(t *testing.T) {
 	f, s, now := ptFixture(t)
 	// 19 unlimited and one timed trust fill the list; a new grant evicts the timed one, not an unlimited one.
 	for i := range maxProjectTrusts - 1 {
-		o, _ := s.offerFor(fmt.Sprintf("/Users/v/p%d", i), "github.com/v/p", "", "Mac")
+		o, _ := s.offerFor(fmt.Sprintf("/Users/alice/p%d", i), "github.com/alice/p", "", "Mac")
 		if _, err := s.grantProject(f, "dev_mac", "Mac", "", o.forever()); err != nil {
 			t.Fatal(err)
 		}
 	}
-	o, _ := s.offerFor("/Users/v/timed", "github.com/v/p", "", "Mac")
+	o, _ := s.offerFor("/Users/alice/timed", "github.com/alice/p", "", "Mac")
 	if _, err := s.grantProject(f, "dev_mac", "Mac", "", o); err != nil {
 		t.Fatal(err)
 	}
-	o, _ = s.offerFor("/Users/v/new", "github.com/v/p", "", "Mac")
+	o, _ = s.offerFor("/Users/alice/new", "github.com/alice/p", "", "Mac")
 	if _, err := s.grantProject(f, "dev_mac", "Mac", "", o.forever()); err != nil {
 		t.Fatal(err)
 	}
@@ -383,17 +383,17 @@ func TestUnlimitedTrustIsNeverPruned(t *testing.T) {
 		t.Fatalf("%d trusts", len(pts))
 	}
 	for _, p := range pts {
-		if p.Root == "/Users/v/timed" {
+		if p.Root == "/Users/alice/timed" {
 			t.Fatal("the timed trust stayed while the list was full")
 		}
 	}
 	i := slices.Index(f.audits, "project_trust_replaced")
-	if i < 0 || f.auditLog[i]["root"] != "/Users/v/timed" {
+	if i < 0 || f.auditLog[i]["root"] != "/Users/alice/timed" {
 		t.Fatalf("eviction audit %v", f.auditLog)
 	}
 	// All 20 are unlimited now: a 21st project is refused and nothing changes.
 	before, _ := json.Marshal(s.st.projects(*now))
-	o, _ = s.offerFor("/Users/v/twentyfirst", "github.com/v/p", "", "Mac")
+	o, _ = s.offerFor("/Users/alice/twentyfirst", "github.com/alice/p", "", "Mac")
 	if _, err := s.grantProject(f, "dev_mac", "Mac", "", o); err == nil {
 		t.Fatal("a 21st trust evicted an unlimited one")
 	}
@@ -401,7 +401,7 @@ func TestUnlimitedTrustIsNeverPruned(t *testing.T) {
 		t.Fatal("a refused grant changed the list")
 	}
 	// Replacing one of the same root still works at the cap.
-	o, _ = s.offerFor("/Users/v/p3", "github.com/v/p", "", "Mac")
+	o, _ = s.offerFor("/Users/alice/p3", "github.com/alice/p", "", "Mac")
 	if _, err := s.grantProject(f, "dev_mac", "Mac", "", o); err != nil {
 		t.Fatalf("replacing at the cap: %v", err)
 	}
