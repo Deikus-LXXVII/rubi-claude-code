@@ -25,6 +25,8 @@ type request struct {
 	Description string    `json:"description"`
 	Cwd         string    `json:"cwd"`
 	ExpiresAt   time.Time `json:"expires_at"`
+	// Project is set for a request from a Rubi Home agent project (claude-agent); never by the hook helper.
+	Project string `json:"project,omitempty"`
 }
 
 // answer is claude.decide's input; the helper checks it against the request it handed out.
@@ -44,6 +46,10 @@ type ticket struct {
 	SessionID  string `json:"session_id"`
 	Digest     string `json:"digest"`
 	Cwd        string `json:"cwd,omitempty"` // the scope of a mandate given with this approval
+	// AskID and AgentProject are set for a permission question of a Rubi Home agent project
+	// (claude-agent.next): the answer goes to claude-agent.decide by AskID.
+	AskID        string `json:"ask_id,omitempty"`
+	AgentProject string `json:"agent_project,omitempty"`
 	// Project is the project trust offered with this approval (the trust_project option); nil when none was.
 	Project *trustOffer `json:"project,omitempty"`
 	// Forever is the same trust until revoked (the trust_project_until_revoked option); nil when none was offered.
@@ -110,6 +116,14 @@ func (w *watcher) refresh(ctx context.Context) {
 		w.h.Logf("listing Rubi Home computers: %v", err)
 		return
 	}
+	// A computer whose Rubi Home reports the claude-agent capability is also polled for the agent's questions
+	// and events (agent.go); the probe is cached and happens outside the lock.
+	agent := map[string]bool{}
+	if w.s != nil {
+		for _, d := range devs {
+			agent[d.ID] = w.s.agentCapable(ctx, w.h, d.ID)
+		}
+	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	ops := []string{opNext}
@@ -117,6 +131,16 @@ func (w *watcher) refresh(ctx context.Context) {
 		ops = append(ops, opSessionsNext)
 	}
 	for _, d := range devs {
+		if agent[d.ID] && !w.polling[d.ID+"|"+opAgentNext] {
+			key := d.ID + "|" + opAgentNext
+			w.polling[key] = true
+			w.wg.Go(func() {
+				w.pollAgent(ctx, d)
+				w.mu.Lock()
+				delete(w.polling, key)
+				w.mu.Unlock()
+			})
+		}
 		for _, op := range ops {
 			key := d.ID + "|" + op
 			if w.polling[key] {

@@ -135,7 +135,7 @@ func TestRunApprovalOffersProjectTrust(t *testing.T) {
 	if o.Label != "Allow and trust the project /Users/v/rubi until Sat 31 Oct 2026 04:00 CET" {
 		t.Fatalf("label %q", o.Label)
 	}
-	for _, want := range []string{"Sat 31 Oct 2026 04:00 CET", ptRoot, "Mac", "citri/*", "Europe/Berlin", "CET, UTC+01:00", "Rubi Home doesn't report this computer's own", "bypassPermissions), its commands never ask", "may be main", "--no-update-refs", "Symlinks already in the project", "up to an hour before 04:00",
+	for _, want := range []string{"Sat 31 Oct 2026 04:00 CET", ptRoot, "Mac", "agent/*", "Europe/Berlin", "CET, UTC+01:00", "Rubi Home doesn't report this computer's own", "bypassPermissions), its commands never ask", "may be main", "--no-update-refs", "Symlinks already in the project", "up to an hour before 04:00",
 		"Still asks", "git push", "git tag", "--force", "sudo", "outside " + ptRoot, "bypassPermissions", "project's own code", "start a Claude Code session", "claude_code_mandates", "at most 2000"} {
 		if !strings.Contains(o.Meaning, want) {
 			t.Errorf("meaning lacks %q:\n%s", want, o.Meaning)
@@ -144,7 +144,7 @@ func TestRunApprovalOffersProjectTrust(t *testing.T) {
 	raw, _ := json.Marshal(sub.Payload)
 	var tk ticket
 	_ = json.Unmarshal(raw, &tk)
-	if tk.Project == nil || tk.Project.Root != ptRoot || tk.Project.Pattern != "citri/*" || !tk.Project.Expires.Equal(time.Date(2026, 10, 31, 4, 0, 0, 0, berlin(t))) {
+	if tk.Project == nil || tk.Project.Root != ptRoot || tk.Project.Pattern != "agent/*" || !tk.Project.Expires.Equal(time.Date(2026, 10, 31, 4, 0, 0, 0, berlin(t))) {
 		t.Fatalf("ticket %+v", tk.Project)
 	}
 	// Nothing is trusted before the approval.
@@ -193,7 +193,7 @@ func TestProjectTrustViaOptionAllowsOtherSessions(t *testing.T) {
 		t.Fatalf("decided %+v", f.decided)
 	}
 	pts := s.st.projects(s.now())
-	if len(pts) != 1 || pts[0].Root != ptRoot || pts[0].Device != "dev_mac" || pts[0].BranchPattern != "citri/*" ||
+	if len(pts) != 1 || pts[0].Root != ptRoot || pts[0].Device != "dev_mac" || pts[0].BranchPattern != "agent/*" ||
 		!pts[0].Expires.Equal(time.Date(2026, 10, 31, 4, 0, 0, 0, berlin(t))) || pts[0].MaxUses != ptMaxUses {
 		t.Fatalf("saved %+v", pts)
 	}
@@ -243,7 +243,7 @@ func TestProjectTrustStillAsks(t *testing.T) {
 		{"/Users/v", "ls"},                                      // above it
 		{ptRoot + "2", "ls"},                                    // a sibling that shares the prefix
 		{ptRoot, "git push"},                                    // push
-		{ptRoot, "git push origin citri/x"},                     // push of an allowed branch
+		{ptRoot, "git push origin agent/x"},                     // push of an allowed branch
 		{ptRoot, "git status && git push --force"},              // force
 		{ptRoot, "git tag v1.0.0"},                              // tags
 		{ptRoot, "git tag -a v1 -m release"},                    // annotated tag
@@ -271,23 +271,23 @@ func TestProjectTrustStillAsks(t *testing.T) {
 	if p := f.submits[len(f.submits)-1].Preview.(map[string]any); !strings.Contains(fmt.Sprint(p["mandate"]), "trust") {
 		t.Errorf("no note: %v", p)
 	}
-	if asks(f, s, "cli-2", ptRoot, "git switch citri/ok") {
+	if asks(f, s, "cli-2", ptRoot, "git switch agent/ok") {
 		t.Error("a branch inside the pattern asked")
 	}
 }
 
 func TestBranchRule(t *testing.T) {
-	const pat = "citri/*"
+	const pat = "agent/*"
 	allowed := []string{
-		"git switch citri/x", "git switch -c citri/x", "git switch --create citri/x", "git switch --create=citri/x", "git switch -c citri/x main",
-		"git switch --detach citri/x",
-		"git checkout citri/x", "git checkout -b citri/x", "git checkout -bcitri/x", "git checkout -B citri/x main", "git checkout --detach citri/x",
+		"git switch agent/x", "git switch -c agent/x", "git switch --create agent/x", "git switch --create=agent/x", "git switch -c agent/x main",
+		"git switch --detach agent/x",
+		"git checkout agent/x", "git checkout -b agent/x", "git checkout -bagent/x", "git checkout -B agent/x main", "git checkout --detach agent/x",
 		"git branch", "git branch -a", "git branch -vv", "git branch --list 'ma*'", "git branch --show-current", "git branch --merged main",
-		"git branch citri/x", "git branch citri/x main", "git branch -m citri/a citri/b", "git branch -c citri/a citri/b", "git branch -d citri/a",
-		"git worktree add -b citri/wt wt/x", "git worktree add --detach wt/w main", "git worktree list",
-		"git stash branch citri/x", "git stash", "git rebase --no-update-refs main citri/x", "git rebase --no-update-refs --root citri/x", "git rebase --no-update-refs main",
-		"git status", "git commit -m x", "git merge main", "git cherry-pick abc1234", "git -C . switch citri/x", "nohup git switch citri/x",
-		"go test ./... && git switch -c citri/y && git commit -m z",
+		"git branch agent/x", "git branch agent/x main", "git branch -m agent/a agent/b", "git branch -c agent/a agent/b", "git branch -d agent/a",
+		"git worktree add -b agent/wt wt/x", "git worktree add --detach wt/w main", "git worktree list",
+		"git stash branch agent/x", "git stash", "git rebase --no-update-refs main agent/x", "git rebase --no-update-refs --root agent/x", "git rebase --no-update-refs main",
+		"git status", "git commit -m x", "git merge main", "git cherry-pick abc1234", "git -C . switch agent/x", "nohup git switch agent/x",
+		"go test ./... && git switch -c agent/y && git commit -m z",
 	}
 	for _, c := range allowed {
 		if ok, why := mandateAllowsBranch(c, root, root, pat); !ok {
@@ -295,20 +295,20 @@ func TestBranchRule(t *testing.T) {
 		}
 	}
 	asked := []string{
-		"git switch main", "git switch -c main2", "git switch --create main", "git switch --create=main", "git switch -", "git switch citri/x/y", "git switch citri",
-		"git switch --orphan dev", "git switch -t origin/citri/x", "git switch 'citri/*'", "git switch citri/../main",
+		"git switch main", "git switch -c main2", "git switch --create main", "git switch --create=main", "git switch -", "git switch agent/x/y", "git switch citri",
+		"git switch --orphan dev", "git switch -t origin/agent/x", "git switch 'agent/*'", "git switch agent/../main",
 		"git checkout main", "git checkout -b dev", "git checkout -B dev", "git checkout -bdev", "git checkout --orphan dev", "git checkout HEAD~1", "git checkout -",
-		"git branch dev", "git branch dev citri/x", "git branch -m citri/a dev", "git branch -m dev citri/a", "git branch -d main", "git branch -c main citri/b",
+		"git branch dev", "git branch dev agent/x", "git branch -m agent/a dev", "git branch -m dev agent/a", "git branch -d main", "git branch -c main agent/b",
 		"git worktree add -b dev wt/x", "git worktree add wt/x", "git worktree add wt/x main",
 		"git stash branch dev", "git rebase --no-update-refs main dev", "git rebase --no-update-refs --root dev", "git rebase --no-update-refs --onto main a dev",
 		// a detached switch names a commit that may be main's tip: it asks
 		"git switch --detach main", "git switch -d HEAD~1", "git checkout --detach main", "git switch --detach origin/main",
 		"git -C . switch main", "nohup git switch main", "command git checkout main", "CI=1 git checkout dev",
-		"git switch citri/x && git switch main", "ls | git switch main", "git status; git checkout -b dev",
-		"git branch -r -d origin/main", "git branch -dr origin/main", "git branch --remotes -d origin/main", "git branch -r -m origin/main citri/x", "git branch -a -d main",
+		"git switch agent/x && git switch main", "ls | git switch main", "git status; git checkout -b dev",
+		"git branch -r -d origin/main", "git branch -dr origin/main", "git branch --remotes -d origin/main", "git branch -r -m origin/main agent/x", "git branch -a -d main",
 		"|", // what follows is refused by the option tables with or without the pattern
-		"git rebase main citri/x", "git rebase --update-refs --onto main a", "git rebase --update-refs --no-update-refs main", "git rebase --no-update-refs --update-refs main",
-		"git tag v1", "git tag -a v1 -m x", "git push", "git push origin citri/x", "git branch -D citri/x", "git switch -C citri/x", "git reset --hard",
+		"git rebase main agent/x", "git rebase --update-refs --onto main a", "git rebase --update-refs --no-update-refs main", "git rebase --no-update-refs --update-refs main",
+		"git tag v1", "git tag -a v1 -m x", "git push", "git push origin agent/x", "git branch -D agent/x", "git switch -C agent/x", "git reset --hard",
 	}
 	tables := false
 	for _, c := range asked {
@@ -334,13 +334,13 @@ func TestBranchRule(t *testing.T) {
 	if ok, _ := mandateAllowsBranch("git switch feature/x", root, root, "feature/*"); !ok {
 		t.Error("feature/* refused feature/x")
 	}
-	if ok, _ := mandateAllowsBranch("git switch citri/x", root, root, "feature/*"); ok {
-		t.Error("feature/* allowed citri/x")
+	if ok, _ := mandateAllowsBranch("git switch agent/x", root, root, "feature/*"); ok {
+		t.Error("feature/* allowed agent/x")
 	}
 }
 
 func TestCheckPattern(t *testing.T) {
-	for in, want := range map[string]string{"": "citri/*", "  ": "citri/*", "feature/*": "feature/*", "citri/*-x": "citri/*-x", "r[0-9]": "r[0-9]"} {
+	for in, want := range map[string]string{"": "agent/*", "  ": "agent/*", "feature/*": "feature/*", "agent/*-x": "agent/*-x", "r[0-9]": "r[0-9]"} {
 		if got, err := checkPattern(in); err != nil || got != want {
 			t.Errorf("%q -> %q %v", in, got, err)
 		}
@@ -423,7 +423,7 @@ func TestProjectTrustRevokeAndCoexistence(t *testing.T) {
 	// The list shows it, the panel's revoke ends it, and "all" ends everything.
 	list, _ := s.mandatesTool(f, mandatesIn{})
 	pl := list.(map[string]any)["project_trusts"].([]map[string]any)
-	if len(pl) != 1 || pl[0]["id"] != pt || pl[0]["project_root"] != ptRoot || pl[0]["branches"] != "citri/*" || pl[0]["uses"] == nil {
+	if len(pl) != 1 || pl[0]["id"] != pt || pl[0]["project_root"] != ptRoot || pl[0]["branches"] != "agent/*" || pl[0]["uses"] == nil {
 		t.Fatalf("list %v", list)
 	}
 	view, err := s.panel(context.Background(), f, "view", nil)
@@ -431,7 +431,7 @@ func TestProjectTrustRevokeAndCoexistence(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw, _ := json.Marshal(view)
-	for _, want := range []string{"Trusted projects", ptRoot, "citri/*", "Sat 31 Oct 04:00 CET", "\"op\":\"revoke\"", pt} {
+	for _, want := range []string{"Trusted projects", ptRoot, "agent/*", "Sat 31 Oct 04:00 CET", "\"op\":\"revoke\"", pt} {
 		if !strings.Contains(string(raw), want) {
 			t.Errorf("panel lacks %q: %s", want, raw)
 		}
@@ -464,7 +464,7 @@ func TestProjectTrustReplacesTheOldOne(t *testing.T) {
 	}
 	// Another project (or computer) is a trust of its own.
 	if err := func() error {
-		_, err := s.st.issueProject(projectTrust{ID: "pt_x", Device: "dev_mac", Root: "/Users/v/other", BranchPattern: "citri/*", Expires: s.now().Add(time.Hour), MaxUses: 5}, s.now())
+		_, err := s.st.issueProject(projectTrust{ID: "pt_x", Device: "dev_mac", Root: "/Users/v/other", BranchPattern: "agent/*", Expires: s.now().Add(time.Hour), MaxUses: 5}, s.now())
 		return err
 	}(); err != nil || len(s.st.projects(s.now())) != 2 {
 		t.Fatalf("%v %v", err, s.st.projects(s.now()))
@@ -537,7 +537,7 @@ func TestTrustProjectToolAsksStrongAndGrantsOnApproval(t *testing.T) {
 	if len(f.submits) != 0 || len(s.st.projects(s.now())) != 0 {
 		t.Fatal("something was asked or granted by a refused call")
 	}
-	res, err := s.trustTool(ctx, f, trustIn{VerifiedAgent: "Citri", BindCode: code, BranchPattern: "citri/*"})
+	res, err := s.trustTool(ctx, f, trustIn{VerifiedAgent: "Citri", BindCode: code, BranchPattern: "agent/*"})
 	if err != nil || res.(map[string]any)["status"] != "awaiting_approval" || len(f.submits) != 1 {
 		t.Fatalf("%v %v", res, err)
 	}
@@ -546,7 +546,7 @@ func TestTrustProjectToolAsksStrongAndGrantsOnApproval(t *testing.T) {
 		t.Fatalf("%+v", sub)
 	}
 	text, _ := json.Marshal(sub.Preview)
-	for _, want := range []string{"Sat 31 Oct 2026 04:00 CET", ptRoot, "Mac", "citri/*", "Citri", "Europe/Berlin", "Still asks", "github.com/v/rubi"} {
+	for _, want := range []string{"Sat 31 Oct 2026 04:00 CET", ptRoot, "Mac", "agent/*", "Citri", "Europe/Berlin", "Still asks", "github.com/v/rubi"} {
 		if !strings.Contains(string(text)+sub.Options[0].Label+sub.Options[0].Meaning, want) {
 			t.Errorf("approval lacks %q: %s", want, text)
 		}
@@ -762,13 +762,13 @@ func TestProjectTrustTextIsHonest(t *testing.T) {
 
 func TestRebaseNeedsNoUpdateRefs(t *testing.T) {
 	// git rebase --update-refs (or rebase.updateRefs in the config) moves other branches, main included.
-	bad := []string{"git rebase --update-refs --onto main a", "git rebase --update-refs --onto main a citri/x", "git rebase main", "git rebase --onto main a",
+	bad := []string{"git rebase --update-refs --onto main a", "git rebase --update-refs --onto main a agent/x", "git rebase main", "git rebase --onto main a",
 		"git rebase --no-update-refs --update-refs main", "git rebase --update-refs --no-update-refs main", "git rebase --update-refs", "git rebase"}
 	for _, c := range bad {
 		if ok, _ := mandateAllows(c, root, root); ok {
 			t.Errorf("md: %q allowed", c)
 		}
-		if ok, _ := mandateAllowsBranch(c, root, root, "citri/*"); ok {
+		if ok, _ := mandateAllowsBranch(c, root, root, "agent/*"); ok {
 			t.Errorf("pt: %q allowed", c)
 		}
 	}
@@ -777,21 +777,21 @@ func TestRebaseNeedsNoUpdateRefs(t *testing.T) {
 			t.Errorf("md: %q asks: %s", c, why)
 		}
 	}
-	if ok, why := mandateAllowsBranch("git rebase --no-update-refs main citri/x", root, root, "citri/*"); !ok {
+	if ok, why := mandateAllowsBranch("git rebase --no-update-refs main agent/x", root, root, "agent/*"); !ok {
 		t.Errorf("%s", why)
 	}
 }
 
 func TestBranchRemoteDeleteIsChecked(t *testing.T) {
 	for _, c := range []string{"git branch -r -d origin/main", "git branch -dr origin/main", "git branch --remotes -d origin/main", "git branch -d -r origin/main",
-		"git branch -a -d main", "git branch -r -m origin/main x", "git branch --all -c main citri/x"} {
-		if ok, _ := mandateAllowsBranch(c, root, root, "citri/*"); ok {
+		"git branch -a -d main", "git branch -r -m origin/main x", "git branch --all -c main agent/x"} {
+		if ok, _ := mandateAllowsBranch(c, root, root, "agent/*"); ok {
 			t.Errorf("%q allowed", c)
 		}
 	}
 	// Listing remote branches is still a listing.
 	for _, c := range []string{"git branch -r", "git branch -a", "git branch -r --list 'origin/*'"} {
-		if ok, why := mandateAllowsBranch(c, root, root, "citri/*"); !ok {
+		if ok, why := mandateAllowsBranch(c, root, root, "agent/*"); !ok {
 			t.Errorf("%q asks: %s", c, why)
 		}
 	}
@@ -811,7 +811,7 @@ func TestTwoHourTrustHonoursTheBranchRule(t *testing.T) {
 	if !asks(f, s, "cli-2", ptSub.Cwd, "git switch main") || !asks(f, s, "cli-2", ptSub.Cwd, "git checkout -b dev") {
 		t.Fatal("the 2-hour trust allowed a branch the project trust forbids")
 	}
-	if asks(f, s, "cli-2", ptSub.Cwd, "git switch -c citri/ok") {
+	if asks(f, s, "cli-2", ptSub.Cwd, "git switch -c agent/ok") {
 		t.Fatal("a branch inside the pattern asked")
 	}
 	// A session elsewhere keeps its own 2-hour trust as it was.
@@ -954,7 +954,7 @@ func TestFailedSaveChangesNothing(t *testing.T) {
 	if err := s.st.issue(mandate{ID: "md_2", Device: "dev_mac", SessionID: "cli-1", Cwd: ptRoot, Expires: now.Add(time.Hour), MaxUses: 300}, *now); err == nil {
 		t.Fatal("save error ignored")
 	}
-	if _, err := s.st.issueProject(projectTrust{ID: "pt_new", Device: "dev_mac", Root: ptRoot, BranchPattern: "citri/*", Expires: now.Add(time.Hour), MaxUses: 5}, *now); err == nil {
+	if _, err := s.st.issueProject(projectTrust{ID: "pt_new", Device: "dev_mac", Root: ptRoot, BranchPattern: "agent/*", Expires: now.Add(time.Hour), MaxUses: 5}, *now); err == nil {
 		t.Fatal("save error ignored")
 	}
 	if ms := s.st.mandates(*now); len(ms) != 1 || ms[0].ID != "md_1" {

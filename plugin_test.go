@@ -45,10 +45,11 @@ type fakeHost struct {
 	bound     []map[string]any
 	createFn  func(ctx context.Context, args map[string]any) (map[string]any, error) // claude-sessions.create (nil: an old Rubi Home)
 	creates   []map[string]any
-	saveErr   error  // SaveState fails
-	listCut   bool   // claude-sessions.list says truncated
-	listCalls int    // claude-sessions.list calls
-	listArch  []bool // include_archived of each claude-sessions.list call
+	saveErr   error      // SaveState fails
+	listCut   bool       // claude-sessions.list says truncated
+	listCalls int        // claude-sessions.list calls
+	listArch  []bool     // include_archived of each claude-sessions.list call
+	agent     *fakeAgent // the claude-agent operations (nil: a Rubi Home without the capability)
 }
 
 type decided struct {
@@ -159,6 +160,12 @@ func (f *fakeHost) HomeCall(ctx context.Context, device, op string, args, out an
 		f.mu.Unlock()
 		b, _ := json.Marshal(ans)
 		return json.Unmarshal(b, out)
+	}
+	if f.agent != nil && strings.HasPrefix(op, "claude-agent.") {
+		return f.agent.call(ctx, op, args, out)
+	}
+	if strings.HasPrefix(op, "claude-agent.") {
+		return errors.New(`Rubi Home doesn't do "` + op + `"`)
 	}
 	return errors.New("unexpected op " + op)
 }
@@ -428,7 +435,7 @@ func TestPollsEveryComputerAndStops(t *testing.T) {
 
 func TestManifest(t *testing.T) {
 	m := manifest()
-	if m.ID != "claude-code" || len(m.Egress) != 0 || len(m.Secrets) != 0 || len(m.Home) != 3 || m.Home[0] != "claude" || m.Home[1] != "claude-sessions" || m.Home[2] != "claude-start" || m.Hooks {
+	if m.ID != "claude-code" || len(m.Egress) != 0 || len(m.Secrets) != 0 || len(m.Home) != 4 || m.Home[0] != "claude" || m.Home[1] != "claude-sessions" || m.Home[2] != "claude-start" || m.Home[3] != "claude-agent" || m.Hooks {
 		t.Fatalf("permissions: %+v", m)
 	}
 	run, _ := m.Action(kindRun)

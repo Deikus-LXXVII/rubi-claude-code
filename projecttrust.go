@@ -6,7 +6,7 @@ package main
 // later, and the Bot bound to a session of the project (it may start and bind sessions in the project
 // without a new approval). The command check is the same one the 2-hour trust uses (mandateAllows) with
 // one more rule: a command that switches to or creates a git branch is allowed only for a name that
-// matches the trust's branch pattern (default citri/*). Push and every remote operation, --force, sudo,
+// matches the trust's branch pattern (default agent/*). Push and every remote operation, --force, sudo,
 // the network, installs, tags, writes outside the root and credential paths still ask.
 //
 // The root is the project's top directory as Rubi Home reports it (claude-sessions.list project_root). It
@@ -40,7 +40,7 @@ const (
 	kindTrustProject       = "claude-code.trust_project"
 	ptMaxUses              = 2000
 	maxProjectTrusts       = 20
-	defaultBranchPattern   = "citri/*"
+	defaultBranchPattern   = "agent/*"
 	ptRefreshHour          = 4
 	ptMaxTTL               = 24 * time.Hour
 	maxPatternLen          = 80
@@ -68,6 +68,9 @@ type projectTrust struct {
 	// Unlimited: "until revoked". Expires stays zero and MaxUses 0, so a plugin that doesn't know the field
 	// reads the record as ended and drops it (it fails closed).
 	Unlimited bool `json:"unlimited,omitempty"`
+	// Project is the Rubi Home agent project (claude-agent) the trust is for; Root is then "/work", the
+	// project's directory inside its VM. "" for a Claude Code session seen through the hook.
+	Project string `json:"project,omitempty"`
 }
 
 // live: a timed trust ends at Expires or after MaxUses; an unlimited one only when it is revoked.
@@ -154,7 +157,7 @@ func checkPattern(p string) (string, error) {
 		return defaultBranchPattern, nil
 	}
 	if len(p) > maxPatternLen || strings.HasPrefix(p, "-") || strings.HasPrefix(p, "/") || strings.Contains(p, "..") {
-		return "", errors.New("branch_pattern must be a short branch pattern like citri/* (no leading - or /, no ..)")
+		return "", errors.New("branch_pattern must be a short branch pattern like agent/* (no leading - or /, no ..)")
 	}
 	for _, r := range p {
 		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("._-/*?[]^", r)) {
@@ -162,11 +165,11 @@ func checkPattern(p string) (string, error) {
 		}
 	}
 	if _, err := path.Match(p, "x"); err != nil {
-		return "", errors.New("branch_pattern isn't a valid pattern (path.Match syntax, like citri/*)")
+		return "", errors.New("branch_pattern isn't a valid pattern (path.Match syntax, like agent/*)")
 	}
 	for _, n := range protectedBranches {
 		if ok, _ := path.Match(p, n); ok {
-			return "", fmt.Errorf("branch_pattern %q would let Claude switch to %s; use a prefix like citri/*", p, n)
+			return "", fmt.Errorf("branch_pattern %q would let Claude switch to %s; use a prefix like agent/*", p, n)
 		}
 	}
 	return p, nil
@@ -183,6 +186,7 @@ type trustOffer struct {
 	RepoKey    string    `json:"repo_key,omitempty"`
 	RealRoot   string    `json:"real_root,omitempty"`
 	Unlimited  bool      `json:"unlimited,omitempty"` // "until revoked": Expires is zero
+	Project    string    `json:"project,omitempty"`   // a Rubi Home agent project (Root is /work)
 }
 
 // forever is the same offer without an end: the project trust "until I revoke it".
@@ -203,6 +207,22 @@ func (s *sisters) offerFor(root, repoKey, pattern, deviceName string) (trustOffe
 	loc := s.zone()
 	now := s.now()
 	return trustOffer{Root: root, Pattern: pattern, Expires: trustExpiry(now, loc).UTC(), Zone: loc.String(), DeviceName: deviceName, RepoKey: repoKey}, nil
+}
+
+// agentOffer is the offer for a project of Rubi Home's agent path: its root is /work, the project's directory
+// inside its VM, and the trust is for that project only.
+func (s *sisters) agentOffer(project, dir, deviceName, pattern string, unlimited bool) (trustOffer, error) {
+	pattern, err := checkPattern(pattern)
+	if err != nil {
+		return trustOffer{}, err
+	}
+	loc := s.zone()
+	o := trustOffer{Root: agentRoot, Pattern: pattern, Expires: trustExpiry(s.now(), loc).UTC(), Zone: loc.String(),
+		DeviceName: deviceName + ", project " + oneLine(firstNonEmpty(dir, project), 60), Project: project}
+	if unlimited {
+		o = o.forever()
+	}
+	return o, nil
 }
 
 func (s *sisters) zone() *time.Location {
@@ -357,7 +377,11 @@ func (s *sisters) grantProject(h sisterHost, device, deviceName, sister string, 
 			return projectTrust{}, errors.New("the trust's end time is more than 24 hours away")
 		}
 	}
-	if why := rootProblem(o.Root, o.RepoKey); why != "" {
+	if o.Project != "" {
+		if o.Root != agentRoot {
+			return projectTrust{}, errors.New("an agent project's trust is for " + agentRoot)
+		}
+	} else if why := rootProblem(o.Root, o.RepoKey); why != "" {
 		return projectTrust{}, errors.New(why)
 	}
 	pattern, err := checkPattern(o.Pattern)
@@ -365,7 +389,7 @@ func (s *sisters) grantProject(h sisterHost, device, deviceName, sister string, 
 		return projectTrust{}, err
 	}
 	pt := projectTrust{ID: newID("pt_"), Device: device, DeviceName: deviceName, Root: o.Root, BranchPattern: pattern, Sister: sister,
-		Zone: o.Zone, RealRoot: o.RealRoot, Issued: now, Expires: o.Expires, MaxUses: ptMaxUses}
+		Zone: o.Zone, RealRoot: o.RealRoot, Issued: now, Expires: o.Expires, MaxUses: ptMaxUses, Project: o.Project}
 	if o.Unlimited {
 		pt.MaxUses, pt.Unlimited = 0, true // no end time, no count limit; every allow is still audited
 	}
@@ -397,7 +421,7 @@ type trustIn struct {
 	AgentCode     string `json:"rubi_agent_code,omitempty" jsonschema:"the agent_code of your latest Rubi webhook (or call rubi_verify with your name to get one); proves you are that Bot"`
 	VerifiedAgent string `json:"rubi_verified_agent,omitempty" jsonschema:"set by Rubi; don't pass it"`
 	BindCode      string `json:"bind_code" jsonschema:"the bind_code you got when you were bound"`
-	BranchPattern string `json:"branch_pattern,omitempty" jsonschema:"branches Claude may switch to or create without asking, path.Match syntax; default citri/*"`
+	BranchPattern string `json:"branch_pattern,omitempty" jsonschema:"branches Claude may switch to or create without asking, path.Match syntax; default agent/*"`
 	Until         string `json:"until,omitempty" jsonschema:"how long the trust lasts: 0400 (the default: until the next 04:00, at most 24 hours) or revoked (no end time: until the user revokes it; the approval says so in capitals; ask for it only when the user wants it)"`
 }
 
@@ -455,7 +479,7 @@ func (s *sisters) trustTool(ctx context.Context, h sisterHost, in trustIn) (any,
 	if !o.Unlimited {
 		preview["time_zone"] = s.zoneNote(o)
 	}
-	if old := s.st.projectTrustOf(b.Device, o.Root, s.now()); old != nil {
+	if old := s.st.projectTrustOf(b.Device, o.Root, "", s.now()); old != nil {
 		preview["replaces"] = fmt.Sprintf("the trust %s (%s, %d commands used, granted %s)", old.ID, s.trustEnd(*old), old.Uses, ageText(old.Issued, s.now()))
 	}
 	key := optionTrustProject
@@ -515,7 +539,7 @@ func (s *sisters) projectCovering(ctx context.Context, h sisterHost, device, sis
 	type where struct{ cwd, real string }
 	var bound []where
 	for _, b := range s.st.bindings() {
-		if b.Device != device || !sameBot(b.Sister, sister) {
+		if b.Device != device || !sameBot(b.Sister, sister) || b.Project != "" {
 			continue
 		}
 		cur, err := s.current(ctx, h, b)
@@ -529,6 +553,9 @@ func (s *sisters) projectCovering(ctx context.Context, h sisterHost, device, sis
 	}
 	return s.st.useProject(device, s.now(), func(p projectTrust) bool {
 		realRoot := firstNonEmpty(p.RealRoot, p.Root)
+		if p.Project != "" {
+			return false // a trust of an agent project covers that project only (agentProjectCovering)
+		}
 		if !within(p.Root, dir) || realDir != "" && !within(realRoot, realDir) {
 			return false
 		}

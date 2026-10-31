@@ -47,13 +47,16 @@ type mandate struct {
 	MaxUses    int       `json:"max_uses"`
 	Uses       int       `json:"uses"`
 	Approval   string    `json:"approval,omitempty"`
+	// Project is the Rubi Home agent project (claude-agent) the mandate is for; "" for a Claude Code session
+	// seen through the hook. A mandate of one never covers the other.
+	Project string `json:"project,omitempty"`
 }
 
 func (m mandate) live(now time.Time) bool { return now.Before(m.Expires) && m.Uses < m.MaxUses }
 
 // covers says whether a request falls in the mandate's scope (computer, session, directory).
 func (m mandate) covers(device string, r request) bool {
-	return m.Device == device && m.SessionID == r.SessionID && within(m.Cwd, r.Cwd)
+	return m.Device == device && m.Project == r.Project && m.SessionID == r.SessionID && within(m.Cwd, r.Cwd)
 }
 
 // within: dir is root or under it (both absolute, cleaned).

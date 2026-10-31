@@ -55,7 +55,7 @@ func TestUnlimitedTrustViaOption(t *testing.T) {
 	}
 	id := grantForever(t, f, s, "cli-2", ptSub.Cwd)
 	pts := s.st.projects(s.now())
-	if len(pts) != 1 || pts[0].ID != id || !pts[0].Unlimited || !pts[0].Expires.IsZero() || pts[0].MaxUses != 0 || pts[0].Root != ptRoot || pts[0].BranchPattern != "citri/*" {
+	if len(pts) != 1 || pts[0].ID != id || !pts[0].Unlimited || !pts[0].Expires.IsZero() || pts[0].MaxUses != 0 || pts[0].Root != ptRoot || pts[0].BranchPattern != "agent/*" {
 		t.Fatalf("saved %+v", pts)
 	}
 	if a := f.auditLog[slices.Index(f.audits, "project_trust_issued")]; a["mode"] != "until_revoked" || a["mandate"] != id {
@@ -244,7 +244,7 @@ func TestUnlimitedTrustStillAsks(t *testing.T) {
 	grantForever(t, f, s, "cli-1", ptRoot)
 	still := []struct{ cwd, cmd string }{
 		{ptRoot, "git push"},
-		{ptRoot, "git push origin citri/x"},
+		{ptRoot, "git push origin agent/x"},
 		{ptRoot, "git tag v1.0.0"},
 		{ptRoot, "git status && git push --force"},
 		{ptRoot, "git commit --amend && git push --force-with-lease"},
@@ -264,7 +264,7 @@ func TestUnlimitedTrustStillAsks(t *testing.T) {
 			t.Errorf("%s: %q was allowed by the unlimited trust", c.cwd, c.cmd)
 		}
 	}
-	for _, ok := range []string{"git switch citri/ok", "git rebase --no-update-refs main"} {
+	for _, ok := range []string{"git switch agent/ok", "git rebase --no-update-refs main"} {
 		if asks(f, s, "cli-2", ptRoot, ok) {
 			t.Errorf("%q asked", ok)
 		}

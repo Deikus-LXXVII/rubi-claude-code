@@ -102,7 +102,7 @@ are `*`) are refused. At most 2000 commands; each allow is audited with the trus
 It uses the same command check as the 2-hour trust (everything above still asks), plus a **branch rule**:
 a command that switches to or creates a git branch (`git switch X`, `switch -c X`, `checkout X`,
 `checkout -b/-B X`, `branch X`, `branch -m/-c/-d`, `worktree add -b X`, `stash branch X`, `rebase UPSTREAM X`)
-is allowed only when `X` matches the trust's branch pattern (`path.Match` syntax, default `citri/*`);
+is allowed only when `X` matches the trust's branch pattern (`path.Match` syntax, default `agent/*`);
 otherwise it asks. Pushes and every remote git command, `--force`, `git tag` (so releases), sudo, the network
 and installs, writes outside the root or into `.git` and credential paths ask as before. Commits, merges and rebases go
 to whatever branch the session is on, which may be `main`: the rule is about switching and creating, not about

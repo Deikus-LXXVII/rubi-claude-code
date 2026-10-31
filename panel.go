@@ -65,6 +65,8 @@ func (s *sisters) panel(ctx context.Context, h sisterHost, op string, args json.
 		SessionID string  `json:"session_id"`
 		Name      *string `json:"name"`
 		Forget    string  `json:"forget"`
+		Project   string  `json:"project"`
+		Mode      string  `json:"mode"`
 	}
 	if len(args) > 0 && string(args) != "null" {
 		if err := json.Unmarshal(args, &a); err != nil {
@@ -100,6 +102,8 @@ func (s *sisters) panel(ctx context.Context, h sisterHost, op string, args json.
 		return map[string]any{"unbound": ok}, nil
 	case "rename":
 		return s.panelRename(ctx, h, a.Device, a.SessionID, a.Name, a.Forget)
+	case "mode": // an agent session's mode: stricter at once, looser as a strong approval (the page for it is M6)
+		return s.changeMode(ctx, h, "", a.Device, a.Project, a.SessionID, a.Mode, true)
 	default:
 		return nil, fmt.Errorf("unknown op %q", op)
 	}

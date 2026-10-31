@@ -32,6 +32,9 @@ type binding struct {
 	Title        string    `json:"title,omitempty"`
 	Code         string    `json:"code"`
 	Since        time.Time `json:"since"`
+	// Project is the Rubi Home agent project (claude-agent) whose session this is; SessionID is then the agent
+	// session's id. "" for a Claude Code session seen through the hooks.
+	Project string `json:"project,omitempty"`
 }
 
 type stateHost interface {
@@ -117,7 +120,7 @@ func (s *store) use(device string, r request, now time.Time) (*allowance, string
 		ok, reason := mandateAllows(r.Command, m.Cwd, r.Cwd)
 		// A project trust that covers the directory holds every allow to its branch rule, this one too.
 		for _, p := range s.st.Projects {
-			if ok && p.live(now) && p.covers(device, r.Cwd) {
+			if ok && p.live(now) && p.Project == r.Project && p.covers(device, r.Cwd) {
 				ok, reason = mandateAllowsBranch(r.Command, m.Cwd, r.Cwd, p.BranchPattern)
 			}
 		}
@@ -131,7 +134,7 @@ func (s *store) use(device string, r request, now time.Time) (*allowance, string
 	}
 	for i := range s.st.Projects {
 		p := &s.st.Projects[i]
-		if !p.live(now) || !p.covers(device, r.Cwd) {
+		if !p.live(now) || p.Project != r.Project || !p.covers(device, r.Cwd) {
 			continue
 		}
 		ok, reason := mandateAllowsBranch(r.Command, p.Root, r.Cwd, p.BranchPattern)
@@ -158,7 +161,7 @@ func (s *store) issueProject(p projectTrust, now time.Time) ([]projectTrust, err
 	var replaced []projectTrust
 	kept := s.st.Projects[:0]
 	for _, x := range s.st.Projects {
-		if x.Device == p.Device && x.Root == p.Root {
+		if x.Device == p.Device && x.Root == p.Root && x.Project == p.Project {
 			replaced = append(replaced, x)
 			continue
 		}
@@ -185,11 +188,11 @@ func (s *store) issueProject(p projectTrust, now time.Time) ([]projectTrust, err
 }
 
 // projectTrustOf is the live project trust of a computer's root, or nil.
-func (s *store) projectTrustOf(device, root string, now time.Time) *projectTrust {
+func (s *store) projectTrustOf(device, root, project string, now time.Time) *projectTrust {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, p := range s.st.Projects {
-		if p.Device == device && p.Root == root && p.live(now) {
+		if p.Device == device && p.Root == root && p.Project == project && p.live(now) {
 			return &p
 		}
 	}

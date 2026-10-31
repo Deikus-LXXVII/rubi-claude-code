@@ -49,6 +49,9 @@ type alias struct {
 	Title   string    `json:"title,omitempty"`
 	Set     time.Time `json:"set"`
 	Seen    time.Time `json:"seen"`
+	// Project is the agent project of the session (claude-agent); such a name is not swept by the hook
+	// session lists.
+	Project string `json:"project,omitempty"`
 }
 
 func (a alias) is(device string, s session) bool {
@@ -269,6 +272,7 @@ func (s *store) sweepAliases(now time.Time, lists []deviceList) []alias {
 			}
 		}
 		switch {
+		case a.Project != "": // an agent session: the hook lists say nothing about it
 		case hit != nil:
 			if hit.SessionID != "" && hit.SessionID != a.SessionID || hit.AppSessionID != "" && hit.AppSessionID != a.AppSessionID ||
 				now.Sub(a.Seen) >= aliasSeenEvery {

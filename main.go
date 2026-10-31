@@ -37,8 +37,8 @@ func manifestRunOptions() []rubiplugin.Option {
 func manifest() rubiplugin.Manifest {
 	opts := []rubiplugin.Option{{Key: optionAllow, Label: "Allow", Meaning: "Claude Code runs this command once"}}
 	trust := append(manifestRunOptions(), rubiplugin.Option{Key: optionTrustProject, Label: "Allow and trust this project until 04:00",
-		Meaning: "Claude Code runs this command. Until the next 04:00 (at most 24 hours, so on a daylight-saving change it can end up to an hour earlier; the approval names the exact time, date, time zone and project directory) Rubi allows the plain, listed commands of every Claude Code session on this computer whose directory is inside this project, each one audited, with the same checks as the 2-hour trust, including builds and tests that run the project's own code with your rights. Switching to or creating a git branch is allowed only for names like citri/*; commits, merges and rebases go to the branch a session is on, which may be main. A Bot bound to a session in the project can also start and bind sessions in it without a new approval; a session it starts runs with the Claude desktop app's permission settings, and if those skip permission prompts its commands never ask. Push and every remote git command, --force, sudo, network commands, installs, git tag, credential paths, writing outside the project or into .git, branches outside the pattern, and git rebase without --no-update-refs still ask. Offered when Rubi Home reports the project; revoke it in the panel"},
-		rubiplugin.Option{Key: optionTrustForever, Label: "Allow and trust this project until I revoke it", Meaning: "Claude Code runs this command. UNTIL REVOKED — no end time: this trust has no time or count limit, stays on across restarts of Rubi, of the plugin and of Rubi Home and across days and weeks, and only a revoke (the panel, or claude_code_mandates) ends it; while Rubi is locked nothing is allowed. Rubi allows the plain, listed commands of every Claude Code session on this computer whose directory is inside this project, each one audited and counted, with the same checks as the 2-hour trust, including builds and tests that run the project's own code with your rights. Switching to or creating a git branch is allowed only for names like citri/*; commits, merges and rebases go to the branch a session is on, which may be main. A Bot bound to a session in the project can also start and bind sessions in it, without a new approval, until you revoke it; a session it starts runs with the Claude desktop app's permission settings, and if those skip permission prompts its commands never ask. Push and every remote git command, --force, sudo, network commands, installs, git tag, credential paths, writing outside the project or into .git, branches outside the pattern, and git rebase without --no-update-refs still ask. Because nothing ends it by itself, look at the panel from time to time and revoke what you no longer need. Offered when Rubi Home reports the project"})
+		Meaning: "Claude Code runs this command. Until the next 04:00 (at most 24 hours, so on a daylight-saving change it can end up to an hour earlier; the approval names the exact time, date, time zone and project directory) Rubi allows the plain, listed commands of every Claude Code session on this computer whose directory is inside this project, each one audited, with the same checks as the 2-hour trust, including builds and tests that run the project's own code with your rights. Switching to or creating a git branch is allowed only for names like agent/*; commits, merges and rebases go to the branch a session is on, which may be main. A Bot bound to a session in the project can also start and bind sessions in it without a new approval; a session it starts runs with the Claude desktop app's permission settings, and if those skip permission prompts its commands never ask. Push and every remote git command, --force, sudo, network commands, installs, git tag, credential paths, writing outside the project or into .git, branches outside the pattern, and git rebase without --no-update-refs still ask. Offered when Rubi Home reports the project; revoke it in the panel"},
+		rubiplugin.Option{Key: optionTrustForever, Label: "Allow and trust this project until I revoke it", Meaning: "Claude Code runs this command. UNTIL REVOKED — no end time: this trust has no time or count limit, stays on across restarts of Rubi, of the plugin and of Rubi Home and across days and weeks, and only a revoke (the panel, or claude_code_mandates) ends it; while Rubi is locked nothing is allowed. Rubi allows the plain, listed commands of every Claude Code session on this computer whose directory is inside this project, each one audited and counted, with the same checks as the 2-hour trust, including builds and tests that run the project's own code with your rights. Switching to or creating a git branch is allowed only for names like agent/*; commits, merges and rebases go to the branch a session is on, which may be main. A Bot bound to a session in the project can also start and bind sessions in it, without a new approval, until you revoke it; a session it starts runs with the Claude desktop app's permission settings, and if those skip permission prompts its commands never ask. Push and every remote git command, --force, sudo, network commands, installs, git tag, credential paths, writing outside the project or into .git, branches outside the pattern, and git rebase without --no-update-refs still ask. Because nothing ends it by itself, look at the panel from time to time and revoke what you no longer need. Offered when Rubi Home reports the project"})
 	// Version is the last release; a release build replaces it with its tag (rubiplugin.Version, set
 	// with -ldflags in .github/workflows/release.yml).
 	return rubiplugin.Manifest{
@@ -64,11 +64,15 @@ func manifest() rubiplugin.Manifest {
 				Options: []rubiplugin.Option{{Key: optionTrustProject, Label: "Trust this project until 04:00",
 					Meaning: "Until the next 04:00 (at most 24 hours; the approval names the exact time, date, time zone, the project directory, the computer and the branches) Rubi allows the plain, listed commands of every Claude Code session on that computer inside the project, and lets the Bot start and bind sessions in it without a new approval; a session it starts runs with the Claude desktop app's permission settings, and if those skip permission prompts its commands never ask. Commits go to the branch a session is on, which may be main. Push and every remote git command, --force, sudo, network commands, installs, tags, credential paths, writing outside the project and branches outside the pattern still ask"},
 					{Key: optionTrustForever, Label: "Trust this project until I revoke it",
-						Meaning: "UNTIL REVOKED — no end time: this trust has no time or count limit, stays on across restarts of Rubi, of the plugin and of Rubi Home and across days and weeks, and only a revoke (the panel, or claude_code_mandates) ends it; while Rubi is locked nothing is allowed. Rubi allows the plain, listed commands of every Claude Code session on that computer whose directory is inside this project, each one audited and counted, with the same checks as the 2-hour trust, including builds and tests that run the project's own code with your rights. Switching to or creating a git branch is allowed only for names like citri/*; commits, merges and rebases go to the branch a session is on, which may be main. A Bot bound to a session in the project can also start and bind sessions in it, without a new approval, until you revoke it; a session it starts runs with the Claude desktop app's permission settings, and if those skip permission prompts its commands never ask. Push and every remote git command, --force, sudo, network commands, installs, git tag, credential paths, writing outside the project or into .git, branches outside the pattern, and git rebase without --no-update-refs still ask. Because nothing ends it by itself, look at the panel from time to time and revoke what you no longer need."}}},
+						Meaning: "UNTIL REVOKED — no end time: this trust has no time or count limit, stays on across restarts of Rubi, of the plugin and of Rubi Home and across days and weeks, and only a revoke (the panel, or claude_code_mandates) ends it; while Rubi is locked nothing is allowed. Rubi allows the plain, listed commands of every Claude Code session on that computer whose directory is inside this project, each one audited and counted, with the same checks as the 2-hour trust, including builds and tests that run the project's own code with your rights. Switching to or creating a git branch is allowed only for names like agent/*; commits, merges and rebases go to the branch a session is on, which may be main. A Bot bound to a session in the project can also start and bind sessions in it, without a new approval, until you revoke it; a session it starts runs with the Claude desktop app's permission settings, and if those skip permission prompts its commands never ask. Push and every remote git command, --force, sudo, network commands, installs, git tag, credential paths, writing outside the project or into .git, branches outside the pattern, and git rebase without --no-update-refs still ask. Because nothing ends it by itself, look at the panel from time to time and revoke what you no longer need."}}},
 			{Kind: kindRename, Title: "Let a Bot name a Claude Code session", DefaultLevel: rubiplugin.Tap, Locked: true,
 				Options: []rubiplugin.Option{{Key: "rename", Label: "Rename", Meaning: "Gives (or removes) the session's name in Rubi. It is a label shown in session lists and usable instead of the session's id; it changes nothing in Claude Code or the desktop app"}}},
 			{Kind: kindStart, Title: "Let a Bot start a new Claude Code session", DefaultLevel: rubiplugin.Strong, Locked: true,
 				Options: []rubiplugin.Option{{Key: "start", Label: "Start", Meaning: "Starts a new Claude Code session on your computer with the Bot's task as its first message, and binds the Bot to it. The session runs with the Claude desktop app's permission settings: if those skip permission prompts, Claude can run any command there without asking, and Rubi approvals don't apply to it"}}},
+			{Kind: kindAgentQuestion, Title: "Answer a question Claude asks in a project VM", DefaultLevel: rubiplugin.Tap, Locked: true,
+				Options: []rubiplugin.Option{{Key: "opt0", Label: "Answer", Meaning: "Gives Claude the option you choose as the answer to its question; approves nothing else"}}},
+			{Kind: kindMode, Title: "Loosen the permission mode of a Claude session in a project VM", DefaultLevel: rubiplugin.Strong, Locked: true,
+				Options: []rubiplugin.Option{{Key: "mode", Label: "Change the mode", Meaning: "Moves the session to a looser permission mode: Claude asks fewer questions; bypassPermissions lets it run almost anything in the VM without asking. Push, sudo, the network outside the allow-list, paths outside /work and edits of .rubi/.claude still ask"}}},
 		},
 		Events: []rubiplugin.EventType{
 			{Type: eventNeeded, Untrusted: []string{"command", "directory", "claude_says", "computer"}},
@@ -78,7 +82,7 @@ func manifest() rubiplugin.Manifest {
 			{Type: eventAsk, Untrusted: []string{"text", "kind", "title", "directory", "computer"}},
 		},
 		Panel: "view",
-		Home:  []string{"claude", "claude-sessions", "claude-start"},
+		Home:  []string{"claude", "claude-sessions", "claude-start", "claude-agent"},
 	}
 }
 
@@ -141,6 +145,16 @@ func main() {
 		}
 		return sis.executeRename(ctx, h, t, "bot", "user approved", nil)
 	})
+	p.OnExecute(kindAgentQuestion, func(ctx context.Context, h *rubiplugin.Host, option string, payload json.RawMessage) (any, error) {
+		return answerQuestion(ctx, h, option, payload)
+	})
+	p.OnExecute(kindMode, func(ctx context.Context, h *rubiplugin.Host, _ string, payload json.RawMessage) (any, error) {
+		var t modeTicket
+		if err := json.Unmarshal(payload, &t); err != nil {
+			return nil, fmt.Errorf("bad payload")
+		}
+		return sis.executeMode(ctx, h, t, "user approved")
+	})
 	p.OnPanel = func(ctx context.Context, h *rubiplugin.Host, op string, args json.RawMessage) (any, error) {
 		return sis.panel(ctx, h, op, args)
 	}
@@ -158,10 +172,12 @@ func main() {
 		func(ctx context.Context, h *rubiplugin.Host, in renameIn) (any, error) {
 			return sis.renameTool(ctx, h, in)
 		})
-	rubiplugin.AddTool(p, "claude_code_trust_project", "Ask the user (one strong approval) to trust the whole project of the Claude Code session you are bound to until the next 04:00 (at most 24 hours; pass until=revoked for no end time: it then lasts until the user revokes it, with no time or count limit, and the approval says so in capitals - ask for that only when the user wants it; default until=0400). While it lasts Rubi allows the plain, listed commands of every Claude Code session inside the project without asking, and you can claude_code_start sessions in it and claude_code_bind to its other sessions without a new approval (a session you start runs with the desktop app's permission settings: if those skip prompts, its commands never ask; commits, merges and rebases go to the branch it is on, maybe main). Push and every remote operation, --force, sudo, the network, installs, tags, writes outside the project and branches outside branch_pattern (default citri/*) still ask. Needs your bind_code.",
+	rubiplugin.AddTool(p, "claude_code_trust_project", "Ask the user (one strong approval) to trust the whole project of the Claude Code session you are bound to until the next 04:00 (at most 24 hours; pass until=revoked for no end time: it then lasts until the user revokes it, with no time or count limit, and the approval says so in capitals - ask for that only when the user wants it; default until=0400). While it lasts Rubi allows the plain, listed commands of every Claude Code session inside the project without asking, and you can claude_code_start sessions in it and claude_code_bind to its other sessions without a new approval (a session you start runs with the desktop app's permission settings: if those skip prompts, its commands never ask; commits, merges and rebases go to the branch it is on, maybe main). Push and every remote operation, --force, sudo, the network, installs, tags, writes outside the project and branches outside branch_pattern (default agent/*) still ask. Needs your bind_code.",
 		func(ctx context.Context, h *rubiplugin.Host, in trustIn) (any, error) {
 			return sis.trustTool(ctx, h, in)
 		})
+	rubiplugin.AddTool(p, "claude_code_mode", "Change the permission mode (plan, default, acceptEdits, bypassPermissions; strictest first) of a Claude session in a project VM (agent path). A stricter mode applies at once if you are bound in that project; a looser one asks the user (one strong approval).",
+		func(ctx context.Context, h *rubiplugin.Host, in modeIn) (any, error) { return sis.modeTool(ctx, h, in) })
 	rubiplugin.AddTool(p, "claude_code_unbind", "End your binding to a Claude Code session.",
 		func(ctx context.Context, h *rubiplugin.Host, in unbindIn) (any, error) {
 			return sis.unbindTool(ctx, h, in)
@@ -211,7 +227,7 @@ func runApproved(ctx context.Context, h sisterHost, s *sisters, option string, p
 	}
 	now := s.now().UTC()
 	m := mandate{ID: newID("md_"), Device: t.Device, DeviceName: t.DeviceName, SessionID: t.SessionID, Cwd: t.Cwd,
-		Issued: now, Expires: now.Add(mandateTTL), MaxUses: mandateMaxUses}
+		Issued: now, Expires: now.Add(mandateTTL), MaxUses: mandateMaxUses, Project: t.AgentProject}
 	if err := s.st.issue(m, now); err != nil {
 		h.Logf("saving a mandate: %v", err)
 		return map[string]any{"allowed": true, "trusted": false, "why": "couldn't save it"}, nil
@@ -223,8 +239,14 @@ func runApproved(ctx context.Context, h sisterHost, s *sisters, option string, p
 // allow answers the helper once you approved: Claude Code runs the command.
 func allow(ctx context.Context, h homeCaller, payload json.RawMessage) (any, error) {
 	var t ticket
-	if err := json.Unmarshal(payload, &t); err != nil || t.ID == "" {
+	if err := json.Unmarshal(payload, &t); err != nil || t.ID == "" && t.AskID == "" {
 		return nil, fmt.Errorf("bad payload")
+	}
+	if t.AskID != "" { // a question of a Rubi Home agent project
+		if err := h.HomeCall(ctx, t.Device, opAgentDecide, agentDecision{AskID: t.AskID, Behavior: "allow"}, nil); err != nil {
+			return nil, fmt.Errorf("Claude is no longer waiting for this (%v)", err)
+		}
+		return map[string]any{"allowed": true}, nil
 	}
 	if err := h.HomeCall(ctx, t.Device, "claude.decide", answer{ID: t.ID, SessionID: t.SessionID, Digest: t.Digest, Behavior: "allow"}, nil); err != nil {
 		return nil, fmt.Errorf("Claude Code is no longer waiting for this command (%v)", err)

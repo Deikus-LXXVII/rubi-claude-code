@@ -1442,7 +1442,7 @@ func run(dir, rubiBin, homeBin, plugin string) (err error) {
 	// Case 9: one trust per project. One approval with "trust this project until 04:00" and every session of
 	// the project on this computer (also one started later) runs plain commands without questions, and so
 	// does the Bot bound to a session of it (start, bind). Outside the project, push, tags, branches outside
-	// citri/* still ask. It survives a restart of Rubi Home, ends on revoke, and at its time (a test-only
+	// agent/* still ask. It survives a restart of Rubi Home, ends on revoke, and at its time (a test-only
 	// hook of the rubie2e plugin build shortens it).
 	ptSub := filepath.Join(proj, "sub")
 	if err := os.MkdirAll(ptSub, 0o700); err != nil {
@@ -1538,7 +1538,7 @@ func run(dir, rubiBin, homeBin, plugin string) (err error) {
 		}
 	}
 	if len(ai9.Approval.Options) != 4 || !strings.HasPrefix(label9, "Allow and trust the project "+proj+" until ") || !strings.Contains(label9, "04:00") ||
-		!strings.Contains(string(ai9.Approval.Preview), proj) || !strings.Contains(string(ai9.Approval.Preview), "citri/*") {
+		!strings.Contains(string(ai9.Approval.Preview), proj) || !strings.Contains(string(ai9.Approval.Preview), "agent/*") {
 		return fmt.Errorf("the run approval should offer the project trust with the exact time, root and branches: %+v %s", ai9.Approval.Options, ai9.Approval.Preview)
 	}
 	if res, err := pc9.ApproveWithPassword(id9, "trust_project", pw); err != nil || res["state"] != "executed" {
@@ -1553,7 +1553,7 @@ func run(dir, rubiBin, homeBin, plugin string) (err error) {
 	}
 	pt1, _ := pts[0].(map[string]any)
 	ptID := fmt.Sprint(pt1["id"])
-	if !strings.HasPrefix(ptID, "pt_") || pt1["project_root"] != proj || pt1["branches"] != "citri/*" {
+	if !strings.HasPrefix(ptID, "pt_") || pt1["project_root"] != proj || pt1["branches"] != "agent/*" {
 		return fmt.Errorf("the trust: %v", pt1)
 	}
 	step("9a one approval (%q) -> trust %s for %s", label9, ptID, proj)
@@ -1562,7 +1562,7 @@ func run(dir, rubiBin, homeBin, plugin string) (err error) {
 	for _, c := range []struct{ sess, cwd, cmd string }{
 		{"pt-b", ptSub, "go vet ./... && go test ./..."},
 		{"pt-c", proj, "git add -A && git commit -m x"},
-		{"pt-b", ptSub, "git switch -c citri/e2e-branch"},
+		{"pt-b", ptSub, "git switch -c agent/e2e-branch"},
 		{"pt-a", proj, "make test"},
 	} {
 		r, err := mustRun(c.sess, c.cwd, c.cmd)
@@ -1571,12 +1571,12 @@ func run(dir, rubiBin, homeBin, plugin string) (err error) {
 		}
 		report("project", r)
 	}
-	step("9b three different sessions of the project ran plain commands, builds and a citri/* branch switch without asking")
+	step("9b three different sessions of the project ran plain commands, builds and a agent/* branch switch without asking")
 
 	// c. What still asks: outside the project, push, tags, other branches, force.
 	for _, c := range []struct{ sess, cwd, cmd string }{
 		{"pt-out", dir, "make pt-outside"},
-		{"pt-b", ptSub, "git push origin citri/e2e-branch"},
+		{"pt-b", ptSub, "git push origin agent/e2e-branch"},
 		{"pt-b", ptSub, "git tag v9.9.9"},
 		{"pt-b", ptSub, "git switch main"},
 		{"pt-b", ptSub, "git checkout -b e2e-other"},
@@ -1586,7 +1586,7 @@ func run(dir, rubiBin, homeBin, plugin string) (err error) {
 			return err
 		}
 	}
-	step("9c outside the project, push, a tag, branches outside citri/*, writes outside the root still asked (and were denied)")
+	step("9c outside the project, push, a tag, branches outside agent/*, writes outside the root still asked (and were denied)")
 
 	// d. The Bot bound to a session of the project starts a session in it and binds to another, no approval.
 	launchFile9 := os.Getenv("RUBI_E2E_LAUNCH_FILE")
@@ -1718,7 +1718,7 @@ func run(dir, rubiBin, homeBin, plugin string) (err error) {
 		return err
 	}
 	if tinfo.Approval.Kind != "claude-code.trust_project" || tinfo.Approval.Level != "strong" || !strings.Contains(string(tinfo.Approval.Preview), proj) ||
-		!strings.Contains(string(tinfo.Approval.Preview), `"branches":"citri/*"`) {
+		!strings.Contains(string(tinfo.Approval.Preview), `"branches":"agent/*"`) {
 		return fmt.Errorf("the trust should be a strong approval naming the root and branches: %+v", tinfo.Approval)
 	}
 	if _, err := tpc.ApproveWithPasskey(fmt.Sprint(to9["approval_id"]), "trust_project", passkey.sign(origin, 0x01)); err == nil {
@@ -1851,7 +1851,7 @@ func run(dir, rubiBin, homeBin, plugin string) (err error) {
 		step("9j %s later the trust until revoked still allows (granted %v)", c.offset, fm["granted_ago"])
 	}
 	for _, c := range []struct{ sess, cwd, cmd string }{
-		{"pt-b", ptSub, "git push origin citri/e2e-branch"},
+		{"pt-b", ptSub, "git push origin agent/e2e-branch"},
 		{"pt-b", ptSub, "git tag v9.9.8"},
 		{"pt-b", ptSub, "git switch main"},
 		{"pt-b", ptSub, "git rebase main"},

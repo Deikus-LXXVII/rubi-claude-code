@@ -102,11 +102,14 @@ type sisters struct {
 	// nameList is the last full session list the panel's name page read, reused for a few minutes.
 	nameList   []deviceSessions
 	nameListAt time.Time
+	// caps remembers which computers' Rubi Home has the claude-agent capability (agent.go).
+	caps map[string]capEntry
 }
 
 type askRef struct {
 	device, session, sister string
 	at                      time.Time
+	project                 string // set for an ask from a Rubi Home agent project
 }
 
 func newSisters(st *store) *sisters {
@@ -117,7 +120,7 @@ func newSisters(st *store) *sisters {
 // is best effort: the binding works without it, only rubi_sisters in Claude Code knows less. A Rubi Home that
 // doesn't know the operation is logged once per computer.
 func (s *sisters) tellBound(ctx context.Context, h sisterHost, b binding, bound bool) {
-	if b.Device == "" || b.SessionID == "" {
+	if b.Device == "" || b.SessionID == "" || b.Project != "" { // an agent session has no hooks to tell
 		return
 	}
 	s.mu.Lock()
