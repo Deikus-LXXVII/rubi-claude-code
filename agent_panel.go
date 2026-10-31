@@ -304,6 +304,7 @@ func (s *sisters) projectsPage(ctx context.Context, h sisterHost) (any, error) {
 						"actions": []map[string]any{{"label": "Open chat", "open": panelPage{Page: pageChat, Device: d.ID, Project: pr.ID, Session: sl.Session, Role: sr}.open()}}})
 				}
 			}
+			items = append(items, s.fileNoteItems(d.ID, pr.ID)...)
 			for _, q := range st.Queue {
 				if q.Project != pr.ID {
 					continue

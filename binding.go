@@ -122,6 +122,7 @@ type sisters struct {
 	libMarkAt  map[string]time.Time
 	libMarks   map[string]libMark              // what the library said about each role's library skill versions (roles_library.go)
 	sshOpen    map[string]map[string]sshTarget // by computer: registered targets that allow any command
+	fileNotes  map[string][]fileNote           // by computer|project: role sessions that changed .mcp.json or .git/config (agent_notes.go)
 }
 
 type askRef struct {

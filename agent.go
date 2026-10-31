@@ -359,6 +359,10 @@ type agentItem struct {
 	IsError   bool      `json:"is_error,omitempty"`
 	Truncated bool      `json:"truncated,omitempty"`
 	At        time.Time `json:"at,omitzero"`
+	// project_files_changed: the files a role session changed that other sessions or the host's tools load, and the
+	// role's name (untrusted text).
+	Files    []string `json:"files,omitempty"`
+	RoleName string   `json:"role_name,omitempty"`
 }
 
 // UnmarshalJSON reads an item, and an event item's nested payload into its flat fields.
@@ -491,6 +495,8 @@ func (s *sisters) routeAgent(ctx context.Context, h sisterHost, d rubiplugin.Hom
 		if _, err := h.EmitTo(target.Sister, eventAsk, data); err != nil {
 			h.Logf("ask to %s: %v", target.Sister, err)
 		}
+	case "project_files_changed":
+		s.noteFilesChanged(h, d, it)
 	}
-	// assistant, tool, status, rate_limit, background, error, ask: shown in the panel (M6), not forwarded.
+	// An unknown kind is ignored. assistant, tool, status, rate_limit, background, error, ask: shown in the panel (M6), not forwarded.
 }

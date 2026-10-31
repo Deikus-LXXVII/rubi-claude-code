@@ -300,8 +300,8 @@ Rubi Home checks the same, so what you approved is what is launched.
   hooks are missing), the result says it was launched but not seen yet; once `claude_code_sessions` lists it,
   the Bot binds with `claude_code_bind` (a new approval). If Rubi Home doesn't answer after the request was
   sent, the error says the session may have been started: check the desktop app before trying again.
-- **Needs a newer Rubi.** `claude-start` is a new capability; the plugin's `MinRubi` has to be raised to the core
-  release that has it when that is tagged.
+- **Needs a newer Rubi.** `claude-start` is a new capability; the plugin's `MinRubi` is v0.14.0-rc.1, the core
+  release that has it (and the agent path's capabilities).
 
 Manual check on the Mac (not done yet): put a scratch folder in `claude_start_dirs`, have a Bot call
 `claude_code_start` with a harmless task, approve, and see that the app opens a session in that folder with
@@ -419,8 +419,8 @@ for a computer whose Rubi Home doesn't report the capability, and for bindings m
 **Capability detection.** For each paired computer the plugin calls `claude-agent.status`. An answer means the
 computer has the capability (remembered for 5 minutes; "no" for 1 minute, so an updated Rubi Home is noticed).
 Such a computer is polled with `claude-agent.next`; the hook's `claude.next` poll goes on as before. The
-manifest declares the `claude-agent` and `agent-setup` Home capabilities; `min_rubi` stays at v0.13.0 until a Rubi release knows
-that capability (a core that doesn't know it refuses the manifest, so this plugin version must not be
+manifest declares the `claude-agent` and `agent-setup` Home capabilities; `min_rubi` is v0.14.0-rc.1, the first Rubi release that knows
+those capabilities (a core that doesn't know it refuses the manifest, so this plugin version must not be
 published before that release).
 
 **How a question is decided** (`claude-agent.next` item `perm.ask`, answered with `claude-agent.decide`; Rubi
@@ -710,7 +710,7 @@ session, op, from, position, reason}]}`; `claude-agent.usage_mode {mode, bot | d
 
 ## Set up on a Mac
 
-You need Rubi v0.13.0 or later with this plugin installed, and Claude Code v2.1.295 or later (for
+You need Rubi v0.14.0-rc.1 or later with this plugin installed, and Claude Code v2.1.295 or later (for
 `onFailure`).
 
 1. **Install Rubi Home** (skip if you have it):
@@ -831,11 +831,11 @@ go build -o claude-code . && go test -race ./...
 e2e/run.sh   # Linux, needs `unshare -rn`: a real Rubi, Rubi Home and this plugin, offline
 ```
 
-The plugin builds on the Rubi v0.11.0 SDK (`Host.WaitApproval`) and needs a v0.13.0 core at run time
+The plugin builds on the Rubi SDK (`Host.WaitApproval`, `Host.LibraryGet` since v0.14.0-rc.1) and needs a v0.14.0-rc.1 core at run time
 (Rubi Home's `claude-start` capability, the panel's view prompt, `claude-sessions.bound`; v0.12.0 brought
 `claude-sessions`, strict delivery of addressed events and `rubi_verified_agent`).
 The e2e builds Rubi and Rubi Home from a core checkout, `../rubi` by default or `RUBI_REPO`; it needs a
-v0.13.0 (or newer) core. `PublisherKey` is the Rubi-Project plugin key (public half in
+v0.14.0-rc.1 (or newer) core. `PublisherKey` is the Rubi-Project plugin key (public half in
 `publisher-key.pub.pem`); only the end-to-end test overrides it, with a throwaway key.
 
 The end-to-end test builds everything with `-race`, runs it in a network namespace with only loopback,
