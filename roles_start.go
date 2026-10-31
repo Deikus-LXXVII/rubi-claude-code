@@ -55,7 +55,7 @@ func (s *sisters) roleStartTool(ctx context.Context, h sisterHost, in roleStartI
 		return nil, fmt.Errorf("at most %d session starts per hour in all", startsGlobal)
 	}
 	t := startTicket{Sister: c.Bot, Device: c.Dev.ID, DeviceName: c.Dev.Name, Cwd: proj.Dir, Task: task, Project: proj.ID, Mode: mode,
-		Role: r.ID, RoleName: r.Name, Name: name}
+		Role: r.ID, RoleName: r.Name, RoleVersion: r.Version, Name: name}
 	// Under a project trust held by this Bot a session starts without asking, but never one that skips prompts.
 	if pt := s.botTrust(c.Dev.ID, c.Bot, proj.ID); pt != nil && mode != "bypassPermissions" {
 		used := s.st.useProject(c.Dev.ID, s.now(), func(p projectTrust) bool { return p.ID == pt.ID })

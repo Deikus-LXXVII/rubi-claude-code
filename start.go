@@ -93,6 +93,9 @@ type startTicket struct {
 	Role     string `json:"role,omitempty"`
 	RoleName string `json:"role_name,omitempty"`
 	Name     string `json:"name,omitempty"`
+	// RoleVersion is the version of the role the user was shown (and its mode, tools and hosts with it): the session
+	// starts only if the role is still at that version.
+	RoleVersion int `json:"role_version,omitempty"`
 }
 
 // startWarning is what the user is told before approving, and the Bot after a session that skips prompts.

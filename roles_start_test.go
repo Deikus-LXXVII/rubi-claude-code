@@ -105,3 +105,45 @@ func TestRoleStartChecks(t *testing.T) {
 		t.Fatal("started")
 	}
 }
+
+// The approval is for the version of the role the user was shown: a role changed since then doesn't start.
+func TestRoleStartPinsTheApprovedVersion(t *testing.T) {
+	f, s, _ := roleFixture(t)
+	trustBot(t, s, botA, "p1")
+	id := mustCreate(t, s, f, botA, "design")
+	ctx := context.Background()
+	m := asMap(t)(s.roleStartTool(ctx, f, roleStartIn{roleWho: who("bot-c"), Role: id, Prompt: "hello"}))
+	if m["status"] != "awaiting_approval" {
+		t.Fatalf("%v", m)
+	}
+	b, _ := json.Marshal(lastSubmit(t, f).Payload)
+	var tk startTicket
+	_ = json.Unmarshal(b, &tk)
+	if tk.RoleVersion != 1 {
+		t.Fatalf("%+v", tk)
+	}
+	// The owner loosens the mode before the user answers.
+	asMap(t)(s.roleUpdateTool(ctx, f, roleUpdateIn{roleWho: who(botA), Role: id, DefaultMode: ptr("acceptEdits")}))
+	if _, err := s.executeStart(ctx, f, tk); err == nil || !strings.Contains(err.Error(), "the role changed since you approved; ask again") {
+		t.Fatalf("%v", err)
+	}
+	if len(f.agent.called(opAgentStart)) != 0 {
+		t.Fatal("a session was started")
+	}
+	// Asked again, the new version starts. A ticket without a version is refused.
+	asMap(t)(s.roleStartTool(ctx, f, roleStartIn{roleWho: who("bot-c"), Role: id, Prompt: "hello"}))
+	b, _ = json.Marshal(lastSubmit(t, f).Payload)
+	_ = json.Unmarshal(b, &tk)
+	if tk.RoleVersion != 2 || tk.Mode != "acceptEdits" {
+		t.Fatalf("%+v", tk)
+	}
+	bad := tk
+	bad.RoleVersion = 0
+	if _, err := s.executeStart(ctx, f, bad); err == nil {
+		t.Fatal("a ticket without a version started")
+	}
+	asMap(t)(s.executeStart(ctx, f, tk))
+	if len(f.agent.called(opAgentStart)) != 1 {
+		t.Fatal("not started")
+	}
+}

@@ -276,6 +276,19 @@ func (s *sisters) executeStartAgent(ctx context.Context, h sisterHost, t startTi
 	if _, ok := modeRank[t.Mode]; !ok && (t.Role == "" || !validRoleMode(t.Mode)) {
 		return nil, errors.New("bad payload")
 	}
+	if t.Role != "" {
+		// The approval was for one version of the role: a role changed since then (its mode, tools or hosts) is not
+		// what the user agreed to start.
+		cur, err := s.getRole(ctx, h, t.Device, t.Role, 0)
+		switch {
+		case t.RoleVersion < 1 || !roleIDRE.MatchString(t.Role):
+			return nil, errors.New("bad payload")
+		case err != nil:
+			return nil, err
+		case cur.Version != t.RoleVersion || cur.Project != t.Project || cur.Status != "active" || firstNonEmpty(cur.DefaultMode, "default") != t.Mode:
+			return nil, errors.New("the role changed since you approved; ask again")
+		}
+	}
 	var res struct {
 		ID       string `json:"id"`
 		Queued   bool   `json:"queued"`
