@@ -32,6 +32,7 @@ type fakeAgent struct {
 	slots  []map[string]any
 	limits map[string]any
 	modes  map[string]any // claude-agent.status "usage"
+	roles  *fakeRoles     // the claude-agent.role.* operations (nil: a Rubi Home without roles)
 }
 
 type fakeCall struct {
@@ -76,6 +77,16 @@ func (a *fakeAgent) call(ctx context.Context, op string, args, out any) error {
 			return nil
 		}
 		return json.Unmarshal(b, out)
+	}
+	if strings.HasPrefix(op, "claude-agent.role.") {
+		if a.roles == nil {
+			return errors.New(`Rubi Home doesn't do "` + op + `"`)
+		}
+		v, err := a.roles.call(op, m)
+		if err != nil {
+			return err
+		}
+		return reply(v)
 	}
 	switch op {
 	case opAgentStatus:

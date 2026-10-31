@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/rand"
 	"crypto/subtle"
+	"errors"
 	"fmt"
 	"slices"
 	"sync"
@@ -15,6 +16,8 @@ type pluginState struct {
 	Projects []projectTrust `json:"project_trusts,omitempty"`
 	Bindings []binding      `json:"bindings,omitempty"`
 	Aliases  []alias        `json:"session_names,omitempty"`
+	// RolePending are the role changes waiting for the user's approval (roles_change.go); bounded.
+	RolePending []rolePending `json:"role_pending,omitempty"`
 }
 
 // binding ties one Bot (a "sister") to one Claude Code session: the Bot's messages reach only that
@@ -322,3 +325,86 @@ func (s *store) follow(sister, sessionID string) {
 }
 
 func newID(prefix string) string { return prefix + rand.Text()[:16] }
+
+// ---- pending role changes ----
+
+// rolePending is the record of a role change that waits for approval. The change itself travels in the approval's
+// payload; this is what bounds the waiting and says which payloads are still wanted.
+type rolePending struct {
+	ID        string    `json:"id"`
+	Approval  string    `json:"approval,omitempty"`
+	Bot       string    `json:"bot"`
+	Device    string    `json:"device"`
+	Role      string    `json:"role,omitempty"`
+	Project   string    `json:"project"`
+	Op        string    `json:"op"`
+	Summary   string    `json:"summary,omitempty"`
+	Base      int       `json:"base"`
+	BlobBytes int       `json:"blob_bytes,omitempty"`
+	Created   time.Time `json:"created"`
+}
+
+// addRolePending records a pending change. It fails when 32 wait (after dropping the stale ones), when the Bot
+// already has maxPendingPerBot, or when the skill text waiting would be too much for the plugin's state.
+func (s *store) addRolePending(p rolePending, now time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	kept := s.st.RolePending[:0]
+	bytes, mine := 0, 0
+	for _, x := range s.st.RolePending {
+		if now.Sub(x.Created) >= rolePendingLife {
+			continue
+		}
+		kept = append(kept, x)
+		bytes += x.BlobBytes
+		if sameBot(x.Bot, p.Bot) {
+			mine++
+		}
+	}
+	s.st.RolePending = kept
+	switch {
+	case len(kept) >= maxRolePending:
+		return fmt.Errorf("%d role changes already wait for the user; they have to be answered (or expire) first", maxRolePending)
+	case mine >= maxPendingPerBot:
+		return fmt.Errorf("%d of your role changes already wait for the user; ask again when they are answered", maxPendingPerBot)
+	case bytes+p.BlobBytes > maxAllPendingBlobs:
+		return errors.New("too much skill text waits for the user already; ask again when those requests are answered")
+	}
+	s.st.RolePending = append(s.st.RolePending, p)
+	if err := s.saveLocked(); err != nil {
+		s.st.RolePending = s.st.RolePending[:len(s.st.RolePending)-1]
+		return err
+	}
+	return nil
+}
+
+func (s *store) setRoleApproval(id, approval string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.st.RolePending {
+		if s.st.RolePending[i].ID == id {
+			s.st.RolePending[i].Approval = approval
+			_ = s.saveLocked()
+		}
+	}
+}
+
+// takeRolePending removes and returns a pending change that is still wanted: an approval runs once.
+func (s *store) takeRolePending(id string, now time.Time) (rolePending, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, x := range s.st.RolePending {
+		if x.ID == id {
+			s.st.RolePending = slices.Delete(s.st.RolePending, i, i+1)
+			_ = s.saveLocked()
+			return x, now.Sub(x.Created) < rolePendingLife
+		}
+	}
+	return rolePending{}, false
+}
+
+func (s *store) rolePendings() []rolePending {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]rolePending(nil), s.st.RolePending...)
+}

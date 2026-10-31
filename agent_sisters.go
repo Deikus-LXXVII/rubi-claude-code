@@ -272,7 +272,7 @@ func (s *sisters) startAgent(ctx context.Context, h sisterHost, sister string, d
 }
 
 func (s *sisters) executeStartAgent(ctx context.Context, h sisterHost, t startTicket) (any, error) {
-	if _, ok := modeRank[t.Mode]; !ok {
+	if _, ok := modeRank[t.Mode]; !ok && (t.Role == "" || !validRoleMode(t.Mode)) {
 		return nil, errors.New("bad payload")
 	}
 	var res struct {
@@ -282,7 +282,11 @@ func (s *sisters) executeStartAgent(ctx context.Context, h sisterHost, t startTi
 	}
 	cctx, cancel := context.WithTimeout(ctx, createTimeout)
 	defer cancel()
-	err := h.HomeCall(cctx, t.Device, opAgentStart, map[string]any{"project": t.Project, "prompt": t.Task, "from": t.Sister, "bot": botID(t.Sister), "mode": t.Mode}, &res)
+	args := map[string]any{"project": t.Project, "prompt": t.Task, "from": t.Sister, "bot": botID(t.Sister), "mode": t.Mode}
+	if t.Role != "" {
+		args["role"] = t.Role
+	}
+	err := h.HomeCall(cctx, t.Device, opAgentStart, args, &res)
 	if err != nil {
 		if isUnknownOp(err) || rubiplugin.ErrorCode(err) == rubiplugin.CodeHomeFailed || rubiplugin.ErrorCode(err) == rubiplugin.CodeHomeNotPaired {
 			h.Audit("session_start_failed", map[string]any{"sister": t.Sister, "device": t.Device, "project": t.Project})
@@ -293,6 +297,9 @@ func (s *sisters) executeStartAgent(ctx context.Context, h sisterHost, t startTi
 	}
 	h.Audit("session_started", map[string]any{"sister": t.Sister, "device": t.Device, "project": t.Project, "session": res.ID, "mode": t.Mode, "queued": res.Queued})
 	out := map[string]any{"started": !res.Queued, "queued": res.Queued, "project": t.Project, "permission_mode": t.Mode}
+	if t.Role != "" {
+		out["role"] = t.Role
+	}
 	if t.Mode == "bypassPermissions" {
 		out["warning"] = agentBypassNote
 	}
@@ -303,6 +310,13 @@ func (s *sisters) executeStartAgent(ctx context.Context, h sisterHost, t startTi
 		return out, nil
 	}
 	out["session_id"] = res.ID
+	if t.Name != "" {
+		// The session's name is a label; failing to set it never undoes the start.
+		rt := renameTicket{Sister: t.Sister, Device: t.Device, DeviceName: t.DeviceName, SessionID: res.ID, Name: t.Name, Project: t.Project}
+		if _, err := s.executeRename(ctx, h, rt, "bot", "role start", nil); err != nil {
+			out["name_note"] = "the session was started but couldn't be named: " + err.Error()
+		}
+	}
 	bound, err := s.executeBind(h, bindTicket{Sister: t.Sister, Device: t.Device, DeviceName: t.DeviceName, SessionID: res.ID, Cwd: t.Cwd, RepoKey: t.Cwd, Project: t.Project})
 	if err != nil {
 		out["bound"] = false

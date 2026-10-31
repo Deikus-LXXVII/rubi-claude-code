@@ -79,6 +79,12 @@ func manifest() rubiplugin.Manifest {
 				Options: []rubiplugin.Option{{Key: "fork", Label: "Fork", Meaning: "Makes a branch of the Bot's own session's conversation as a new, idle session in the same project"}}},
 			{Kind: kindMode, Title: "Loosen the permission mode of a Claude session in a project VM", DefaultLevel: rubiplugin.Strong, Locked: true,
 				Options: []rubiplugin.Option{{Key: "mode", Label: "Change the mode", Meaning: "Moves the session to a looser permission mode: Claude asks fewer questions; bypassPermissions lets it run almost anything in the VM without asking. Push, sudo, the network outside the allow-list, paths outside /work and edits of .rubi/.claude still ask"}}},
+			{Kind: kindRoleForeign, Title: "Let a Bot change an agent role on a project it holds no trust for", DefaultLevel: rubiplugin.Strong, Locked: true,
+				Options: []rubiplugin.Option{{Key: "apply", Label: "Apply", Meaning: "Makes the change to the agent role that the approval lists, as one new version of the role (the role's history keeps the older ones, so you can revert). Nothing else changes. If the role changed since the Bot asked, the request fails and the Bot has to ask again"}}},
+			{Kind: kindRoleWiden, Title: "Let a Bot widen an agent role (MCP servers, plugins, network hosts, extra tools, a looser mode)", DefaultLevel: rubiplugin.Strong, Locked: true,
+				Options: []rubiplugin.Option{{Key: "apply", Label: "Apply", Meaning: "Gives the agent role what the approval lists: MCP servers and Claude plugins run code, hosts open the role's VM to more of the network, other tools and a looser permission mode let Claude do more without asking. The role's history keeps the older versions, so you can revert. If the role changed since the Bot asked, the request fails and the Bot has to ask again"}}},
+			{Kind: kindRoleSkillAccept, Title: "Accept a skill that Rubi's scan flagged in an agent role", DefaultLevel: rubiplugin.Tap, Locked: true,
+				Options: []rubiplugin.Option{{Key: "accept", Label: "Accept", Meaning: "The role uses the skill from its next session on. A skill is only text Claude reads; it grants no tools, hosts or permissions, but flagged text may try to steer Claude (the approval shows what was flagged)"}}},
 			{Kind: kindSetupInstall, Title: "Install or upgrade Apple's container tool for the agent path", DefaultLevel: rubiplugin.Strong, Locked: true,
 				Options: []rubiplugin.Option{{Key: "install", Label: "Install", Meaning: "Rubi Home on that computer downloads Apple's signed container installer (a pinned release, checked by size, hash and signature) and installs it; macOS then shows its own administrator dialog on that computer"}}},
 			{Kind: kindSetupNetwork, Title: "Create the host-only network of the agent path", DefaultLevel: rubiplugin.Strong, Locked: true,
@@ -93,8 +99,8 @@ func manifest() rubiplugin.Manifest {
 			{Type: eventMessage},
 			{Type: eventAsk, Untrusted: []string{"text", "kind", "title", "directory", "computer"}},
 		},
-		Config: []rubiplugin.ConfigField{{Key: "usage_warn_usd", Label: "Warn when today's Claude usage estimate is above (US dollars)", Type: "text", Default: "10",
-			Help: "A yellow notice on the usage page; nothing is ever blocked."}},
+		Config: append([]rubiplugin.ConfigField{{Key: "usage_warn_usd", Label: "Warn when today's Claude usage estimate is above (US dollars)", Type: "text", Default: "10",
+			Help: "A yellow notice on the usage page; nothing is ever blocked."}}, roleConfigFields()...),
 		Panel: "view",
 		Home:  []string{"claude", "claude-sessions", "claude-start", "claude-agent", "agent-setup"},
 	}
@@ -193,6 +199,27 @@ func main() {
 			return run(ctx, h, t)
 		})
 	}
+	p.OnExecute(kindRoleForeign, func(ctx context.Context, h *rubiplugin.Host, _ string, payload json.RawMessage) (any, error) {
+		var t roleTicket
+		if err := json.Unmarshal(payload, &t); err != nil {
+			return nil, fmt.Errorf("bad payload")
+		}
+		return sis.executeRoleChange(ctx, h, t)
+	})
+	p.OnExecute(kindRoleWiden, func(ctx context.Context, h *rubiplugin.Host, _ string, payload json.RawMessage) (any, error) {
+		var t roleTicket
+		if err := json.Unmarshal(payload, &t); err != nil {
+			return nil, fmt.Errorf("bad payload")
+		}
+		return sis.executeRoleChange(ctx, h, t)
+	})
+	p.OnExecute(kindRoleSkillAccept, func(ctx context.Context, h *rubiplugin.Host, _ string, payload json.RawMessage) (any, error) {
+		var t skillAcceptTicket
+		if err := json.Unmarshal(payload, &t); err != nil {
+			return nil, fmt.Errorf("bad payload")
+		}
+		return sis.executeSkillAccept(ctx, h, t)
+	})
 	p.OnPanel = func(ctx context.Context, h *rubiplugin.Host, op string, args json.RawMessage) (any, error) {
 		return sis.panel(ctx, h, op, args)
 	}
@@ -232,6 +259,7 @@ func main() {
 		func(_ context.Context, h *rubiplugin.Host, in mandatesIn) (any, error) {
 			return sis.mandatesTool(h, in)
 		})
+	registerRoleTools(p, sis)
 	p.Main()
 }
 

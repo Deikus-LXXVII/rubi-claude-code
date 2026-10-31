@@ -88,6 +88,11 @@ type startTicket struct {
 	Task       string `json:"task"`
 	Project    string `json:"project,omitempty"` // an agent project (claude-agent)
 	Mode       string `json:"mode,omitempty"`
+	// Role is the agent role (a Rubi Home role id) the session runs in; RoleName is for the approval's text and Name
+	// is the session's name (claude_code_role_start).
+	Role     string `json:"role,omitempty"`
+	RoleName string `json:"role_name,omitempty"`
+	Name     string `json:"name,omitempty"`
 }
 
 // startWarning is what the user is told before approving, and the Bot after a session that skips prompts.

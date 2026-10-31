@@ -106,6 +106,8 @@ type sisters struct {
 	caps map[string]capEntry
 	// setupCaps remembers which computers have the agent-setup capability and their last setup status (agent_setup.go).
 	setupCaps map[string]setupCap
+	// rc caches the roles of each computer (roles.go).
+	rc roleCache
 }
 
 type askRef struct {
