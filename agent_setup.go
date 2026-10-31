@@ -39,13 +39,15 @@ const (
 	kindSetupProject = "claude-code.setup.project"
 )
 
+// setupProject is one project row of the projects, login and selftest steps; ID is the project id (job and
+// login name a project by it).
 type setupProject struct {
-	Dir            string `json:"dir"`
-	ID             string `json:"id"`
-	LoginState     string `json:"login_state"`
-	LoginReason    string `json:"login_reason"`
-	SelftestState  string `json:"selftest_state"`
-	SelftestReason string `json:"selftest_reason"`
+	ID       string   `json:"id"`
+	Dir      string   `json:"dir"`
+	State    string   `json:"state"`
+	Reason   string   `json:"reason"`
+	Progress []string `json:"progress"`
+	Action   string   `json:"action"`
 }
 
 type setupStep struct {
@@ -84,13 +86,7 @@ func decodeSetup(raw json.RawMessage) setupStatus {
 	return st
 }
 
-// stepKey is a step's id; the projects step may be called project or projects.
-func stepKey(id string) string {
-	if id == "project" {
-		return "projects"
-	}
-	return id
-}
+func stepKey(id string) string { return id }
 
 func (st setupStatus) step(key string) (setupStep, bool) {
 	for _, x := range st.Steps {
@@ -238,29 +234,22 @@ func (s *sisters) setupPage(ctx context.Context, h sisterHost, p panelPage) (any
 		if step.State == "failed" || step.State == "needs_user" {
 			head["warn"] = true
 		}
-		blocked := step.State == "todo" && strings.HasPrefix(strings.ToLower(strings.TrimSpace(step.Reason)), "needs step")
-		can := !busy && known && step.State != "working" && !blocked
+		// Rubi Home names the one button of a row in action (none while it works or waits on an earlier step).
+		can := !busy && known && step.State != "working"
 		var actions []map[string]any
-		wanted := can && (step.State != "done" || step.Action != "") // a done step has a button only for an upgrade or update
-		switch key {
-		case "container":
-			if wanted {
-				actions = append(actions, act(ifElse(strings.Contains(strings.ToLower(step.Action), "upgrade") || step.State == "done", "Upgrade", "Install"), "setup_install", dev()))
-			}
-		case "service":
-			if wanted {
+		if can {
+			switch step.Action {
+			case "install", "upgrade":
+				actions = append(actions, act(ifElse(step.Action == "upgrade", "Upgrade", "Install"), "setup_install", dev()))
+			case "start":
 				actions = append(actions, act("Start", "setup_run", map[string]any{"device": d.ID, "step": "service"}))
-			}
-		case "network":
-			if wanted {
+			case "create":
 				actions = append(actions, act("Create", "setup_network", dev()))
-			}
-		case "image":
-			if wanted {
-				actions = append(actions, act(ifElse(strings.Contains(strings.ToLower(step.Action), "update") || step.State == "done", "Update", "Build"), "setup_run", map[string]any{"device": d.ID, "step": "image"}))
-			}
-		case "projects":
-			if can {
+			case "use_auto_address":
+				actions = append(actions, act("Use the automatic address", "setup_run", map[string]any{"device": d.ID, "step": "network", "option": "auto-address"}))
+			case "build":
+				actions = append(actions, act(ifElse(step.State == "done", "Update", "Build"), "setup_run", map[string]any{"device": d.ID, "step": "image"}))
+			case "add":
 				actions = append(actions, act("Add a folder", "setup_add", dev()))
 			}
 		}
@@ -278,9 +267,6 @@ func (s *sisters) setupPage(ctx context.Context, h sisterHost, p panelPage) (any
 		}
 
 		projects := step.Projects
-		if len(projects) == 0 && (key == "login" || key == "selftest") {
-			projects = dirs
-		}
 		if len(projects) > 20 {
 			projects = projects[:20]
 		}
@@ -289,39 +275,42 @@ func (s *sisters) setupPage(ctx context.Context, h sisterHost, p panelPage) (any
 				break
 			}
 			it := map[string]any{"title": name(pr.ID, pr.Dir)}
+			lab, ok := setupStates[pr.State]
+			if !ok {
+				lab = "unknown"
+			}
+			it["detail"] = oneLine(lab+ifElse(strings.TrimSpace(pr.Reason) != "", ". "+pr.Reason, ""), 300)
+			if pr.State == "failed" || pr.State == "needs_user" {
+				it["warn"] = true
+			}
 			pargs := map[string]any{"device": d.ID, "project": pr.ID}
 			var pact []map[string]any
-			switch key {
-			case "projects":
-				it["detail"] = "A folder the agent works in."
-				if can && pr.ID != "" {
-					pact = append(pact, map[string]any{"label": "Remove", "op": "setup_remove", "args": pargs, "danger": true, "confirm": "Remove this folder from the agent projects? Its files stay where they are."})
-				}
-			case "login", "selftest":
-				state, reason := pr.LoginState, pr.LoginReason
-				if key == "selftest" {
-					state, reason = pr.SelftestState, pr.SelftestReason
-				}
-				lab, ok := setupStates[state]
-				if !ok {
-					lab = "unknown"
-				}
-				it["detail"] = oneLine(lab+". "+reason, 300)
-				if state == "failed" || state == "needs_user" {
-					it["warn"] = true
-				}
-				if can && pr.ID != "" && state != "working" {
-					if key == "login" {
-						sub := map[string]any{"device": d.ID, "project": pr.ID, "method": "claudeai"}
-						con := map[string]any{"device": d.ID, "project": pr.ID, "method": "console"}
-						pact = append(pact, act("Sign in with a Claude subscription", "setup_login", sub), act("Sign in with an Anthropic Console account", "setup_login", con))
-					} else {
-						pact = append(pact, act("Run self-test", "setup_run", map[string]any{"device": d.ID, "project": pr.ID, "step": "selftest"}))
+			if can && pr.ID != "" && pr.State != "working" {
+				run := func(step, method string) map[string]any {
+					m := map[string]any{"device": d.ID, "project": pr.ID, "step": step}
+					if method != "" {
+						m["method"] = method
 					}
+					return m
+				}
+				switch pr.Action {
+				case "remove":
+					pact = append(pact, map[string]any{"label": "Remove", "op": "setup_remove", "args": pargs, "danger": true, "confirm": "Remove this folder from the agent projects? Its files stay where they are."})
+				case "check":
+					pact = append(pact, act("Check the sign-in", "setup_run", run("login", "")))
+				case "login", "login_again":
+					pact = append(pact, act("Sign in with a Claude subscription", "setup_run", run("login", "claudeai")), act("Sign in with an Anthropic Console account", "setup_run", run("login", "console")))
+				case "selftest":
+					pact = append(pact, act("Run self-test", "setup_run", run("selftest", "")))
 				}
 			}
 			it["actions"] = pact
 			items = append(items, it)
+			for _, l := range pr.Progress[max(0, len(pr.Progress)-setupProgress):] {
+				if l = oneLine(l, setupLineRunes); l != "" {
+					items = append(items, map[string]any{"title": l})
+				}
+			}
 		}
 
 		// A sign-in that waits for the browser: the link as text, and the buttons that use it.
@@ -357,8 +346,8 @@ func (s *sisters) setupPage(ctx context.Context, h sisterHost, p panelPage) (any
 // ---- the actions ----
 
 type setupArgs struct {
-	Device, Step, Project, Method string
-	Code                          *string
+	Device, Step, Project, Method, Option string
+	Code                                  *string
 }
 
 type setupTicket struct {
@@ -382,11 +371,24 @@ func (s *sisters) panelSetup(ctx context.Context, h sisterHost, op string, a set
 		return s.askSetup(ctx, h, d, kindSetupProject, "Add a folder as an agent project on "+d.Name,
 			"A folder chooser opens on that computer. The folder you pick becomes a project: Claude in its VM can read and write everything in it.")
 	case "setup_run":
+		args := map[string]any{"step": a.Step}
 		switch a.Step {
 		case "service", "image":
+		case "network": // only the option that clears the proxy settings; creating the network needs the approval
+			if a.Option != "auto-address" {
+				return nil, errors.New("creating the network asks for your approval")
+			}
+			args["option"] = a.Option
 		case "selftest":
 			if a.Project == "" {
 				return nil, errors.New("no project")
+			}
+		case "login": // no method only checks the sign-in
+			if a.Project == "" || a.Method != "" && a.Method != "claudeai" && a.Method != "console" {
+				return nil, errors.New("no project or sign-in method")
+			}
+			if a.Method != "" {
+				args["method"] = a.Method
 			}
 		case "all":
 			// The container and the network ask for an approval first: refuse unless both are done now.
@@ -402,16 +404,10 @@ func (s *sisters) panelSetup(ctx context.Context, h sisterHost, op string, a set
 		default:
 			return nil, errors.New("unknown step")
 		}
-		args := map[string]any{"step": a.Step}
 		if a.Project != "" {
 			args["project"] = a.Project
 		}
 		return s.setupCall(ctx, h, d, opSetupRun, args, "run "+a.Step, a.Project)
-	case "setup_login":
-		if a.Project == "" || a.Method != "claudeai" && a.Method != "console" {
-			return nil, errors.New("no project or sign-in method")
-		}
-		return s.setupCall(ctx, h, d, opSetupRun, map[string]any{"step": "login", "project": a.Project, "method": a.Method}, "sign-in "+a.Method, a.Project)
 	case "setup_open":
 		if a.Project == "" {
 			return nil, errors.New("no project")

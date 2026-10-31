@@ -47,6 +47,8 @@ func manifest() rubiplugin.Manifest {
 		Needs:       "Rubi Home on the computer where Claude Code runs, and Claude Code's hook set up (see the plugin's README).",
 		Publisher:   rubiplugin.Publisher{Name: "Rubi-Project", Key: PublisherKey},
 		Source:      "https://github.com/Deikus-LXXVII/rubi-claude-code",
+		// The "agent-setup" capability (the setup page) is accepted by a core newer than v0.13.0; as with
+		// "claude-agent", this plugin version must not be published before the Rubi release that knows it.
 		// v0.13.0: Rubi Home's "claude-start" capability (a v0.12 core refuses the manifest), the panel's
 		// view prompt (Rename), claude-sessions.bound and the list's truncated/real_project_root; v0.12.0
 		// brought "claude-sessions", strict delivery of addressed events and rubi_verified_agent.
@@ -94,7 +96,7 @@ func manifest() rubiplugin.Manifest {
 		Config: []rubiplugin.ConfigField{{Key: "usage_warn_usd", Label: "Warn when today's Claude usage estimate is above (US dollars)", Type: "text", Default: "10",
 			Help: "A yellow notice on the usage page; nothing is ever blocked."}},
 		Panel: "view",
-		Home:  []string{"claude", "claude-sessions", "claude-start", "claude-agent"},
+		Home:  []string{"claude", "claude-sessions", "claude-start", "claude-agent", "agent-setup"},
 	}
 }
 

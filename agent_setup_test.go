@@ -54,20 +54,34 @@ func (f *fakeSetup) call(op string, args, out any) error {
 	return json.Unmarshal(b, out)
 }
 
-func step(id, state, reason string, extra map[string]any) map[string]any {
+func step(id, state, reason, action string, extra map[string]any) map[string]any {
 	m := map[string]any{"id": id, "state": state, "reason": reason}
+	if action != "" {
+		m["action"] = action
+	}
 	for k, v := range extra {
 		m[k] = v
 	}
 	return m
 }
 
-var setupProj = map[string]any{"dir": "/home/alice/my-project", "id": "p1", "login_state": "todo", "login_reason": "Not signed in", "selftest_state": "todo"}
+func row(state, reason, action string) map[string]any {
+	m := map[string]any{"dir": "/home/alice/my-project", "id": "p1", "state": state}
+	if reason != "" {
+		m["reason"] = reason
+	}
+	if action != "" {
+		m["action"] = action
+	}
+	return m
+}
 
+// allDone is a status in Rubi Home's shape: steps 1 to 5 done, the project not signed in and not tested.
 func allDone(extra ...map[string]any) map[string]any {
-	steps := []map[string]any{step("container", "done", "Installed 1.2", nil), step("service", "done", "Running", nil), step("network", "done", "Host-only", nil),
-		step("image", "done", "Built", nil), step("projects", "done", "1 folder", map[string]any{"projects": []any{setupProj}}),
-		step("login", "todo", "Sign in", map[string]any{"projects": []any{setupProj}}), step("selftest", "todo", "Not run", map[string]any{"projects": []any{setupProj}})}
+	steps := []map[string]any{step("container", "done", "Installed 1.2", "", nil), step("service", "done", "Running", "", nil), step("network", "done", "Host-only", "", nil),
+		step("image", "done", "Built", "", nil), step("projects", "done", "1 folder", "add", map[string]any{"projects": []any{row("done", "", "remove")}}),
+		step("login", "needs_user", "Not signed in", "", map[string]any{"projects": []any{row("needs_user", "Not signed in", "login")}}),
+		step("selftest", "todo", "Not run", "", map[string]any{"projects": []any{row("todo", "Not run", "selftest")}})}
 	st := map[string]any{"steps": steps}
 	for _, e := range extra {
 		for k, v := range e {
@@ -136,21 +150,21 @@ func TestSetupEntryNeedsCapability(t *testing.T) {
 
 func TestSetupPageStates(t *testing.T) {
 	// Nothing done: only the first step has a button, the rest wait for it.
-	st := map[string]any{"steps": []any{step("container", "todo", "Not installed", nil), step("service", "todo", "Needs step 1 first", nil),
-		step("network", "todo", "Needs step 1 first", nil), step("image", "todo", "Needs step 2 first", nil), step("projects", "todo", "No folder", nil),
-		step("login", "todo", "Needs step 5 first", nil), step("selftest", "todo", "Needs step 6 first", nil)}}
+	st := map[string]any{"steps": []any{step("container", "todo", "Not installed", "install", nil), step("service", "todo", "Needs step 1 first", "", nil),
+		step("network", "todo", "Needs step 1 first", "", nil), step("image", "todo", "Needs step 2 first", "", nil), step("projects", "todo", "No folder", "", nil),
+		step("login", "todo", "Needs step 5 first", "", nil), step("selftest", "todo", "Needs step 6 first", "", nil)}}
 	f, s := setupFixture(t, st)
 	pg := setupView(t, s, f)
 	if _, r := pg["refresh"]; r {
 		t.Error("refresh while idle")
 	}
 	a := allActions(pg)
-	for _, want := range []string{"Install", "Add a folder", "Refresh"} {
+	for _, want := range []string{"Install", "Refresh"} {
 		if a[want] == nil {
 			t.Errorf("no %q", want)
 		}
 	}
-	for _, no := range []string{"Start", "Create", "Build", "Set up everything", "Cancel", "Run self-test"} {
+	for _, no := range []string{"Start", "Create", "Build", "Add a folder", "Set up everything", "Cancel", "Run self-test"} {
 		if a[no] != nil {
 			t.Errorf("%q shown", no)
 		}
@@ -158,9 +172,10 @@ func TestSetupPageStates(t *testing.T) {
 	// Failed and needs_user are warned; an upgrade offered on a done step.
 	st = allDone()
 	steps := st["steps"].([]map[string]any)
-	steps[1] = step("service", "failed", "Didn't start", nil)
-	steps[0] = step("container", "done", "Old", map[string]any{"action": "upgrade"})
-	steps[3] = step("image", "needs_user", "Do something", nil)
+	steps[1] = step("service", "failed", "Didn't start", "start", nil)
+	steps[0] = step("container", "done", "Old", "upgrade", nil)
+	steps[3] = step("image", "needs_user", "Do something", "build", nil)
+	steps[2] = step("network", "failed", "Proxy address set", "use_auto_address", nil)
 	f, s = setupFixture(t, st)
 	pg = setupView(t, s, f)
 	secs := pg["sections"].([]map[string]any)
@@ -168,17 +183,30 @@ func TestSetupPageStates(t *testing.T) {
 		t.Error("no warn on failed/needs_user")
 	}
 	a = allActions(pg)
-	if a["Upgrade"] == nil || a["Start"] == nil || a["Build"] == nil || a["Set up everything"] == nil {
+	if a["Upgrade"] == nil || a["Start"] == nil || a["Build"] == nil || a["Use the automatic address"] == nil || a["Set up everything"] != nil {
 		t.Fatalf("%v", a)
 	}
-	// All done: sign-in buttons per project, self-test, no step buttons.
+	// All done: sign-in buttons per project, self-test, no step buttons but Add a folder.
 	f, s = setupFixture(t, allDone())
 	a = allActions(setupView(t, s, f))
-	if a["Sign in with a Claude subscription"] == nil || a["Sign in with an Anthropic Console account"] == nil || a["Run self-test"] == nil || a["Remove"] == nil {
+	if a["Sign in with a Claude subscription"] == nil || a["Sign in with an Anthropic Console account"] == nil || a["Run self-test"] == nil || a["Remove"] == nil || a["Add a folder"] == nil || a["Set up everything"] == nil {
 		t.Fatalf("%v", a)
 	}
-	if a["Install"] != nil || a["Start"] != nil {
+	if a["Install"] != nil || a["Start"] != nil || a["Check the sign-in"] != nil {
 		t.Error("button on a done step")
+	}
+	// A project row that Home says to check, and one that may sign in again.
+	st = allDone()
+	st["steps"].([]map[string]any)[5] = step("login", "todo", "Check", "", map[string]any{"projects": []any{row("todo", "Not checked", "check")}})
+	st["steps"].([]map[string]any)[6] = step("selftest", "done", "Passed", "", map[string]any{"projects": []any{row("done", "", "")}})
+	f.setup.status = st
+	a = allActions(setupView(t, s, f))
+	if a["Check the sign-in"] == nil || a["Run self-test"] != nil || a["Sign in with a Claude subscription"] != nil {
+		t.Fatalf("%v", a)
+	}
+	st["steps"].([]map[string]any)[5] = step("login", "done", "Signed in", "", map[string]any{"projects": []any{row("done", "", "login_again")}})
+	if a = allActions(setupView(t, s, f)); a["Sign in with an Anthropic Console account"] == nil {
+		t.Fatalf("%v", a)
 	}
 }
 
@@ -190,7 +218,7 @@ func TestSetupPageWorkingAndSignIn(t *testing.T) {
 	st := allDone(map[string]any{"job": map[string]any{"step": "login", "project": "p1", "started": "now"},
 		"login": map[string]any{"project": "p1", "url": "https://claude.com/oauth?state=abc", "wants_code": true}})
 	steps := st["steps"].([]map[string]any)
-	steps[5] = step("login", "working", "Signing in", map[string]any{"progress": lines, "projects": []any{setupProj}})
+	steps[5] = step("login", "working", "Signing in", "", map[string]any{"progress": lines, "projects": []any{row("working", "", "")}})
 	f, s := setupFixture(t, st)
 	pg := setupView(t, s, f)
 	if pg["refresh"] != 3 {
@@ -279,8 +307,10 @@ func TestSetupOpsRouteToHome(t *testing.T) {
 		{"setup_run", `{"device":"dev_mac","step":"image"}`, opSetupRun, map[string]any{"step": "image"}},
 		{"setup_run", `{"device":"dev_mac","step":"selftest","project":"p1"}`, opSetupRun, map[string]any{"step": "selftest", "project": "p1"}},
 		{"setup_run", `{"device":"dev_mac","step":"all"}`, opSetupRun, map[string]any{"step": "all"}},
-		{"setup_login", `{"device":"dev_mac","project":"p1","method":"claudeai"}`, opSetupRun, map[string]any{"step": "login", "project": "p1", "method": "claudeai"}},
-		{"setup_login", `{"device":"dev_mac","project":"p1","method":"console"}`, opSetupRun, map[string]any{"step": "login", "project": "p1", "method": "console"}},
+		{"setup_run", `{"device":"dev_mac","step":"network","option":"auto-address"}`, opSetupRun, map[string]any{"step": "network", "option": "auto-address"}},
+		{"setup_run", `{"device":"dev_mac","step":"login","project":"p1"}`, opSetupRun, map[string]any{"step": "login", "project": "p1"}},
+		{"setup_run", `{"device":"dev_mac","step":"login","project":"p1","method":"claudeai"}`, opSetupRun, map[string]any{"step": "login", "project": "p1", "method": "claudeai"}},
+		{"setup_run", `{"device":"dev_mac","step":"login","project":"p1","method":"console"}`, opSetupRun, map[string]any{"step": "login", "project": "p1", "method": "console"}},
 		{"setup_open", `{"device":"dev_mac","project":"p1"}`, opSetupOpen, map[string]any{"project": "p1"}},
 		{"setup_remove", `{"device":"dev_mac","project":"p1"}`, opSetupRemove, map[string]any{"dir": "/home/alice/my-project"}},
 		{"setup_cancel", `{"device":"dev_mac"}`, opSetupCancel, map[string]any{}},
@@ -305,8 +335,9 @@ func TestSetupOpsRouteToHome(t *testing.T) {
 	}
 	// Refused: the steps that need an approval can't be run directly, bad input.
 	for _, c := range [][2]string{{"setup_run", `{"device":"dev_mac","step":"container"}`}, {"setup_run", `{"device":"dev_mac","step":"network"}`},
-		{"setup_run", `{"device":"dev_mac","step":"login","project":"p1"}`}, {"setup_run", `{"device":"dev_mac","step":"selftest"}`},
-		{"setup_login", `{"device":"dev_mac","project":"p1","method":"x"}`}, {"setup_remove", `{"device":"dev_mac","project":"nope"}`},
+		{"setup_run", `{"device":"dev_mac","step":"network","option":"other"}`}, {"setup_run", `{"device":"dev_mac","step":"selftest"}`},
+		{"setup_run", `{"device":"dev_mac","step":"login"}`}, {"setup_run", `{"device":"dev_mac","step":"login","project":"p1","method":"x"}`},
+		{"setup_login", `{"device":"dev_mac","project":"p1","method":"claudeai"}`}, {"setup_remove", `{"device":"dev_mac","project":"nope"}`},
 		{"setup_run", `{"device":"dev_nope","step":"service"}`}} {
 		n := len(f.setup.calls)
 		if _, err := do(c[0], c[1]); err == nil {
@@ -325,7 +356,7 @@ func TestSetupOpsRouteToHome(t *testing.T) {
 
 func TestSetupAllNeverSkipsApprovals(t *testing.T) {
 	st := allDone()
-	st["steps"].([]map[string]any)[2] = step("network", "todo", "No network", nil)
+	st["steps"].([]map[string]any)[2] = step("network", "todo", "No network", "create", nil)
 	f, s := setupFixture(t, st)
 	if _, err := s.panel(context.Background(), f, "setup_run", json.RawMessage(`{"device":"dev_mac","step":"all"}`)); err == nil {
 		t.Fatal("all ran with the network step not done")

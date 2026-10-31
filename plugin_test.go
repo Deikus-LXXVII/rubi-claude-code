@@ -442,7 +442,7 @@ func TestPollsEveryComputerAndStops(t *testing.T) {
 
 func TestManifest(t *testing.T) {
 	m := manifest()
-	if m.ID != "claude-code" || len(m.Egress) != 0 || len(m.Secrets) != 0 || len(m.Home) != 4 || m.Home[0] != "claude" || m.Home[1] != "claude-sessions" || m.Home[2] != "claude-start" || m.Home[3] != "claude-agent" || m.Hooks {
+	if m.ID != "claude-code" || len(m.Egress) != 0 || len(m.Secrets) != 0 || len(m.Home) != 5 || m.Home[0] != "claude" || m.Home[1] != "claude-sessions" || m.Home[2] != "claude-start" || m.Home[3] != "claude-agent" || m.Home[4] != "agent-setup" || m.Hooks {
 		t.Fatalf("permissions: %+v", m)
 	}
 	run, _ := m.Action(kindRun)

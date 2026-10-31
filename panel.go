@@ -71,6 +71,7 @@ func (s *sisters) panel(ctx context.Context, h sisterHost, op string, args json.
 		Text      *string `json:"text"`
 		Step      string  `json:"step"`
 		Method    string  `json:"method"`
+		Option    string  `json:"option"`
 		Code      *string `json:"code"`
 	}
 	if len(args) > 0 && string(args) != "null" {
@@ -83,8 +84,8 @@ func (s *sisters) panel(ctx context.Context, h sisterHost, op string, args json.
 		if a.Page != "" {
 			return s.agentPage(ctx, h, panelPage{Page: a.Page, Device: a.Device, Project: a.Project, Session: a.SessionID})
 		}
-	case "setup_install", "setup_network", "setup_add", "setup_run", "setup_all", "setup_login", "setup_open", "setup_code", "setup_remove", "setup_cancel":
-		return s.panelSetup(ctx, h, op, setupArgs{Device: a.Device, Step: a.Step, Project: a.Project, Method: a.Method, Code: a.Code})
+	case "setup_install", "setup_network", "setup_add", "setup_run", "setup_open", "setup_code", "setup_remove", "setup_cancel":
+		return s.panelSetup(ctx, h, op, setupArgs{Device: a.Device, Step: a.Step, Project: a.Project, Method: a.Method, Option: a.Option, Code: a.Code})
 	case "interrupt", "close":
 		return s.panelAgentSimple(ctx, h, "claude-agent."+op, a.Device, a.Project, a.SessionID)
 	case "fork":

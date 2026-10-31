@@ -419,7 +419,7 @@ for a computer whose Rubi Home doesn't report the capability, and for bindings m
 **Capability detection.** For each paired computer the plugin calls `claude-agent.status`. An answer means the
 computer has the capability (remembered for 5 minutes; "no" for 1 minute, so an updated Rubi Home is noticed).
 Such a computer is polled with `claude-agent.next`; the hook's `claude.next` poll goes on as before. The
-manifest declares the `claude-agent` Home capability; `min_rubi` stays at v0.13.0 until a Rubi release knows
+manifest declares the `claude-agent` and `agent-setup` Home capabilities; `min_rubi` stays at v0.13.0 until a Rubi release knows
 that capability (a core that doesn't know it refuses the manifest, so this plugin version must not be
 published before that release).
 
@@ -499,7 +499,11 @@ When a computer's Rubi Home reports `agent-setup` (probed with `agent-setup.stat
 step: Apple's container tool, its service, the host-only network, the runner image, the project folders, Claude's
 sign-in per project and a self-test per project (the contract is `docs/design/home-setup-wizard.md` in the Rubi
 repository). Each step shows its state and reason, the last 20 progress lines while it works, and its buttons;
-the page reloads itself every 3 seconds while a job runs or a sign-in waits, and not otherwise.
+the page reloads itself every 3 seconds while a job runs or a sign-in waits, and not otherwise. A button is drawn
+from the `action` Rubi Home names on a step row (`install`, `upgrade`, `start`, `create`, `use_auto_address`,
+`build`, `add`) or a project row (`remove`, `check`, `login`, `login_again`, `selftest`); no `action`, no button.
+"Use the automatic address" (`run {step: network, option: auto-address}`) only clears the proxy address settings
+and needs no approval; "Check the sign-in" runs `login` without a method, which only probes.
 
 Approvals: **Install / Upgrade** (`claude-code.setup.install`), **Create** the network (`claude-code.setup.network`)
 and **Add a folder** (`claude-code.setup.project`) are strong approvals; the call to Rubi Home
