@@ -1,6 +1,6 @@
 # B5: Mandate hardening (explicit option tables)
 
-Brief from Цитри's audit (2026-10-30, F2/B5). Branch `citri/mandate-hardening` from `citri/cc-polish`
+Brief from an external audit (2026-10-30, F2/B5). Branch `mandate-hardening` from `cc-polish`
 (A6–A11, A17, A18), not pushed. A4/A5 (the F2 probe cases) are already in mandate.go and
 `TestMandateWritesAndRunsOnlyInside`; this task makes the design deny-by-default.
 

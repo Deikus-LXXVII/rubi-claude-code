@@ -32,27 +32,27 @@ var fuzzOpts = []string{"-v", "-n", "-r", "-f", "-l", "-a", "-p", "-o", "-t", "-
 	"-zq", "--color", "--color=never", "--stat", "--oneline", "--cached", "--no-edit", "--amend", "--continue", "--abort", "--include",
 	"--exclude", "--files-from", "--target-directory", "--target-directory=/tmp", "--", "-", "-o/tmp/x", "-coverprofile=/tmp/c",
 	"-C..", "--cwd=..", "--manifest-path", "--junitxml=/tmp/x", "-c", "--ext-diff", "--textconv", "--exec", "--edit", "--interactive",
-	"-gcflags='-o /Users/v/x'", "-ldflags='-o /Users/v/x'", "-ldflags='-s -w'", "-gcflags='all=-N -l'", "-ldflags='-extar sh'", "-o addopts='--junitxml /tmp/x'",
+	"-gcflags='-o /Users/alice/x'", "-ldflags='-o /Users/alice/x'", "-ldflags='-s -w'", "-gcflags='all=-N -l'", "-ldflags='-extar sh'", "-o addopts='--junitxml /tmp/x'",
 	"-o log_cli=true", "-f -", "-f-", "--file=-", "-s", "--symbolic", "-t", "--staged", "-S", "--worktree", "-W", "--source=HEAD", "-gcflags=-cpuprofile=/tmp/x"}
 
-var fuzzOperands = []string{"a.txt", "sub/b.go", "./", "src/main.go", "/Users/v/project/out", "/Users/v/project/x/../y.txt", "/tmp/x",
-	"../x", "~/x", ".git/hooks/x", ".git", "/Users/v/.zshrc", "/Users/v/.ssh/id_rsa", ".env", "https://example.com/x", "git@host:r/p.git",
+var fuzzOperands = []string{"a.txt", "sub/b.go", "./", "src/main.go", "/Users/alice/project/out", "/Users/alice/project/x/../y.txt", "/tmp/x",
+	"../x", "~/x", ".git/hooks/x", ".git", "/Users/alice/.zshrc", "/Users/alice/.ssh/id_rsa", ".env", "https://example.com/x", "git@host:r/p.git",
 	"HEAD", "main", "755", "+x", "k=v", "CC=gcc", "SHELL=sh", "release", "build", "*.go", "sub/*", "/tmp/*", "~", "..", ".", "-n5",
-	"/Users/v/project/.git/config", "/Users/v/project/sub/../.git/x", "/Users/v/project/../x", "x:/tmp/y", "a,/tmp/b", "html:/tmp/c",
-	"/Users/v/Documents/secrets/x", "./.git/x", "sub/.git", "-",
-	".GIT/hooks/x", ".Git", "sub/.GiT/x", ".GIT", "'a b/../../x'", "'-o /Users/v/x'", "'a b'", "../..", "../", "sub", "nosuch", "l", "../Documents",
+	"/Users/alice/project/.git/config", "/Users/alice/project/sub/../.git/x", "/Users/alice/project/../x", "x:/tmp/y", "a,/tmp/b", "html:/tmp/c",
+	"/Users/alice/Documents/secrets/x", "./.git/x", "sub/.git", "-",
+	".GIT/hooks/x", ".Git", "sub/.GiT/x", ".GIT", "'a b/../../x'", "'-o /Users/alice/x'", "'a b'", "../..", "../", "sub", "nosuch", "l", "../Documents",
 	"~/.s?h/i*", "./.s?h/i*", "~/.s[s]h/id_*", "./.e*", "*", "i*", ".s[s]h", "'$(id)'", "'$(shell touch /tmp/pwned)'", "'x=$(shell id)'",
 	"CC=./cc", "V=1", "X=a/b", "GOFLAGS=-toolexec=sh", "/etc/*", "1/../../pwned", "2foo", "link"}
 
-var fuzzEnvs = []string{"", "", "", "", "", "FOO=1 ", "CI=1 ", "CC=sh ", "CC='sh -c id' ", "GOCACHE=/Users/v/x ", "CDPATH=/ ", "XDG_CONFIG_HOME=evil ", "path=/x ",
-	"IFS=x ", "TMPDIR=/Users/v/x ", "GOOS=linux ", "TZ=UTC ", "NO_COLOR=1 ", "MAKEFILES=/x ", "GNUMAKEFLAGS=--eval=x ", "CI=../x ", "CI=.GIT/x ", "time ", "nice -n 5 ", "timeout 5 ", "command "}
+var fuzzEnvs = []string{"", "", "", "", "", "FOO=1 ", "CI=1 ", "CC=sh ", "CC='sh -c id' ", "GOCACHE=/Users/alice/x ", "CDPATH=/ ", "XDG_CONFIG_HOME=evil ", "path=/x ",
+	"IFS=x ", "TMPDIR=/Users/alice/x ", "GOOS=linux ", "TZ=UTC ", "NO_COLOR=1 ", "MAKEFILES=/x ", "GNUMAKEFLAGS=--eval=x ", "CI=../x ", "CI=.GIT/x ", "time ", "nice -n 5 ", "timeout 5 ", "command "}
 
 var fuzzSeps = []string{" ; ", " && ", " | ", "\n", " || ", " & ", " && ", " && "}
 
 var fuzzRedirs = []string{" > ", " >> ", " < ", " >& ", " >&", " 2>&", " &> ", " >| "}
 
-var fuzzRedirTargets = []string{"out.txt", "/dev/null", "/tmp/x", "../x", "~/x", ".git/hooks/x", "/Users/v/project/y", "/Users/v/.zshrc", "sub/z",
-	"/Users/v/project/.git/x", "./.git/config", ".GIT/hooks/x", "1/../../pwned", "2foo", "1", "2", "-", "l/pwn", "3x"}
+var fuzzRedirTargets = []string{"out.txt", "/dev/null", "/tmp/x", "../x", "~/x", ".git/hooks/x", "/Users/alice/project/y", "/Users/alice/.zshrc", "sub/z",
+	"/Users/alice/project/.git/x", "./.git/config", ".GIT/hooks/x", "1/../../pwned", "2foo", "1", "2", "-", "l/pwn", "3x"}
 
 type byteSrc struct {
 	b []byte

@@ -268,7 +268,7 @@ func newRequest(command string) request {
 	in, _ := json.Marshal(map[string]any{"command": command, "description": "List files"})
 	sum := sha256.Sum256(in)
 	return request{ID: "cc_1", SessionID: "sess-1", ToolName: "Bash", ToolInput: string(in), Digest: hex.EncodeToString(sum[:]),
-		Command: command, Description: "List files", Cwd: "/Users/v/project", ExpiresAt: time.Now().Add(time.Minute)}
+		Command: command, Description: "List files", Cwd: "/Users/alice/project", ExpiresAt: time.Now().Add(time.Minute)}
 }
 
 var mac = rubiplugin.HomeDevice{ID: "dev_mac", Name: "Mac"}

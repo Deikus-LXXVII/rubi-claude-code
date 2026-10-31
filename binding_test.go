@@ -12,9 +12,9 @@ import (
 	"github.com/Deikus-LXXVII/rubi/sdk/rubiplugin"
 )
 
-var mainSess = session{SessionID: "cli-1", AppSessionID: "local_a", Title: "Rubi main", Cwd: "/Users/v/rubi", RepoKey: "github.com/v/rubi", Role: "main", Source: "desktop", PermissionMode: "default", State: "idle"}
-var subSess = session{SessionID: "cli-2", AppSessionID: "local_b", Title: "Rubi sub", Cwd: "/Users/v/rubi/.claude/worktrees/x", RepoKey: "github.com/v/rubi", Role: "sub", Parent: "local_a", Source: "desktop", State: "busy"}
-var otherSess = session{SessionID: "cli-3", Title: "Other", Cwd: "/Users/v/other", RepoKey: "github.com/v/other", Role: "main", Source: "transcript", PermissionMode: "bypassPermissions", State: "idle"}
+var mainSess = session{SessionID: "cli-1", AppSessionID: "local_a", Title: "Rubi main", Cwd: "/Users/alice/rubi", RepoKey: "github.com/alice/rubi", Role: "main", Source: "desktop", PermissionMode: "default", State: "idle"}
+var subSess = session{SessionID: "cli-2", AppSessionID: "local_b", Title: "Rubi sub", Cwd: "/Users/alice/rubi/.claude/worktrees/x", RepoKey: "github.com/alice/rubi", Role: "sub", Parent: "local_a", Source: "desktop", State: "busy"}
+var otherSess = session{SessionID: "cli-3", Title: "Other", Cwd: "/Users/alice/other", RepoKey: "github.com/alice/other", Role: "main", Source: "transcript", PermissionMode: "bypassPermissions", State: "idle"}
 
 func boundFixture(t *testing.T) (*fakeHost, *sisters, string) {
 	t.Helper()
@@ -24,7 +24,7 @@ func boundFixture(t *testing.T) (*fakeHost, *sisters, string) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	if _, err := s.bindTool(ctx, f, bindIn{VerifiedAgent: "Citri", SessionID: "local_a"}); err != nil {
+	if _, err := s.bindTool(ctx, f, bindIn{VerifiedAgent: "Alice", SessionID: "local_a"}); err != nil {
 		t.Fatal(err)
 	}
 	if len(f.submits) != 1 || f.submits[0].Kind != kindBind {
@@ -42,7 +42,7 @@ func boundFixture(t *testing.T) (*fakeHost, *sisters, string) {
 		t.Fatalf("the approval result carries the bind code: %s", raw)
 	}
 	ev := f.events[len(f.events)-1]
-	if ev["_type"] != eventBound || ev["_agent"] != "Citri" {
+	if ev["_type"] != eventBound || ev["_agent"] != "Alice" {
 		t.Fatalf("the code didn't go to the sister alone: %+v", ev)
 	}
 	code := ev["bind_code"].(string)
@@ -52,7 +52,7 @@ func boundFixture(t *testing.T) (*fakeHost, *sisters, string) {
 func TestBindSendRoute(t *testing.T) {
 	f, s, code := boundFixture(t)
 	ctx := context.Background()
-	if f.events[0]["_type"] != eventBound || f.events[0]["_agent"] != "Citri" || f.events[0]["bind_code"] != code {
+	if f.events[0]["_type"] != eventBound || f.events[0]["_agent"] != "Alice" || f.events[0]["bind_code"] != code {
 		t.Fatalf("bound event: %+v", f.events[0])
 	}
 	// The binding is saved and survives a restart.
@@ -61,19 +61,19 @@ func TestBindSendRoute(t *testing.T) {
 		t.Fatalf("saved bindings: %v %+v", err, s2.st.bindings())
 	}
 
-	if _, err := s.sendTool(ctx, f, sendIn{Sister: "Citri", BindCode: "wrong", Text: "hi"}); err == nil {
+	if _, err := s.sendTool(ctx, f, sendIn{Sister: "Alice", BindCode: "wrong", Text: "hi"}); err == nil {
 		t.Fatal("send with a wrong code went through")
 	}
 	if _, err := s.sendTool(ctx, f, sendIn{Sister: "Other", BindCode: code, Text: "hi"}); err == nil {
 		t.Fatal("another Bot sent with the code")
 	}
-	if _, err := s.sendTool(ctx, f, sendIn{Sister: "Citri", BindCode: code, Text: strings.Repeat("x", maxSendText+1)}); err == nil {
+	if _, err := s.sendTool(ctx, f, sendIn{Sister: "Alice", BindCode: code, Text: strings.Repeat("x", maxSendText+1)}); err == nil {
 		t.Fatal("bulky text went through")
 	}
-	if _, err := s.sendTool(ctx, f, sendIn{Sister: "Citri", BindCode: code, Text: "audit done: 2 findings"}); err != nil {
+	if _, err := s.sendTool(ctx, f, sendIn{Sister: "Alice", BindCode: code, Text: "audit done: 2 findings"}); err != nil {
 		t.Fatal(err)
 	}
-	if len(f.sent) != 1 || f.sent[0]["session_id"] != "cli-1" || f.sent[0]["from"] != "Citri" {
+	if len(f.sent) != 1 || f.sent[0]["session_id"] != "cli-1" || f.sent[0]["from"] != "Alice" {
 		t.Fatalf("sent: %+v", f.sent)
 	}
 
@@ -81,7 +81,7 @@ func TestBindSendRoute(t *testing.T) {
 	f.mu.Lock()
 	f.sessions[0].SessionID = "cli-1b"
 	f.mu.Unlock()
-	if _, err := s.sendTool(ctx, f, sendIn{Sister: "Citri", BindCode: code, Text: "again"}); err != nil {
+	if _, err := s.sendTool(ctx, f, sendIn{Sister: "Alice", BindCode: code, Text: "again"}); err != nil {
 		t.Fatal(err)
 	}
 	if f.sent[1]["session_id"] != "cli-1b" || !slices.Contains(f.audits, "binding_followed") {
@@ -89,11 +89,11 @@ func TestBindSendRoute(t *testing.T) {
 	}
 
 	n := len(f.events)
-	s.route(ctx, f, mac, outMsg{ID: "o1", Kind: "reply", SessionID: "cli-1b", To: "Citri", Text: "thanks, fixed"})
+	s.route(ctx, f, mac, outMsg{ID: "o1", Kind: "reply", SessionID: "cli-1b", To: "Alice", Text: "thanks, fixed"})
 	s.route(ctx, f, mac, outMsg{ID: "o2", Kind: "reply", SessionID: "cli-1b", To: "Mallory", Text: "x"})
-	s.route(ctx, f, mac, outMsg{ID: "o3", Kind: "reply", SessionID: "cli-3", To: "Citri", Text: "x"})
+	s.route(ctx, f, mac, outMsg{ID: "o3", Kind: "reply", SessionID: "cli-3", To: "Alice", Text: "x"})
 	got := f.events[n:]
-	if len(got) != 1 || got[0]["_type"] != eventReply || got[0]["_agent"] != "Citri" || got[0]["text"] != "thanks, fixed" {
+	if len(got) != 1 || got[0]["_type"] != eventReply || got[0]["_agent"] != "Alice" || got[0]["text"] != "thanks, fixed" {
 		t.Fatalf("replies routed: %+v", got)
 	}
 
@@ -105,7 +105,7 @@ func TestBindSendRoute(t *testing.T) {
 		t.Fatalf("asks routed: %+v", got)
 	}
 	askID := got[0]["ask_id"].(string)
-	if _, err := s.sendTool(ctx, f, sendIn{Sister: "Citri", BindCode: code, Text: "v2", ReplyToAsk: askID}); err != nil {
+	if _, err := s.sendTool(ctx, f, sendIn{Sister: "Alice", BindCode: code, Text: "v2", ReplyToAsk: askID}); err != nil {
 		t.Fatal(err)
 	}
 	if f.sent[2]["session_id"] != "cli-2" {
@@ -119,13 +119,13 @@ func TestBindOneBotPerSession(t *testing.T) {
 	if _, err := s.bindTool(ctx, f, bindIn{VerifiedAgent: "Other", SessionID: "cli-1"}); err == nil {
 		t.Fatal("a second Bot could ask to bind the same session")
 	}
-	if _, err := s.unbindTool(ctx, f, unbindIn{Sister: "Citri", BindCode: "nope"}); err == nil {
+	if _, err := s.unbindTool(ctx, f, unbindIn{Sister: "Alice", BindCode: "nope"}); err == nil {
 		t.Fatal("unbind without the code")
 	}
-	if _, err := s.unbindTool(ctx, f, unbindIn{Sister: "Citri", BindCode: code}); err != nil {
+	if _, err := s.unbindTool(ctx, f, unbindIn{Sister: "Alice", BindCode: code}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.sendTool(ctx, f, sendIn{Sister: "Citri", BindCode: code, Text: "hi"}); err == nil {
+	if _, err := s.sendTool(ctx, f, sendIn{Sister: "Alice", BindCode: code, Text: "hi"}); err == nil {
 		t.Fatal("sent after unbinding")
 	}
 }
@@ -137,7 +137,7 @@ func TestSessionsTool(t *testing.T) {
 		t.Fatal(err)
 	}
 	items := out.(map[string]any)["sessions"].([]map[string]any)
-	if len(items) != 3 || items[0]["bound_to"] != "Citri" || items[1]["bound_to"] != nil || items[2]["note"] != bypassPermsNote {
+	if len(items) != 3 || items[0]["bound_to"] != "Alice" || items[1]["bound_to"] != nil || items[2]["note"] != bypassPermsNote {
 		t.Fatalf("sessions: %+v", items)
 	}
 }
@@ -145,11 +145,11 @@ func TestSessionsTool(t *testing.T) {
 func TestSendRateLimit(t *testing.T) {
 	f, s, code := boundFixture(t)
 	for i := range sendsPerHour {
-		if _, err := s.sendTool(context.Background(), f, sendIn{Sister: "Citri", BindCode: code, Text: "x"}); err != nil {
+		if _, err := s.sendTool(context.Background(), f, sendIn{Sister: "Alice", BindCode: code, Text: "x"}); err != nil {
 			t.Fatalf("send %d: %v", i, err)
 		}
 	}
-	if _, err := s.sendTool(context.Background(), f, sendIn{Sister: "Citri", BindCode: code, Text: "x"}); err == nil {
+	if _, err := s.sendTool(context.Background(), f, sendIn{Sister: "Alice", BindCode: code, Text: "x"}); err == nil {
 		t.Fatal("no rate limit")
 	}
 }
@@ -230,13 +230,13 @@ func TestPanel(t *testing.T) {
 		t.Fatal(err)
 	}
 	b, _ := json.Marshal(v)
-	if !strings.Contains(string(b), "md_x") || !strings.Contains(string(b), "Citri") {
+	if !strings.Contains(string(b), "md_x") || !strings.Contains(string(b), "Alice") {
 		t.Fatalf("view: %s", b)
 	}
 	if _, err := s.panel(context.Background(), f, "revoke", json.RawMessage(`{"id":"md_x"}`)); err != nil || len(s.st.mandates(now)) != 0 {
 		t.Fatal("revoke from the panel failed")
 	}
-	if _, err := s.panel(context.Background(), f, "unbind", json.RawMessage(`{"sister":"Citri"}`)); err != nil || len(s.st.bindings()) != 0 {
+	if _, err := s.panel(context.Background(), f, "unbind", json.RawMessage(`{"sister":"Alice"}`)); err != nil || len(s.st.bindings()) != 0 {
 		t.Fatal("unbind from the panel failed")
 	}
 	// Unbinding what isn't bound changes nothing, so the audit log doesn't claim a removal.
@@ -244,7 +244,7 @@ func TestPanel(t *testing.T) {
 		return len(slices.DeleteFunc(slices.Clone(f.audits), func(a string) bool { return a != "binding_removed" }))
 	}
 	n := removed()
-	if v, err := s.panel(context.Background(), f, "unbind", json.RawMessage(`{"sister":"Citri"}`)); err != nil || v.(map[string]any)["unbound"] != false || removed() != n {
+	if v, err := s.panel(context.Background(), f, "unbind", json.RawMessage(`{"sister":"Alice"}`)); err != nil || v.(map[string]any)["unbound"] != false || removed() != n {
 		t.Fatalf("unbinding nothing: %v %v, removals %d -> %d", v, err, n, removed())
 	}
 }
@@ -270,14 +270,14 @@ func TestBindNeedsTheVerifiedBot(t *testing.T) {
 	if tk.Sister != "Vega" || f.submits[len(f.submits)-1].Preview.(map[string]any)["bot"] != "Vega" {
 		t.Fatalf("bound for %q, not the verified Bot", tk.Sister)
 	}
-	if _, err := s.sendTool(ctx, f, sendIn{Sister: "Citri", BindCode: code, Text: "hi", VerifiedAgent: "Vega"}); err == nil {
-		t.Fatal("another verified Bot used Citri's binding")
+	if _, err := s.sendTool(ctx, f, sendIn{Sister: "Alice", BindCode: code, Text: "hi", VerifiedAgent: "Vega"}); err == nil {
+		t.Fatal("another verified Bot used Alice's binding")
 	}
-	if _, err := s.sendTool(ctx, f, sendIn{Sister: "Citri", BindCode: code, Text: "hi", VerifiedAgent: "citri"}); err != nil {
+	if _, err := s.sendTool(ctx, f, sendIn{Sister: "Alice", BindCode: code, Text: "hi", VerifiedAgent: "alice"}); err != nil {
 		t.Fatalf("the binding's own Bot: %v", err)
 	}
-	if _, err := s.unbindTool(ctx, f, unbindIn{Sister: "Citri", BindCode: code, VerifiedAgent: "Vega"}); err == nil {
-		t.Fatal("another verified Bot unbound Citri")
+	if _, err := s.unbindTool(ctx, f, unbindIn{Sister: "Alice", BindCode: code, VerifiedAgent: "Vega"}); err == nil {
+		t.Fatal("another verified Bot unbound Alice")
 	}
 }
 
@@ -285,7 +285,7 @@ func TestBindNeedsTheVerifiedBot(t *testing.T) {
 func TestWatcherPollsSessionsSeparately(t *testing.T) {
 	f, s, _ := boundFixture(t)
 	f.mu.Lock()
-	f.outs = []outMsg{{ID: "o1", Kind: "reply", SessionID: "cli-1", To: "Citri", Text: "done"}}
+	f.outs = []outMsg{{ID: "o1", Kind: "reply", SessionID: "cli-1", To: "Alice", Text: "done"}}
 	f.next = func(ctx context.Context, _ string) (*request, error) { <-ctx.Done(); return nil, ctx.Err() }
 	n := len(f.events)
 	f.mu.Unlock()
@@ -306,7 +306,7 @@ func TestWatcherPollsSessionsSeparately(t *testing.T) {
 	<-done
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if len(f.events) <= n || f.events[n]["_type"] != eventReply || f.events[n]["_agent"] != "Citri" {
+	if len(f.events) <= n || f.events[n]["_type"] != eventReply || f.events[n]["_agent"] != "Alice" {
 		t.Fatalf("reply not routed: %+v", f.events[n:])
 	}
 	if !slices.Contains(f.ops, "claude.next") || !slices.Contains(f.ops, "claude-sessions.next") {
@@ -384,9 +384,9 @@ func TestBindUndoneWhenTheCodeCantBeDelivered(t *testing.T) {
 	f, s, code := boundFixture(t)
 	ctx := context.Background()
 	f.mu.Lock()
-	f.emitToErr = errors.New("no Bot named Citri is connected")
+	f.emitToErr = errors.New("no Bot named Alice is connected")
 	f.mu.Unlock()
-	if _, err := s.bindTool(ctx, f, bindIn{VerifiedAgent: "Citri", SessionID: "cli-3"}); err != nil {
+	if _, err := s.bindTool(ctx, f, bindIn{VerifiedAgent: "Alice", SessionID: "cli-3"}); err != nil {
 		t.Fatal(err)
 	}
 	raw, _ := json.Marshal(f.submits[len(f.submits)-1].Payload)
@@ -402,7 +402,7 @@ func TestBindUndoneWhenTheCodeCantBeDelivered(t *testing.T) {
 	}
 
 	// A first binding that can't be delivered leaves nothing behind.
-	if _, err := s.unbindTool(ctx, f, unbindIn{Sister: "Citri", BindCode: code, VerifiedAgent: "Citri"}); err != nil {
+	if _, err := s.unbindTool(ctx, f, unbindIn{Sister: "Alice", BindCode: code, VerifiedAgent: "Alice"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.executeBind(f, tk); err == nil || len(s.st.bindings()) != 0 {
@@ -424,7 +424,7 @@ func TestSendSaysWhenClaudeReads(t *testing.T) {
 	}
 	send := func() map[string]any {
 		t.Helper()
-		res, err := s.sendTool(ctx, f, sendIn{Sister: "Citri", BindCode: code, Text: "hi"})
+		res, err := s.sendTool(ctx, f, sendIn{Sister: "Alice", BindCode: code, Text: "hi"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -447,28 +447,28 @@ func TestSendSaysWhenClaudeReads(t *testing.T) {
 	}
 	n := len(f.sent)
 	set("ended", now.Add(-time.Hour))
-	if _, err := s.sendTool(ctx, f, sendIn{Sister: "Citri", BindCode: code, Text: "hi"}); err == nil || !strings.Contains(err.Error(), "ended") || len(f.sent) != n {
+	if _, err := s.sendTool(ctx, f, sendIn{Sister: "Alice", BindCode: code, Text: "hi"}); err == nil || !strings.Contains(err.Error(), "ended") || len(f.sent) != n {
 		t.Fatalf("ended session: %v, sent %d", err, len(f.sent)-n)
 	}
 }
 
-// TestSisterNameIgnoresCase: Rubi's Bot names don't depend on case, so "citri" uses Citri's binding;
+// TestSisterNameIgnoresCase: Rubi's Bot names don't depend on case, so "alice" uses Alice's binding;
 // the code is still what proves it, and another name is still another Bot.
 func TestSisterNameIgnoresCase(t *testing.T) {
 	f, s, code := boundFixture(t)
 	ctx := context.Background()
-	for _, name := range []string{"citri", " CITRI "} {
-		if _, err := s.sendTool(ctx, f, sendIn{Sister: name, BindCode: code, Text: "hi", VerifiedAgent: "Citri"}); err != nil {
+	for _, name := range []string{"alice", " ALICE "} {
+		if _, err := s.sendTool(ctx, f, sendIn{Sister: name, BindCode: code, Text: "hi", VerifiedAgent: "Alice"}); err != nil {
 			t.Fatalf("%q: %v", name, err)
 		}
 	}
-	if _, err := s.sendTool(ctx, f, sendIn{Sister: "citri", BindCode: "bc_wrong", Text: "hi"}); err == nil {
+	if _, err := s.sendTool(ctx, f, sendIn{Sister: "alice", BindCode: "bc_wrong", Text: "hi"}); err == nil {
 		t.Fatal("a wrong code went through")
 	}
-	if _, err := s.sendTool(ctx, f, sendIn{Sister: "Citrine", BindCode: code, Text: "hi"}); err == nil {
+	if _, err := s.sendTool(ctx, f, sendIn{Sister: "Alicene", BindCode: code, Text: "hi"}); err == nil {
 		t.Fatal("another Bot's name went through")
 	}
-	if _, err := s.unbindTool(ctx, f, unbindIn{Sister: "CITRI", BindCode: code, VerifiedAgent: "citri"}); err != nil || len(s.st.bindings()) != 0 {
+	if _, err := s.unbindTool(ctx, f, unbindIn{Sister: "ALICE", BindCode: code, VerifiedAgent: "alice"}); err != nil || len(s.st.bindings()) != 0 {
 		t.Fatalf("unbind by another case: %v %+v", err, s.st.bindings())
 	}
 }
@@ -491,13 +491,13 @@ func bindAs(t *testing.T, f *fakeHost, s *sisters, bot, sessionID string) {
 // bound sessions goes to the Bot of its parent session, else to the Bot of the main session, not to
 // whichever binding happens to be last.
 func TestAskFromUnboundSessionPicksOneBinding(t *testing.T) {
-	f, s, _ := boundFixture(t) // Citri: the main session local_a
+	f, s, _ := boundFixture(t) // Alice: the main session local_a
 	ctx := context.Background()
 	later := time.Now().Add(time.Hour)
 	s.now = func() time.Time { return later }
 	bindAs(t, f, s, "Vega", "local_b") // Vega: the sub-session, bound later
-	orphan := session{SessionID: "cli-5", Title: "loose", Cwd: "/Users/v/rubi/tmp", RepoKey: "github.com/v/rubi", Role: "sub", Source: "transcript", State: "busy"}
-	child := session{SessionID: "cli-6", Title: "child of sub", Cwd: "/Users/v/rubi/.claude/worktrees/y", RepoKey: "github.com/v/rubi", Role: "sub", Parent: "local_b", Source: "transcript", State: "busy"}
+	orphan := session{SessionID: "cli-5", Title: "loose", Cwd: "/Users/alice/rubi/tmp", RepoKey: "github.com/alice/rubi", Role: "sub", Source: "transcript", State: "busy"}
+	child := session{SessionID: "cli-6", Title: "child of sub", Cwd: "/Users/alice/rubi/.claude/worktrees/y", RepoKey: "github.com/alice/rubi", Role: "sub", Parent: "local_b", Source: "transcript", State: "busy"}
 	f.mu.Lock()
 	f.sessions = append(f.sessions, orphan, child)
 	f.mu.Unlock()
@@ -506,7 +506,7 @@ func TestAskFromUnboundSessionPicksOneBinding(t *testing.T) {
 	s.route(ctx, f, mac, outMsg{ID: "a1", Kind: "ask", SessionID: "cli-5", AskKind: "research", Text: "q1"})
 	s.route(ctx, f, mac, outMsg{ID: "a2", Kind: "ask", SessionID: "cli-6", AskKind: "research", Text: "q2"})
 	got := f.events[n:]
-	if len(got) != 2 || got[0]["_agent"] != "Citri" || got[1]["_agent"] != "Vega" {
+	if len(got) != 2 || got[0]["_agent"] != "Alice" || got[1]["_agent"] != "Vega" {
 		t.Fatalf("asks went to: %+v", got)
 	}
 }
@@ -543,21 +543,21 @@ func TestStatusRouting(t *testing.T) {
 	ctx := context.Background()
 	at := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
 	n := len(f.events)
-	s.route(ctx, f, mac, outMsg{ID: "msg_1", Kind: "status", SessionID: "cli-1", To: "citri", State: "delivered", At: at})
+	s.route(ctx, f, mac, outMsg{ID: "msg_1", Kind: "status", SessionID: "cli-1", To: "alice", State: "delivered", At: at})
 	s.route(ctx, f, mac, outMsg{ID: "msg_2", Kind: "status", SessionID: "cli-1", To: "Mallory", State: "delivered", At: at}) // not the bound Bot
-	s.route(ctx, f, mac, outMsg{ID: "msg_3", Kind: "status", SessionID: "cli-3", To: "Citri", State: "queued", At: at})      // unbound session
-	s.route(ctx, f, mac, outMsg{ID: "msg_4", Kind: "mystery", SessionID: "cli-1", To: "Citri", State: "x", At: at})          // unknown kind
+	s.route(ctx, f, mac, outMsg{ID: "msg_3", Kind: "status", SessionID: "cli-3", To: "Alice", State: "queued", At: at})      // unbound session
+	s.route(ctx, f, mac, outMsg{ID: "msg_4", Kind: "mystery", SessionID: "cli-1", To: "Alice", State: "x", At: at})          // unknown kind
 	got := f.events[n:]
-	if len(got) != 1 || got[0]["_type"] != eventMessage || got[0]["_agent"] != "Citri" || got[0]["id"] != "msg_1" ||
+	if len(got) != 1 || got[0]["_type"] != eventMessage || got[0]["_agent"] != "Alice" || got[0]["id"] != "msg_1" ||
 		got[0]["state"] != "delivered" || got[0]["session_id"] != "cli-1" || got[0]["at"] != "2026-10-30T12:00:00Z" {
 		t.Fatalf("status events: %+v", got)
 	}
 	// The sister is unbound: statuses for her go nowhere, quietly.
-	if _, err := s.st.unbind("Citri"); err != nil {
+	if _, err := s.st.unbind("Alice"); err != nil {
 		t.Fatal(err)
 	}
 	n = len(f.events)
-	s.route(ctx, f, mac, outMsg{ID: "msg_1", Kind: "status", SessionID: "cli-1", To: "Citri", State: "answered", At: at})
+	s.route(ctx, f, mac, outMsg{ID: "msg_1", Kind: "status", SessionID: "cli-1", To: "Alice", State: "answered", At: at})
 	if len(f.events) != n {
 		t.Fatalf("status for an unbound sister was emitted: %+v", f.events[n:])
 	}
@@ -575,7 +575,7 @@ func TestStatusTool(t *testing.T) {
 	}
 	call := func() map[string]any {
 		t.Helper()
-		r, err := s.statusTool(ctx, f, statusIn{Sister: "Citri", BindCode: code, VerifiedAgent: "Citri"})
+		r, err := s.statusTool(ctx, f, statusIn{Sister: "Alice", BindCode: code, VerifiedAgent: "Alice"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -601,13 +601,13 @@ func TestStatusTool(t *testing.T) {
 		t.Fatal(got)
 	}
 	set("ended", 0)
-	if _, err := s.statusTool(ctx, f, statusIn{Sister: "Citri", BindCode: code}); err == nil || !strings.Contains(err.Error(), "ended") {
+	if _, err := s.statusTool(ctx, f, statusIn{Sister: "Alice", BindCode: code}); err == nil || !strings.Contains(err.Error(), "ended") {
 		t.Fatalf("ended: %v", err)
 	}
 	set("idle", 0)
 	for name, in := range map[string]statusIn{
-		"wrong code":   {Sister: "Citri", BindCode: "bc_wrong"},
-		"other Bot":    {Sister: "Citri", BindCode: code, VerifiedAgent: "Mallory"},
+		"wrong code":   {Sister: "Alice", BindCode: "bc_wrong"},
+		"other Bot":    {Sister: "Alice", BindCode: code, VerifiedAgent: "Mallory"},
 		"unknown name": {Sister: "Nobody", BindCode: code},
 	} {
 		if _, err := s.statusTool(ctx, f, in); err == nil {
@@ -621,7 +621,7 @@ func TestSendUsesWaiterFields(t *testing.T) {
 	ctx := context.Background()
 	send := func() map[string]any {
 		t.Helper()
-		r, err := s.sendTool(ctx, f, sendIn{Sister: "Citri", BindCode: code, Text: "hi"})
+		r, err := s.sendTool(ctx, f, sendIn{Sister: "Alice", BindCode: code, Text: "hi"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -654,33 +654,33 @@ func TestSendUsesWaiterFields(t *testing.T) {
 func TestOwnBindingIgnoresTypedSisterWhenVerified(t *testing.T) {
 	f, s, code := boundFixture(t)
 	ctx := context.Background()
-	if _, err := s.renameTool(ctx, f, renameIn{VerifiedAgent: "Citri", Name: "Rubi core"}); err != nil {
+	if _, err := s.renameTool(ctx, f, renameIn{VerifiedAgent: "Alice", Name: "Rubi core"}); err != nil {
 		t.Fatal(err)
 	}
 	for _, typed := range []string{"", "local_a", "cli-1", "Rubi core", "rubi core", "Rubi main"} {
-		if _, err := s.statusTool(ctx, f, statusIn{Sister: typed, BindCode: code, VerifiedAgent: "Citri"}); err != nil {
+		if _, err := s.statusTool(ctx, f, statusIn{Sister: typed, BindCode: code, VerifiedAgent: "Alice"}); err != nil {
 			t.Fatalf("status with sister %q: %v", typed, err)
 		}
-		if _, err := s.sendTool(ctx, f, sendIn{Sister: typed, BindCode: code, Text: "hi", VerifiedAgent: " citri "}); err != nil {
+		if _, err := s.sendTool(ctx, f, sendIn{Sister: typed, BindCode: code, Text: "hi", VerifiedAgent: " alice "}); err != nil {
 			t.Fatalf("send with sister %q: %v", typed, err)
 		}
 	}
 	// The session's id changes (the desktop app starts a new CLI session): the binding is still its own.
-	s.st.follow("Citri", "cli-9")
-	if _, err := s.statusTool(ctx, f, statusIn{Sister: "cli-9", BindCode: code, VerifiedAgent: "Citri"}); err != nil {
+	s.st.follow("Alice", "cli-9")
+	if _, err := s.statusTool(ctx, f, statusIn{Sister: "cli-9", BindCode: code, VerifiedAgent: "Alice"}); err != nil {
 		t.Fatalf("status after the id change: %v", err)
 	}
 	// Still refused: another verified Bot, a wrong code, and nobody verified with a typed name that isn't the Bot's.
-	if _, err := s.statusTool(ctx, f, statusIn{Sister: "Citri", BindCode: code, VerifiedAgent: "Vega"}); err == nil {
-		t.Fatal("another verified Bot read Citri's status")
+	if _, err := s.statusTool(ctx, f, statusIn{Sister: "Alice", BindCode: code, VerifiedAgent: "Vega"}); err == nil {
+		t.Fatal("another verified Bot read Alice's status")
 	}
-	if _, err := s.statusTool(ctx, f, statusIn{Sister: "local_a", BindCode: "bc_wrong", VerifiedAgent: "Citri"}); err == nil {
+	if _, err := s.statusTool(ctx, f, statusIn{Sister: "local_a", BindCode: "bc_wrong", VerifiedAgent: "Alice"}); err == nil {
 		t.Fatal("a wrong code went through")
 	}
 	if _, err := s.statusTool(ctx, f, statusIn{Sister: "local_a", BindCode: code}); err == nil {
 		t.Fatal("an unverified call with a non-Bot name went through")
 	}
-	if _, err := s.unbindTool(ctx, f, unbindIn{Sister: "Rubi core", BindCode: code, VerifiedAgent: "Citri"}); err != nil || len(s.st.bindings()) != 0 {
+	if _, err := s.unbindTool(ctx, f, unbindIn{Sister: "Rubi core", BindCode: code, VerifiedAgent: "Alice"}); err != nil || len(s.st.bindings()) != 0 {
 		t.Fatalf("unbind: %v %+v", err, s.st.bindings())
 	}
 }

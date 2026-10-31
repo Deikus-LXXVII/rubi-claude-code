@@ -1179,7 +1179,7 @@ func run(dir, rubiBin, homeBin, plugin string) (err error) {
 	delete(stop, "last_assistant_message")
 	wch = waiter(homeBin, helperDir, stop)
 	time.Sleep(1500 * time.Millisecond) // let the waiter connect
-	sendCmd := exec.Command(homeBin, "claude-send", "--session", "cli-e2e", "--from", "Citri-script", "--wait-reply", "40")
+	sendCmd := exec.Command(homeBin, "claude-send", "--session", "cli-e2e", "--from", "Alice-script", "--wait-reply", "40")
 	sendCmd.Env = append(os.Environ(), "RUBI_HOME_DIR="+helperDir)
 	sendCmd.Stdin = strings.NewReader("e2e: local script asks for the status\n")
 	var sendOut, sendErr bytes.Buffer

@@ -13,12 +13,12 @@ import (
 	"github.com/Deikus-LXXVII/rubi/sdk/rubiplugin"
 )
 
-const ptRoot = "/Users/v/rubi"
+const ptRoot = "/Users/alice/rubi"
 
 var (
-	ptMain = session{SessionID: "cli-1", AppSessionID: "local_a", Title: "Rubi main", Cwd: ptRoot, ProjectRoot: ptRoot, RepoKey: "github.com/v/rubi", Role: "main", Source: "desktop", State: "idle"}
-	ptSub  = session{SessionID: "cli-2", AppSessionID: "local_b", Title: "Rubi sub", Cwd: ptRoot + "/.claude/worktrees/x", ProjectRoot: ptRoot, RepoKey: "github.com/v/rubi", Role: "sub", Parent: "local_a", Source: "desktop", State: "busy"}
-	ptOut  = session{SessionID: "cli-3", Title: "Other", Cwd: "/Users/v/other", ProjectRoot: "/Users/v/other", RepoKey: "github.com/v/other", Role: "main", Source: "transcript", State: "idle"}
+	ptMain = session{SessionID: "cli-1", AppSessionID: "local_a", Title: "Rubi main", Cwd: ptRoot, ProjectRoot: ptRoot, RepoKey: "github.com/alice/rubi", Role: "main", Source: "desktop", State: "idle"}
+	ptSub  = session{SessionID: "cli-2", AppSessionID: "local_b", Title: "Rubi sub", Cwd: ptRoot + "/.claude/worktrees/x", ProjectRoot: ptRoot, RepoKey: "github.com/alice/rubi", Role: "sub", Parent: "local_a", Source: "desktop", State: "busy"}
+	ptOut  = session{SessionID: "cli-3", Title: "Other", Cwd: "/Users/alice/other", ProjectRoot: "/Users/alice/other", RepoKey: "github.com/alice/other", Role: "main", Source: "transcript", State: "idle"}
 )
 
 func berlin(t *testing.T) *time.Location {
@@ -132,7 +132,7 @@ func TestRunApprovalOffersProjectTrust(t *testing.T) {
 		t.Fatalf("options %+v", sub.Options)
 	}
 	o := sub.Options[2]
-	if o.Label != "Allow and trust the project /Users/v/rubi until Sat 31 Oct 2026 04:00 CET" {
+	if o.Label != "Allow and trust the project /Users/alice/rubi until Sat 31 Oct 2026 04:00 CET" {
 		t.Fatalf("label %q", o.Label)
 	}
 	for _, want := range []string{"Sat 31 Oct 2026 04:00 CET", ptRoot, "Mac", "agent/*", "Europe/Berlin", "CET, UTC+01:00", "Rubi Home doesn't report this computer's own", "bypassPermissions), its commands never ask", "may be main", "--no-update-refs", "Symlinks already in the project", "up to an hour before 04:00",
@@ -155,12 +155,12 @@ func TestRunApprovalOffersProjectTrust(t *testing.T) {
 
 func TestProjectTrustIsNotOfferedWithoutAGoodRoot(t *testing.T) {
 	bad := map[string]session{
-		"no root":   {SessionID: "cli-9", Cwd: "/Users/v/x/y", RepoKey: "local:/Users/v/x/y"},
-		"no key":    {SessionID: "cli-9", Cwd: "/Users/v/x/y", ProjectRoot: "/Users/v/x/y"},
-		"home dir":  {SessionID: "cli-9", Cwd: "/Users/v/x", ProjectRoot: "/Users/v", RepoKey: "local:/Users/v"},
-		"top":       {SessionID: "cli-9", Cwd: "/Users/v", ProjectRoot: "/", RepoKey: "local:/"},
-		"cwd above": {SessionID: "cli-9", Cwd: "/Users/v/x", ProjectRoot: "/Users/v/x/y", RepoKey: "local:/Users/v/x/y"},
-		"secret":    {SessionID: "cli-9", Cwd: "/Users/v/.ssh/p", ProjectRoot: "/Users/v/.ssh/p", RepoKey: "local:/Users/v/.ssh/p"},
+		"no root":   {SessionID: "cli-9", Cwd: "/Users/alice/x/y", RepoKey: "local:/Users/alice/x/y"},
+		"no key":    {SessionID: "cli-9", Cwd: "/Users/alice/x/y", ProjectRoot: "/Users/alice/x/y"},
+		"home dir":  {SessionID: "cli-9", Cwd: "/Users/alice/x", ProjectRoot: "/Users/alice", RepoKey: "local:/Users/alice"},
+		"top":       {SessionID: "cli-9", Cwd: "/Users/alice", ProjectRoot: "/", RepoKey: "local:/"},
+		"cwd above": {SessionID: "cli-9", Cwd: "/Users/alice/x", ProjectRoot: "/Users/alice/x/y", RepoKey: "local:/Users/alice/x/y"},
+		"secret":    {SessionID: "cli-9", Cwd: "/Users/alice/.ssh/p", ProjectRoot: "/Users/alice/.ssh/p", RepoKey: "local:/Users/alice/.ssh/p"},
 	}
 	for name, sess := range bad {
 		f, s, _ := ptFixture(t)
@@ -239,28 +239,28 @@ func TestProjectTrustStillAsks(t *testing.T) {
 	f, s, _ := ptFixture(t)
 	grantViaOption(t, f, s, "cli-1", ptRoot)
 	still := []struct{ cwd, cmd string }{
-		{"/Users/v/other", "ls"},                                // outside the root
-		{"/Users/v", "ls"},                                      // above it
-		{ptRoot + "2", "ls"},                                    // a sibling that shares the prefix
-		{ptRoot, "git push"},                                    // push
-		{ptRoot, "git push origin agent/x"},                     // push of an allowed branch
-		{ptRoot, "git status && git push --force"},              // force
-		{ptRoot, "git tag v1.0.0"},                              // tags
-		{ptRoot, "git tag -a v1 -m release"},                    // annotated tag
-		{ptRoot, "git push origin v1"},                          // a release push
-		{ptRoot, "gh release create v1"},                        // releases
-		{ptRoot, "sudo ls"},                                     // sudo
-		{ptRoot, "curl https://example.com"},                    // network
-		{ptRoot, "npm install left-pad"},                        // installs
-		{ptRoot, "pip install x"},                               // installs
-		{ptRoot, "rm -rf ../x"},                                 // writes outside
-		{ptRoot, "cat x > /tmp/y"},                              // writes outside
-		{ptRoot, "git switch main"},                             // a branch outside the pattern
-		{ptRoot, "git checkout -b dev"},                         // creating one
-		{ptRoot, "git checkout main && go test ./..."},          // a switch in a chain
-		{ptRoot, "cat ~/.ssh/id_rsa"},                           // credentials
-		{ptRoot + "/internal", "cd .. && cd .. && rm -rf x"},    // leaving the root
-		{ptRoot + "/internal", "cd /Users/v/other && rm -rf x"}, // leaving the root
+		{"/Users/alice/other", "ls"},                                // outside the root
+		{"/Users/alice", "ls"},                                      // above it
+		{ptRoot + "2", "ls"},                                        // a sibling that shares the prefix
+		{ptRoot, "git push"},                                        // push
+		{ptRoot, "git push origin agent/x"},                         // push of an allowed branch
+		{ptRoot, "git status && git push --force"},                  // force
+		{ptRoot, "git tag v1.0.0"},                                  // tags
+		{ptRoot, "git tag -a v1 -m release"},                        // annotated tag
+		{ptRoot, "git push origin v1"},                              // a release push
+		{ptRoot, "gh release create v1"},                            // releases
+		{ptRoot, "sudo ls"},                                         // sudo
+		{ptRoot, "curl https://example.com"},                        // network
+		{ptRoot, "npm install left-pad"},                            // installs
+		{ptRoot, "pip install x"},                                   // installs
+		{ptRoot, "rm -rf ../x"},                                     // writes outside
+		{ptRoot, "cat x > /tmp/y"},                                  // writes outside
+		{ptRoot, "git switch main"},                                 // a branch outside the pattern
+		{ptRoot, "git checkout -b dev"},                             // creating one
+		{ptRoot, "git checkout main && go test ./..."},              // a switch in a chain
+		{ptRoot, "cat ~/.ssh/id_rsa"},                               // credentials
+		{ptRoot + "/internal", "cd .. && cd .. && rm -rf x"},        // leaving the root
+		{ptRoot + "/internal", "cd /Users/alice/other && rm -rf x"}, // leaving the root
 	}
 	for _, c := range still {
 		if !asks(f, s, "cli-2", c.cwd, c.cmd) {
@@ -295,7 +295,7 @@ func TestBranchRule(t *testing.T) {
 		}
 	}
 	asked := []string{
-		"git switch main", "git switch -c main2", "git switch --create main", "git switch --create=main", "git switch -", "git switch agent/x/y", "git switch citri",
+		"git switch main", "git switch -c main2", "git switch --create main", "git switch --create=main", "git switch -", "git switch agent/x/y", "git switch feature/x",
 		"git switch --orphan dev", "git switch -t origin/agent/x", "git switch 'agent/*'", "git switch agent/../main",
 		"git checkout main", "git checkout -b dev", "git checkout -B dev", "git checkout -bdev", "git checkout --orphan dev", "git checkout HEAD~1", "git checkout -",
 		"git branch dev", "git branch dev agent/x", "git branch -m agent/a dev", "git branch -m dev agent/a", "git branch -d main", "git branch -c main agent/b",
@@ -464,7 +464,7 @@ func TestProjectTrustReplacesTheOldOne(t *testing.T) {
 	}
 	// Another project (or computer) is a trust of its own.
 	if err := func() error {
-		_, err := s.st.issueProject(projectTrust{ID: "pt_x", Device: "dev_mac", Root: "/Users/v/other", BranchPattern: "agent/*", Expires: s.now().Add(time.Hour), MaxUses: 5}, s.now())
+		_, err := s.st.issueProject(projectTrust{ID: "pt_x", Device: "dev_mac", Root: "/Users/alice/other", BranchPattern: "agent/*", Expires: s.now().Add(time.Hour), MaxUses: 5}, s.now())
 		return err
 	}(); err != nil || len(s.st.projects(s.now())) != 2 {
 		t.Fatalf("%v %v", err, s.st.projects(s.now()))
@@ -509,11 +509,11 @@ func TestAuditNamesTheTrust(t *testing.T) {
 
 // ---- the Bot ----
 
-// ptBot is the fixture with Citri bound to the project's main session.
+// ptBot is the fixture with Alice bound to the project's main session.
 func ptBot(t *testing.T) (*fakeHost, *sisters, string) {
 	t.Helper()
 	f, s, _ := ptFixture(t)
-	bindAs(t, f, s, "Citri", "local_a")
+	bindAs(t, f, s, "Alice", "local_a")
 	code := f.events[len(f.events)-1]["bind_code"].(string)
 	f.submits = nil
 	return f, s, code
@@ -525,19 +525,19 @@ func TestTrustProjectToolAsksStrongAndGrantsOnApproval(t *testing.T) {
 	if _, err := s.trustTool(ctx, f, trustIn{BindCode: code}); err == nil {
 		t.Fatal("unverified caller accepted")
 	}
-	if _, err := s.trustTool(ctx, f, trustIn{VerifiedAgent: "Citri", BindCode: "bc_wrong"}); err == nil {
+	if _, err := s.trustTool(ctx, f, trustIn{VerifiedAgent: "Alice", BindCode: "bc_wrong"}); err == nil {
 		t.Fatal("wrong bind code accepted")
 	}
 	if _, err := s.trustTool(ctx, f, trustIn{VerifiedAgent: "Vega", BindCode: code}); err == nil {
-		t.Fatal("another Bot used Citri's code")
+		t.Fatal("another Bot used Alice's code")
 	}
-	if _, err := s.trustTool(ctx, f, trustIn{VerifiedAgent: "Citri", BindCode: code, BranchPattern: "a b"}); err == nil {
+	if _, err := s.trustTool(ctx, f, trustIn{VerifiedAgent: "Alice", BindCode: code, BranchPattern: "a b"}); err == nil {
 		t.Fatal("bad pattern accepted")
 	}
 	if len(f.submits) != 0 || len(s.st.projects(s.now())) != 0 {
 		t.Fatal("something was asked or granted by a refused call")
 	}
-	res, err := s.trustTool(ctx, f, trustIn{VerifiedAgent: "Citri", BindCode: code, BranchPattern: "agent/*"})
+	res, err := s.trustTool(ctx, f, trustIn{VerifiedAgent: "Alice", BindCode: code, BranchPattern: "agent/*"})
 	if err != nil || res.(map[string]any)["status"] != "awaiting_approval" || len(f.submits) != 1 {
 		t.Fatalf("%v %v", res, err)
 	}
@@ -546,7 +546,7 @@ func TestTrustProjectToolAsksStrongAndGrantsOnApproval(t *testing.T) {
 		t.Fatalf("%+v", sub)
 	}
 	text, _ := json.Marshal(sub.Preview)
-	for _, want := range []string{"Sat 31 Oct 2026 04:00 CET", ptRoot, "Mac", "agent/*", "Citri", "Europe/Berlin", "Still asks", "github.com/v/rubi"} {
+	for _, want := range []string{"Sat 31 Oct 2026 04:00 CET", ptRoot, "Mac", "agent/*", "Alice", "Europe/Berlin", "Still asks", "github.com/alice/rubi"} {
 		if !strings.Contains(string(text)+sub.Options[0].Label+sub.Options[0].Meaning, want) {
 			t.Errorf("approval lacks %q: %s", want, text)
 		}
@@ -567,7 +567,7 @@ func TestTrustProjectToolAsksStrongAndGrantsOnApproval(t *testing.T) {
 		t.Fatal(err)
 	}
 	pts := s.st.projects(s.now())
-	if len(pts) != 1 || pts[0].Root != ptRoot || pts[0].Sister != "Citri" || out.(map[string]any)["mandate"] != pts[0].ID {
+	if len(pts) != 1 || pts[0].Root != ptRoot || pts[0].Sister != "Alice" || out.(map[string]any)["mandate"] != pts[0].ID {
 		t.Fatalf("%+v %v", pts, out)
 	}
 	// Commands of the project's sessions are allowed now, by this trust.
@@ -575,7 +575,7 @@ func TestTrustProjectToolAsksStrongAndGrantsOnApproval(t *testing.T) {
 		t.Error("asked")
 	}
 	// A second grant (with another pattern) replaces it, both audited.
-	if _, err := s.trustTool(ctx, f, trustIn{VerifiedAgent: "Citri", BindCode: code, BranchPattern: "feature/*"}); err != nil {
+	if _, err := s.trustTool(ctx, f, trustIn{VerifiedAgent: "Alice", BindCode: code, BranchPattern: "feature/*"}); err != nil {
 		t.Fatal(err)
 	}
 	payload, _ = json.Marshal(f.submits[len(f.submits)-1].Payload)
@@ -599,16 +599,16 @@ func TestTrustProjectToolAsksStrongAndGrantsOnApproval(t *testing.T) {
 
 func TestTrustProjectToolRefusesWithoutAProject(t *testing.T) {
 	f, s, code := ptBot(t)
-	f.sessions = []session{{SessionID: "cli-1", AppSessionID: "local_a", Cwd: "/Users/v", ProjectRoot: "/Users/v", RepoKey: "local:/Users/v", State: "idle"}}
-	if _, err := s.trustTool(context.Background(), f, trustIn{VerifiedAgent: "Citri", BindCode: code}); err == nil || !strings.Contains(err.Error(), "too high") {
+	f.sessions = []session{{SessionID: "cli-1", AppSessionID: "local_a", Cwd: "/Users/alice", ProjectRoot: "/Users/alice", RepoKey: "local:/Users/alice", State: "idle"}}
+	if _, err := s.trustTool(context.Background(), f, trustIn{VerifiedAgent: "Alice", BindCode: code}); err == nil || !strings.Contains(err.Error(), "too high") {
 		t.Fatalf("%v", err)
 	}
 	f.sessions = []session{{SessionID: "cli-1", AppSessionID: "local_a", Cwd: ptRoot, State: "idle"}}
-	if _, err := s.trustTool(context.Background(), f, trustIn{VerifiedAgent: "Citri", BindCode: code}); err == nil {
+	if _, err := s.trustTool(context.Background(), f, trustIn{VerifiedAgent: "Alice", BindCode: code}); err == nil {
 		t.Fatal("a session without a project")
 	}
 	f.sessions = []session{{SessionID: "cli-1", AppSessionID: "local_a", Cwd: ptRoot, ProjectRoot: ptRoot, RepoKey: "local:" + ptRoot, State: "ended"}}
-	if _, err := s.trustTool(context.Background(), f, trustIn{VerifiedAgent: "Citri", BindCode: code}); err == nil {
+	if _, err := s.trustTool(context.Background(), f, trustIn{VerifiedAgent: "Alice", BindCode: code}); err == nil {
 		t.Fatal("an ended session")
 	}
 	if len(f.submits) != 0 {
@@ -623,15 +623,15 @@ func TestBotStartsAndBindsInATrustedProjectWithoutAsking(t *testing.T) {
 		return map[string]any{"launched": true, "session_id": "cli-new", "cwd": a["cwd"], "permission_mode": "default"}, nil
 	}
 	// Before the trust: it asks.
-	if res, err := s.startTool(ctx, f, startIn{VerifiedAgent: "Citri", Cwd: ptRoot + "/sub", Task: "x"}); err != nil || res.(map[string]any)["status"] != "awaiting_approval" {
+	if res, err := s.startTool(ctx, f, startIn{VerifiedAgent: "Alice", Cwd: ptRoot + "/sub", Task: "x"}); err != nil || res.(map[string]any)["status"] != "awaiting_approval" {
 		t.Fatalf("%v %v", res, err)
 	}
 	f.submits = nil
 	pt := grantViaOption(t, f, s, "cli-1", ptRoot)
 	f.submits = nil
 
-	f.sessions = append(f.sessions, session{SessionID: "cli-new", Title: "new", Cwd: ptRoot + "/sub", ProjectRoot: ptRoot, RepoKey: "github.com/v/rubi", Role: "sub", Source: "hook", State: "idle"})
-	res, err := s.startTool(ctx, f, startIn{VerifiedAgent: "Citri", Cwd: ptRoot + "/sub", Task: "run the tests"})
+	f.sessions = append(f.sessions, session{SessionID: "cli-new", Title: "new", Cwd: ptRoot + "/sub", ProjectRoot: ptRoot, RepoKey: "github.com/alice/rubi", Role: "sub", Source: "hook", State: "idle"})
+	res, err := s.startTool(ctx, f, startIn{VerifiedAgent: "Alice", Cwd: ptRoot + "/sub", Task: "run the tests"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -639,7 +639,7 @@ func TestBotStartsAndBindsInATrustedProjectWithoutAsking(t *testing.T) {
 	if len(f.submits) != 0 || m["started"] != true || m["bound"] != true || m["session_id"] != "cli-new" || !strings.Contains(fmt.Sprint(m["approval"]), pt) {
 		t.Fatalf("submits %d, result %v", len(f.submits), m)
 	}
-	if len(f.creates) != 1 || f.creates[0]["cwd"] != ptRoot+"/sub" || f.creates[0]["from"] != "Citri" {
+	if len(f.creates) != 1 || f.creates[0]["cwd"] != ptRoot+"/sub" || f.creates[0]["from"] != "Alice" {
 		t.Fatalf("creates %v", f.creates)
 	}
 	if bs := s.st.bindings(); len(bs) != 1 || bs[0].SessionID != "cli-new" {
@@ -661,7 +661,7 @@ func TestBotStartsAndBindsInATrustedProjectWithoutAsking(t *testing.T) {
 	s.hits = map[string][]time.Time{} // the hourly limits are tested in start_test.go
 	// Outside the project it asks; so does a Bot that isn't bound inside it; the input checks still apply.
 	f.submits = nil
-	for _, c := range []struct{ bot, cwd string }{{"Citri", "/Users/v/other"}, {"Citri", ptRoot + "2"}, {"Citri", "/Users/v"}, {"Vega", ptRoot + "/sub"}} {
+	for _, c := range []struct{ bot, cwd string }{{"Alice", "/Users/alice/other"}, {"Alice", ptRoot + "2"}, {"Alice", "/Users/alice"}, {"Vega", ptRoot + "/sub"}} {
 		res, err := s.startTool(ctx, f, startIn{VerifiedAgent: c.bot, Cwd: c.cwd, Task: "x"})
 		if err != nil || res.(map[string]any)["status"] != "awaiting_approval" {
 			t.Errorf("%s %s: %v %v", c.bot, c.cwd, res, err)
@@ -670,10 +670,10 @@ func TestBotStartsAndBindsInATrustedProjectWithoutAsking(t *testing.T) {
 	if len(f.creates) != 1 {
 		t.Errorf("a session was started without approval: %v", f.creates)
 	}
-	if _, err := s.startTool(ctx, f, startIn{VerifiedAgent: "Citri", Cwd: ptRoot + "/sub", Task: "bad\u202etext"}); err == nil {
+	if _, err := s.startTool(ctx, f, startIn{VerifiedAgent: "Alice", Cwd: ptRoot + "/sub", Task: "bad\u202etext"}); err == nil {
 		t.Error("the text check was skipped")
 	}
-	if _, err := s.startTool(ctx, f, startIn{VerifiedAgent: "Citri", Cwd: ptRoot + "/../other", Task: "x"}); err != nil {
+	if _, err := s.startTool(ctx, f, startIn{VerifiedAgent: "Alice", Cwd: ptRoot + "/../other", Task: "x"}); err != nil {
 		// path.Clean puts it outside the root: it asks, it doesn't start.
 		t.Errorf("%v", err)
 	}
@@ -683,14 +683,14 @@ func TestBotStartsAndBindsInATrustedProjectWithoutAsking(t *testing.T) {
 
 	// Bind to another session of the project: no approval; to one outside: asks.
 	f.submits = nil
-	res, err = s.bindTool(ctx, f, bindIn{VerifiedAgent: "Citri", SessionID: "local_b"})
+	res, err = s.bindTool(ctx, f, bindIn{VerifiedAgent: "Alice", SessionID: "local_b"})
 	if err != nil || len(f.submits) != 0 || res.(map[string]any)["bound"] != true || !strings.Contains(fmt.Sprint(res.(map[string]any)["approval"]), pt) {
 		t.Fatalf("bind in project: %v %v (%d submits)", res, err, len(f.submits))
 	}
 	if bs := s.st.bindings(); len(bs) != 1 || bs[0].AppSessionID != "local_b" {
 		t.Fatalf("%+v", bs)
 	}
-	res, err = s.bindTool(ctx, f, bindIn{VerifiedAgent: "Citri", SessionID: "cli-3"})
+	res, err = s.bindTool(ctx, f, bindIn{VerifiedAgent: "Alice", SessionID: "cli-3"})
 	if err != nil || len(f.submits) != 1 || res.(map[string]any)["status"] != "awaiting_approval" {
 		t.Fatalf("bind outside: %v %v", res, err)
 	}
@@ -712,10 +712,10 @@ func TestBotStartsAndBindsInATrustedProjectWithoutAsking(t *testing.T) {
 	// Send and status never needed an approval.
 	f.submits = nil
 	b := s.st.bindings()[0]
-	if _, err := s.sendTool(ctx, f, sendIn{Sister: "Citri", BindCode: b.Code, Text: "hi"}); err != nil {
+	if _, err := s.sendTool(ctx, f, sendIn{Sister: "Alice", BindCode: b.Code, Text: "hi"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.statusTool(ctx, f, statusIn{Sister: "Citri", BindCode: b.Code}); err != nil {
+	if _, err := s.statusTool(ctx, f, statusIn{Sister: "Alice", BindCode: b.Code}); err != nil {
 		t.Fatal(err)
 	}
 	if len(f.submits) != 0 {
@@ -733,14 +733,14 @@ func TestBotNeedsApprovalAfterTheTrustEnds(t *testing.T) {
 	if _, err := s.mandatesTool(f, mandatesIn{Revoke: pt}); err != nil {
 		t.Fatal(err)
 	}
-	if res, _ := s.bindTool(ctx, f, bindIn{VerifiedAgent: "Citri", SessionID: "local_b"}); res.(map[string]any)["status"] != "awaiting_approval" {
+	if res, _ := s.bindTool(ctx, f, bindIn{VerifiedAgent: "Alice", SessionID: "local_b"}); res.(map[string]any)["status"] != "awaiting_approval" {
 		t.Fatal("bind without a trust")
 	}
 	// Expired.
 	grantViaOption(t, f, s, "cli-1", ptRoot)
 	s.now = func() time.Time { return time.Date(2026, 10, 31, 4, 0, 1, 0, s.zone()) }
 	f.submits = nil
-	if res, _ := s.startTool(ctx, f, startIn{VerifiedAgent: "Citri", Cwd: ptRoot, Task: "x"}); res.(map[string]any)["status"] != "awaiting_approval" || len(f.creates) != 0 {
+	if res, _ := s.startTool(ctx, f, startIn{VerifiedAgent: "Alice", Cwd: ptRoot, Task: "x"}); res.(map[string]any)["status"] != "awaiting_approval" || len(f.creates) != 0 {
 		t.Fatal("start with an expired trust")
 	}
 }
@@ -815,9 +815,9 @@ func TestTwoHourTrustHonoursTheBranchRule(t *testing.T) {
 		t.Fatal("a branch inside the pattern asked")
 	}
 	// A session elsewhere keeps its own 2-hour trust as it was.
-	md2 := mandate{ID: "md_2", Device: "dev_mac", SessionID: "cli-3", Cwd: "/Users/v/other", Issued: *now, Expires: now.Add(time.Hour), MaxUses: 300}
+	md2 := mandate{ID: "md_2", Device: "dev_mac", SessionID: "cli-3", Cwd: "/Users/alice/other", Issued: *now, Expires: now.Add(time.Hour), MaxUses: 300}
 	_ = s.st.issue(md2, *now)
-	if asks(f, s, "cli-3", "/Users/v/other", "git switch main") {
+	if asks(f, s, "cli-3", "/Users/alice/other", "git switch main") {
 		t.Fatal("a trust outside the project was restricted")
 	}
 }
@@ -827,23 +827,23 @@ func TestRootBreadth(t *testing.T) {
 		root, key string
 		ok        bool
 	}{
-		{"/Users/v/rubi", "github.com/v/rubi", true},
-		{"/Users/v/Documents/stuff", "local:/Users/v/Documents/stuff", false}, // no remote, 4 parts is fine, but...
-		{"/Users/v/Documents", "github.com/v/docs", false},
-		{"/Users/v/Downloads", "local:/Users/v/Downloads", false},
-		{"/Users/v/Dev", "local:/Users/v/Dev", false},
-		{"/Users/v/Dev/proj", "local:/Users/v/Dev/proj", true},
-		{"/Volumes/Crucial", "local:/Volumes/Crucial", false},
-		{"/Volumes/Crucial/proj", "local:/Volumes/Crucial/proj", false},
-		{"/Volumes/Crucial/Projects/x", "local:/Volumes/Crucial/Projects/x", true},
-		{"/Users/v", "github.com/v/home", false},
+		{"/Users/alice/rubi", "github.com/alice/rubi", true},
+		{"/Users/alice/Documents/stuff", "local:/Users/alice/Documents/stuff", false}, // no remote, 4 parts is fine, but...
+		{"/Users/alice/Documents", "github.com/alice/docs", false},
+		{"/Users/alice/Downloads", "local:/Users/alice/Downloads", false},
+		{"/Users/alice/Dev", "local:/Users/alice/Dev", false},
+		{"/Users/alice/Dev/proj", "local:/Users/alice/Dev/proj", true},
+		{"/Volumes/External", "local:/Volumes/External", false},
+		{"/Volumes/External/proj", "local:/Volumes/External/proj", false},
+		{"/Volumes/External/Projects/x", "local:/Volumes/External/Projects/x", true},
+		{"/Users/alice", "github.com/alice/home", false},
 		{"/", "local:/", false},
-		{"/Users/v/rubi", "", false},
+		{"/Users/alice/rubi", "", false},
 	}
 	for _, c := range cases {
 		why := rootProblem(c.root, c.key)
 		want := c.ok
-		if c.root == "/Users/v/Documents/stuff" {
+		if c.root == "/Users/alice/Documents/stuff" {
 			want = true // deeper than a documents folder: fine
 		}
 		if (why == "") != want {
@@ -856,13 +856,13 @@ func TestSymlinkedSessionDirectoryIsNotTrusted(t *testing.T) {
 	// Rubi Home resolved the session's directory: it leads outside the project.
 	f, s, _ := ptFixture(t)
 	f.sessions = []session{{SessionID: "cli-1", AppSessionID: "local_a", Cwd: ptRoot + "/link", ProjectRoot: ptRoot, RealRoot: ptRoot,
-		RealCwd: "/Users/v/elsewhere", RepoKey: "github.com/v/rubi", State: "idle"}}
+		RealCwd: "/Users/alice/elsewhere", RepoKey: "github.com/alice/rubi", State: "idle"}}
 	newWatcher(f, s).handle(context.Background(), mac, reqIn("cli-1", ptRoot+"/link", "go test ./..."))
 	if len(f.submits[0].Options) != 2 || !strings.Contains(fmt.Sprint(f.submits[0].Preview.(map[string]any)["project_trust"]), "symlinks") {
 		t.Fatalf("%+v %v", f.submits[0].Options, f.submits[0].Preview)
 	}
 	// A root that is itself a symlink path: the real directory is under the real root, which is fine.
-	f.sessions = []session{{SessionID: "cli-1", Cwd: ptRoot + "/sub", ProjectRoot: ptRoot, RealRoot: "/private/v/rubi", RealCwd: "/private/v/rubi/sub", RepoKey: "github.com/v/rubi"}}
+	f.sessions = []session{{SessionID: "cli-1", Cwd: ptRoot + "/sub", ProjectRoot: ptRoot, RealRoot: "/private/v/rubi", RealCwd: "/private/v/rubi/sub", RepoKey: "github.com/alice/rubi"}}
 	if o, why := s.projectOffer(context.Background(), f, mac, reqIn("cli-1", ptRoot+"/sub", "ls")); o == nil || o.RealRoot != "/private/v/rubi" {
 		t.Fatalf("%v %v", o, why)
 	}
@@ -874,16 +874,16 @@ func TestBotChecksUnderTheShortcut(t *testing.T) {
 	grantViaOption(t, f, s, "cli-1", ptRoot)
 	f.submits = nil
 	f.createFn = func(_ context.Context, a map[string]any) (map[string]any, error) {
-		return map[string]any{"launched": true, "session_id": "cli-new", "cwd": "/Users/v/elsewhere", "permission_mode": "default"}, nil
+		return map[string]any{"launched": true, "session_id": "cli-new", "cwd": "/Users/alice/elsewhere", "permission_mode": "default"}, nil
 	}
 	// A dotted path is sent cleaned, and one that leaves the root asks.
-	res, err := s.startTool(ctx, f, startIn{VerifiedAgent: "Citri", Cwd: ptRoot + "/a/../../other", Task: "x"})
+	res, err := s.startTool(ctx, f, startIn{VerifiedAgent: "Alice", Cwd: ptRoot + "/a/../../other", Task: "x"})
 	if err != nil || res.(map[string]any)["status"] != "awaiting_approval" || len(f.creates) != 0 {
 		t.Fatalf("%v %v %v", res, err, f.creates)
 	}
 	// Rubi Home started it somewhere else (a symlink inside the project): the Bot is unbound and told.
 	f.submits = nil
-	_, err = s.startTool(ctx, f, startIn{VerifiedAgent: "Citri", Cwd: ptRoot + "/a/./b", Task: "x"})
+	_, err = s.startTool(ctx, f, startIn{VerifiedAgent: "Alice", Cwd: ptRoot + "/a/./b", Task: "x"})
 	if err == nil || !strings.Contains(err.Error(), "outside the trusted project") || len(f.creates) != 1 || f.creates[0]["cwd"] != ptRoot+"/a/b" {
 		t.Fatalf("%v %v", err, f.creates)
 	}
@@ -899,24 +899,24 @@ func TestShortcutNeedsALiveBoundSessionInsideTheRoot(t *testing.T) {
 	f.submits = nil
 	// The bound session ended.
 	f.sessions[0].State = "ended"
-	if res, _ := s.bindTool(ctx, f, bindIn{VerifiedAgent: "Citri", SessionID: "local_b"}); res.(map[string]any)["status"] != "awaiting_approval" {
+	if res, _ := s.bindTool(ctx, f, bindIn{VerifiedAgent: "Alice", SessionID: "local_b"}); res.(map[string]any)["status"] != "awaiting_approval" {
 		t.Fatal("bind with an ended bound session")
 	}
 	// It moved out of the project.
-	f.sessions[0].State, f.sessions[0].Cwd = "idle", "/Users/v/other"
+	f.sessions[0].State, f.sessions[0].Cwd = "idle", "/Users/alice/other"
 	f.submits = nil
-	if res, _ := s.startTool(ctx, f, startIn{VerifiedAgent: "Citri", Cwd: ptRoot + "/sub", Task: "x"}); res.(map[string]any)["status"] != "awaiting_approval" {
+	if res, _ := s.startTool(ctx, f, startIn{VerifiedAgent: "Alice", Cwd: ptRoot + "/sub", Task: "x"}); res.(map[string]any)["status"] != "awaiting_approval" {
 		t.Fatal("start with a bound session outside the root")
 	}
 	// The target session resolves outside the real root.
 	f.sessions[0].Cwd = ptRoot
-	f.sessions[1].RealCwd = "/Users/v/other"
+	f.sessions[1].RealCwd = "/Users/alice/other"
 	f.sessions[0].RealRoot = ""
 	f.submits = nil
 	s.st.mu.Lock()
 	s.st.st.Projects[0].RealRoot = ptRoot
 	s.st.mu.Unlock()
-	if res, _ := s.bindTool(ctx, f, bindIn{VerifiedAgent: "Citri", SessionID: "local_b"}); res.(map[string]any)["status"] != "awaiting_approval" {
+	if res, _ := s.bindTool(ctx, f, bindIn{VerifiedAgent: "Alice", SessionID: "local_b"}); res.(map[string]any)["status"] != "awaiting_approval" {
 		t.Fatal("bind to a session whose real directory is outside")
 	}
 }
@@ -932,12 +932,12 @@ func TestBindUnderTrustIsRateLimited(t *testing.T) {
 		if s.st.bindings()[0].AppSessionID == "local_b" {
 			id = "local_a"
 		}
-		res, err := s.bindTool(ctx, f, bindIn{VerifiedAgent: "Citri", SessionID: id})
+		res, err := s.bindTool(ctx, f, bindIn{VerifiedAgent: "Alice", SessionID: id})
 		if err != nil || res.(map[string]any)["bound"] != true {
 			t.Fatalf("bind %d: %v %v", i, res, err)
 		}
 	}
-	res, err := s.bindTool(ctx, f, bindIn{VerifiedAgent: "Citri", SessionID: "local_b"})
+	res, err := s.bindTool(ctx, f, bindIn{VerifiedAgent: "Alice", SessionID: "local_b"})
 	if err != nil || res.(map[string]any)["status"] != "awaiting_approval" {
 		t.Fatalf("past the limit: %v %v", res, err)
 	}
@@ -974,7 +974,7 @@ func TestFailedSaveChangesNothing(t *testing.T) {
 
 func TestExpiryBeyond24HoursIsRefused(t *testing.T) {
 	f, s, _ := ptFixture(t)
-	o, err := s.offerFor(ptRoot, "github.com/v/rubi", "", "Mac")
+	o, err := s.offerFor(ptRoot, "github.com/alice/rubi", "", "Mac")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -991,7 +991,7 @@ func TestExpiryBeyond24HoursIsRefused(t *testing.T) {
 func TestCapEvictionIsAudited(t *testing.T) {
 	f, s, _ := ptFixture(t)
 	for i := range maxProjectTrusts + 1 {
-		o, _ := s.offerFor(fmt.Sprintf("/Users/v/p%d", i), "github.com/v/p", "", "Mac")
+		o, _ := s.offerFor(fmt.Sprintf("/Users/alice/p%d", i), "github.com/alice/p", "", "Mac")
 		if _, err := s.grantProject(f, "dev_mac", "Mac", "", o); err != nil {
 			t.Fatal(err)
 		}
@@ -1003,8 +1003,8 @@ func TestCapEvictionIsAudited(t *testing.T) {
 
 func TestLabelNamesTheRootAndShortensIt(t *testing.T) {
 	_, s, _ := ptFixture(t)
-	long := "/Users/v/" + strings.Repeat("deep/", 12) + "project"
-	o, err := s.offerFor(long, "github.com/v/p", "", "Mac")
+	long := "/Users/alice/" + strings.Repeat("deep/", 12) + "project"
+	o, err := s.offerFor(long, "github.com/alice/p", "", "Mac")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1017,7 +1017,7 @@ func TestLabelNamesTheRootAndShortensIt(t *testing.T) {
 	}
 	// A local zone is shown by its abbreviation and offset, never as "Local".
 	s.loc = nil
-	o2, _ := s.offerFor(ptRoot, "github.com/v/rubi", "", "Mac")
+	o2, _ := s.offerFor(ptRoot, "github.com/alice/rubi", "", "Mac")
 	if n := s.zoneNote(o2); strings.Contains(n, "Local") || !strings.Contains(n, "UTC") {
 		t.Fatalf("%s", n)
 	}

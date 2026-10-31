@@ -17,15 +17,15 @@ var reviewRefused = []string{
 	"echo hi > .GIT/hooks/x", "touch .GIT/hooks/pre-commit", "go build -o .GiT/hooks/pre-commit", "git diff --output=.GIT/hooks/x",
 	"rm -rf .GIT", "chmod +x .GIT/hooks/pre-commit", "echo hi > .Git/x", "tee .G*/hooks/x", "cp a [.]GIT/hooks/x",
 	// wildcards that spell credentials
-	"cat ~/.s?h/i*", "cat ~/.s[s]h/id_*", "ls ~/.a?s", "cat ./.s?h/i*", "cat /Users/v/.s?h/id_rsa", "cat /etc/*", "cat ./.ENV*", "cat ./.e[n]v",
+	"cat ~/.s?h/i*", "cat ~/.s[s]h/id_*", "ls ~/.a?s", "cat ./.s?h/i*", "cat /Users/alice/.s?h/id_rsa", "cat /etc/*", "cat ./.ENV*", "cat ./.e[n]v",
 	// environment prefixes
-	"CC='sh -c id' go build ./...", "CC=./ccwrap go test ./...", "GOCACHE=/Users/v/x go build ./...", "GOMODCACHE=/tmp/gm go build ./...",
-	"TMPDIR=/Users/v/x sort a", "RIPGREP_CONFIG_PATH=rg.conf rg foo", "path=/x ls", "GNUMAKEFLAGS=--eval=x make", "MAKEFILES=/x make",
+	"CC='sh -c id' go build ./...", "CC=./ccwrap go test ./...", "GOCACHE=/Users/alice/x go build ./...", "GOMODCACHE=/tmp/gm go build ./...",
+	"TMPDIR=/Users/alice/x sort a", "RIPGREP_CONFIG_PATH=rg.conf rg foo", "path=/x ls", "GNUMAKEFLAGS=--eval=x make", "MAKEFILES=/x make",
 	"XDG_CONFIG_HOME=evil git add f", "ALL_PROXY=socks5://h go build ./...", "CDPATH=/ cd tmp", "IFS=x ls", "FOO=1 ls", "CI=/tmp/x ls",
 	"CI=../x ls", "CI=https://x ls", "CI=.env ls", "TZ=* ls", "PATH=/tmp ls",
 	// values with spaces
-	"go build -gcflags='-o /Users/v/x' ./...", "go build -ldflags='-o /Users/v/x' ./...", "go build -gcflags='-cpuprofile /Users/v/x' ./...",
-	"pytest -o addopts='--junitxml /Users/v/x'", "go build -ldflags='-extar sh -buildmode=c-archive'", "go build -ldflags '-extld  sh'",
+	"go build -gcflags='-o /Users/alice/x' ./...", "go build -ldflags='-o /Users/alice/x' ./...", "go build -gcflags='-cpuprofile /Users/alice/x' ./...",
+	"pytest -o addopts='--junitxml /Users/alice/x'", "go build -ldflags='-extar sh -buildmode=c-archive'", "go build -ldflags '-extld  sh'",
 	"go build -ldflags='-linkmode=external'", "go build -asmflags=-x ./...", "go build -gcflags='all=-o /tmp/x'", "pytest -o 'cache_dir=a b/../../x'",
 	"pytest -o plugins=x", "pytest -o python_files='a /tmp/x'", "make 'X=-o /tmp/x'",
 	// make

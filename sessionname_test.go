@@ -102,7 +102,7 @@ func TestCheckAliasName(t *testing.T) {
 	}
 }
 
-// renameFixture is boundFixture: Citri is bound to the main session (local_a / cli-1).
+// renameFixture is boundFixture: Alice is bound to the main session (local_a / cli-1).
 func renameFixture(t *testing.T) (*fakeHost, *sisters) {
 	t.Helper()
 	f, s, _ := boundFixture(t)
@@ -123,7 +123,7 @@ func nameOf(s *sisters, d string, sess session) string {
 func TestRenameOwnSessionNeedsNoApproval(t *testing.T) {
 	f, s := renameFixture(t)
 	// With no session given, the Bot names the session it is bound to.
-	res, err := rename(s, f, "Citri", renameIn{Name: "  Rubi core "})
+	res, err := rename(s, f, "Alice", renameIn{Name: "  Rubi core "})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,12 +136,12 @@ func TestRenameOwnSessionNeedsNoApproval(t *testing.T) {
 	}
 	// Audited, with who did it.
 	last := f.auditLog[len(f.auditLog)-1]
-	if f.audits[len(f.audits)-1] != auditRenamed || last["by"] != "bot" || last["sister"] != "Citri" || last["new"] != "Rubi core" || last["approval"] != "own bound session" {
+	if f.audits[len(f.audits)-1] != auditRenamed || last["by"] != "bot" || last["sister"] != "Alice" || last["new"] != "Rubi core" || last["approval"] != "own bound session" {
 		t.Fatalf("audit %v %v", f.audits, last)
 	}
 	// The same session by its id or app id, and by its name: also its own, also without approval.
 	for _, in := range []renameIn{{SessionID: "cli-1", Name: "Rubi main"}, {SessionID: "local_a", Name: "Rubi again"}, {SessionName: "rubi again", Name: "Final"}} {
-		if _, err := rename(s, f, "Citri", in); err != nil || len(f.submits) != 0 {
+		if _, err := rename(s, f, "Alice", in); err != nil || len(f.submits) != 0 {
 			t.Fatalf("%+v: %v (submits %d)", in, err, len(f.submits))
 		}
 	}
@@ -149,10 +149,10 @@ func TestRenameOwnSessionNeedsNoApproval(t *testing.T) {
 		t.Fatalf("aliases %+v", s.st.aliases())
 	}
 	// Clearing its own name.
-	if res, err := rename(s, f, "Citri", renameIn{Clear: true}); err != nil || res.(map[string]any)["cleared"] != true || len(s.st.aliases()) != 0 || len(f.submits) != 0 {
+	if res, err := rename(s, f, "Alice", renameIn{Clear: true}); err != nil || res.(map[string]any)["cleared"] != true || len(s.st.aliases()) != 0 || len(f.submits) != 0 {
 		t.Fatalf("%v %v", res, err)
 	}
-	if res, err := rename(s, f, "Citri", renameIn{Clear: true}); err != nil || res.(map[string]any)["cleared"] != false || len(f.submits) != 0 {
+	if res, err := rename(s, f, "Alice", renameIn{Clear: true}); err != nil || res.(map[string]any)["cleared"] != false || len(f.submits) != 0 {
 		t.Fatalf("clearing a name that isn't there: %v %v", res, err)
 	}
 }
@@ -172,23 +172,23 @@ func TestRenameChecksTheCaller(t *testing.T) {
 	if err != nil || res.(map[string]any)["status"] != "awaiting_approval" || len(f.submits) != 1 || nameOf(s, mac.ID, mainSess) != "" {
 		t.Fatalf("%v %v (submits %d)", res, err, len(f.submits))
 	}
-	if _, err := rename(s, f, "Citri", renameIn{Name: "x", Clear: true}); err == nil {
+	if _, err := rename(s, f, "Alice", renameIn{Name: "x", Clear: true}); err == nil {
 		t.Fatal("name and clear together")
 	}
-	if _, err := rename(s, f, "Citri", renameIn{}); err == nil {
+	if _, err := rename(s, f, "Alice", renameIn{}); err == nil {
 		t.Fatal("neither name nor clear")
 	}
-	if _, err := rename(s, f, "Citri", renameIn{SessionID: "nope", Name: "x"}); err == nil {
+	if _, err := rename(s, f, "Alice", renameIn{SessionID: "nope", Name: "x"}); err == nil {
 		t.Fatal("unknown session")
 	}
-	if _, err := rename(s, f, "Citri", renameIn{SessionID: "cli-1", SessionName: "x", Name: "x"}); err == nil {
+	if _, err := rename(s, f, "Alice", renameIn{SessionID: "cli-1", SessionName: "x", Name: "x"}); err == nil {
 		t.Fatal("both session_id and session_name")
 	}
 }
 
 func TestRenameOtherSessionAsksAndRunsOnApproval(t *testing.T) {
 	f, s := renameFixture(t)
-	res, err := rename(s, f, "Citri", renameIn{SessionID: "cli-3", Name: "Other project"})
+	res, err := rename(s, f, "Alice", renameIn{SessionID: "cli-3", Name: "Other project"})
 	if err != nil || res.(map[string]any)["status"] != "awaiting_approval" || len(f.submits) != 1 {
 		t.Fatalf("%v %v", res, err)
 	}
@@ -197,7 +197,7 @@ func TestRenameOtherSessionAsksAndRunsOnApproval(t *testing.T) {
 		t.Fatalf("%+v / named before approval", sub)
 	}
 	text, _ := json.Marshal(sub.Preview)
-	for _, want := range []string{"Other project", "Citri", "Mac", "cli-3", "/Users/v/other", "changes nothing in Claude Code"} {
+	for _, want := range []string{"Other project", "Alice", "Mac", "cli-3", "/Users/alice/other", "changes nothing in Claude Code"} {
 		if !strings.Contains(string(text)+sub.Summary, want) {
 			t.Errorf("approval lacks %q: %s %s", want, text, sub.Summary)
 		}
@@ -219,7 +219,7 @@ func TestRenameOtherSessionAsksAndRunsOnApproval(t *testing.T) {
 	}
 	// Clearing it asks too.
 	f.submits = nil
-	if res, err := rename(s, f, "Citri", renameIn{SessionName: "other project", Clear: true}); err != nil || res.(map[string]any)["status"] != "awaiting_approval" || len(f.submits) != 1 {
+	if res, err := rename(s, f, "Alice", renameIn{SessionName: "other project", Clear: true}); err != nil || res.(map[string]any)["status"] != "awaiting_approval" || len(f.submits) != 1 {
 		t.Fatalf("%v %v", res, err)
 	}
 	// A refused approval changes nothing (nothing runs).
@@ -229,17 +229,17 @@ func TestRenameOtherSessionAsksAndRunsOnApproval(t *testing.T) {
 }
 
 func TestRenameByAProjectTrustNeedsNoApproval(t *testing.T) {
-	f, s, _ := ptBot(t) // Citri is bound to the main session of /Users/v/rubi
+	f, s, _ := ptBot(t) // Alice is bound to the main session of /Users/alice/rubi
 	ctx := context.Background()
 	// Outside a trust the sub-session asks.
-	res, err := rename(s, f, "Citri", renameIn{SessionID: "cli-2", Name: "worker"})
+	res, err := rename(s, f, "Alice", renameIn{SessionID: "cli-2", Name: "worker"})
 	if err != nil || res.(map[string]any)["status"] != "awaiting_approval" {
 		t.Fatalf("%v %v", res, err)
 	}
 	f.submits = nil
 	pt := grantViaOption(t, f, s, "cli-1", ptRoot)
 	f.submits = nil
-	res, err = rename(s, f, "Citri", renameIn{SessionID: "cli-2", Name: "worker"})
+	res, err = rename(s, f, "Alice", renameIn{SessionID: "cli-2", Name: "worker"})
 	if err != nil || len(f.submits) != 0 || res.(map[string]any)["renamed"] != true || !strings.Contains(res.(map[string]any)["approval"].(string), pt) {
 		t.Fatalf("%v %v (submits %d)", res, err, len(f.submits))
 	}
@@ -254,7 +254,7 @@ func TestRenameByAProjectTrustNeedsNoApproval(t *testing.T) {
 	}
 	// A session outside the root still asks, and so does a Bot that isn't bound inside it.
 	f.submits = nil
-	for _, c := range []struct{ bot, id string }{{"Citri", "cli-3"}, {"Vega", "cli-2"}} {
+	for _, c := range []struct{ bot, id string }{{"Alice", "cli-3"}, {"Vega", "cli-2"}} {
 		res, err := rename(s, f, c.bot, renameIn{SessionID: c.id, Name: "elsewhere " + c.bot})
 		if err != nil || res.(map[string]any)["status"] != "awaiting_approval" {
 			t.Fatalf("%+v: %v %v", c, res, err)
@@ -265,13 +265,13 @@ func TestRenameByAProjectTrustNeedsNoApproval(t *testing.T) {
 
 func TestRenameUniqueness(t *testing.T) {
 	f, s := renameFixture(t)
-	if _, err := rename(s, f, "Citri", renameIn{Name: "Main"}); err != nil {
+	if _, err := rename(s, f, "Alice", renameIn{Name: "Main"}); err != nil {
 		t.Fatal(err)
 	}
 	// The same name on another session of the computer is refused, ignoring case, at the tool ...
 	pend := func(name string) error {
 		f.submits = nil
-		res, err := rename(s, f, "Citri", renameIn{SessionID: "cli-3", Name: name})
+		res, err := rename(s, f, "Alice", renameIn{SessionID: "cli-3", Name: name})
 		if err != nil {
 			return err
 		}
@@ -289,7 +289,7 @@ func TestRenameUniqueness(t *testing.T) {
 		}
 	}
 	// A session may re-use its own name (change the case).
-	if _, err := rename(s, f, "Citri", renameIn{Name: "main"}); err != nil || nameOf(s, mac.ID, mainSess) != "main" {
+	if _, err := rename(s, f, "Alice", renameIn{Name: "main"}); err != nil || nameOf(s, mac.ID, mainSess) != "main" {
 		t.Fatalf("%v %q", err, nameOf(s, mac.ID, mainSess))
 	}
 	// A different computer may use the same name.
@@ -298,7 +298,7 @@ func TestRenameUniqueness(t *testing.T) {
 		t.Fatalf("same name on another computer: %v", err)
 	}
 	// Taking another name frees the old one.
-	if _, err := rename(s, f, "Citri", renameIn{Name: "Core"}); err != nil {
+	if _, err := rename(s, f, "Alice", renameIn{Name: "Core"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := pend("main"); err != nil {
@@ -306,7 +306,7 @@ func TestRenameUniqueness(t *testing.T) {
 	}
 	// A name that is a session id on the computer is refused.
 	for _, id := range []string{"cli-3", "CLI-1"} {
-		if _, err := rename(s, f, "Citri", renameIn{Name: id}); err == nil {
+		if _, err := rename(s, f, "Alice", renameIn{Name: id}); err == nil {
 			t.Errorf("name %q equal to a session id accepted", id)
 		}
 	}
@@ -315,7 +315,7 @@ func TestRenameUniqueness(t *testing.T) {
 func TestBindByName(t *testing.T) {
 	f, s := renameFixture(t)
 	ctx := context.Background()
-	if _, err := rename(s, f, "Citri", renameIn{Name: "Rubi core"}); err != nil {
+	if _, err := rename(s, f, "Alice", renameIn{Name: "Rubi core"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.st.setAlias(mac.ID, mac.Name, subSess, "worker", "user", s.now()); err != nil {
@@ -389,7 +389,7 @@ func TestBindByNameAmbiguousAcrossComputers(t *testing.T) {
 func TestSessionsToolShowsNamesAndStatusToo(t *testing.T) {
 	f, s, code := boundFixture(t)
 	ctx := context.Background()
-	if _, err := s.renameTool(ctx, f, renameIn{VerifiedAgent: "Citri", Name: "Rubi core"}); err != nil {
+	if _, err := s.renameTool(ctx, f, renameIn{VerifiedAgent: "Alice", Name: "Rubi core"}); err != nil {
 		t.Fatal(err)
 	}
 	out, err := s.sessionsTool(ctx, f, sessionsIn{})
@@ -400,7 +400,7 @@ func TestSessionsToolShowsNamesAndStatusToo(t *testing.T) {
 	if len(items) != 3 || items[0]["name"] != "Rubi core" || items[0]["title"] != "Rubi main" || items[1]["name"] != nil {
 		t.Fatalf("sessions: %+v", items)
 	}
-	st, err := s.statusTool(ctx, f, statusIn{Sister: "Citri", BindCode: code})
+	st, err := s.statusTool(ctx, f, statusIn{Sister: "Alice", BindCode: code})
 	if err != nil || st.(map[string]any)["name"] != "Rubi core" {
 		t.Fatalf("status: %v %v", st, err)
 	}
@@ -420,8 +420,8 @@ func TestSessionsToolShowsNamesAndStatusToo(t *testing.T) {
 
 func TestBindResultCarriesTheName(t *testing.T) {
 	f, s := renameFixture(t)
-	_, _ = rename(s, f, "Citri", renameIn{Name: "Rubi core"})
-	res, err := s.executeBind(f, bindTicket{Sister: "Citri", Device: mac.ID, DeviceName: mac.Name, SessionID: "cli-1", AppSessionID: "local_a", Cwd: mainSess.Cwd})
+	_, _ = rename(s, f, "Alice", renameIn{Name: "Rubi core"})
+	res, err := s.executeBind(f, bindTicket{Sister: "Alice", Device: mac.ID, DeviceName: mac.Name, SessionID: "cli-1", AppSessionID: "local_a", Cwd: mainSess.Cwd})
 	if err != nil || res.(map[string]any)["name"] != "Rubi core" {
 		t.Fatalf("%v %v", res, err)
 	}
@@ -429,7 +429,7 @@ func TestBindResultCarriesTheName(t *testing.T) {
 
 func TestNamesPersistAcrossARestart(t *testing.T) {
 	f, s := renameFixture(t)
-	if _, err := rename(s, f, "Citri", renameIn{Name: "Rubi core"}); err != nil {
+	if _, err := rename(s, f, "Alice", renameIn{Name: "Rubi core"}); err != nil {
 		t.Fatal(err)
 	}
 	s2 := newSisters(&store{})
@@ -447,14 +447,14 @@ func TestNamesPersistAcrossARestart(t *testing.T) {
 	f.mu.Lock()
 	f.saveErr = context.DeadlineExceeded
 	f.mu.Unlock()
-	if _, err := rename(s2, f, "Citri", renameIn{Name: "Other"}); err == nil || nameOf(s2, mac.ID, mainSess) != "Rubi core" {
+	if _, err := rename(s2, f, "Alice", renameIn{Name: "Other"}); err == nil || nameOf(s2, mac.ID, mainSess) != "Rubi core" {
 		t.Fatalf("%v %q", err, nameOf(s2, mac.ID, mainSess))
 	}
 }
 
 func TestNameFollowsTheSessionsNewId(t *testing.T) {
 	f, s := renameFixture(t)
-	_, _ = rename(s, f, "Citri", renameIn{Name: "Rubi core"})
+	_, _ = rename(s, f, "Alice", renameIn{Name: "Rubi core"})
 	// The app restarts the session under a new Claude Code id: the name stays (by the app id).
 	f.mu.Lock()
 	f.sessions[0].SessionID = "cli-1b"
@@ -472,7 +472,7 @@ func TestStaleNamesExpire(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 10, 30, 10, 0, 0, 0, time.UTC)
 	s.now = func() time.Time { return now }
-	_, _ = rename(s, f, "Citri", renameIn{Name: "Rubi core"})
+	_, _ = rename(s, f, "Alice", renameIn{Name: "Rubi core"})
 	// A session that is gone, named 29 days ago: the name stays; 31 days: it goes (and is audited).
 	if _, err := s.st.setAlias(mac.ID, mac.Name, session{SessionID: "cli-gone", AppSessionID: "local_gone"}, "Old work", "user", now); err != nil {
 		t.Fatal(err)
@@ -591,7 +591,7 @@ func TestPanelRenameAndClear(t *testing.T) {
 func TestPanelPageListsSessionsWithRenameButtons(t *testing.T) {
 	f, s := renameFixture(t)
 	ctx := context.Background()
-	_, _ = rename(s, f, "Citri", renameIn{Name: "Rubi core"})
+	_, _ = rename(s, f, "Alice", renameIn{Name: "Rubi core"})
 	_, _ = s.st.setAlias(mac.ID, mac.Name, session{SessionID: "cli-gone"}, "Ghost", "user", s.now())
 	v, err := s.panel(ctx, f, "view", nil)
 	if err != nil {
@@ -641,11 +641,11 @@ func mustJSON(v any) string { b, _ := json.Marshal(v); return string(b) }
 func TestRenameIsRateLimited(t *testing.T) {
 	f, s := renameFixture(t)
 	for i := range renamesPerHour {
-		if _, err := rename(s, f, "Citri", renameIn{Name: "n" + string(rune('a'+i))}); err != nil {
+		if _, err := rename(s, f, "Alice", renameIn{Name: "n" + string(rune('a'+i))}); err != nil {
 			t.Fatalf("%d: %v", i, err)
 		}
 	}
-	if _, err := rename(s, f, "Citri", renameIn{Name: "one more"}); err == nil {
+	if _, err := rename(s, f, "Alice", renameIn{Name: "one more"}); err == nil {
 		t.Fatal("no rate limit")
 	}
 }
@@ -657,7 +657,7 @@ func TestTooManyNames(t *testing.T) {
 			t.Fatalf("%d: %v", i, err)
 		}
 	}
-	if _, err := rename(s, f, "Citri", renameIn{Name: "one more"}); err == nil {
+	if _, err := rename(s, f, "Alice", renameIn{Name: "one more"}); err == nil {
 		t.Fatal("no cap")
 	}
 }
@@ -673,7 +673,7 @@ func TestNamesFoldCaseConsistently(t *testing.T) {
 		t.Fatal("different names equal")
 	}
 	f, s := renameFixture(t)
-	if _, err := rename(s, f, "Citri", renameIn{Name: "ΟΔΟΣ"}); err != nil {
+	if _, err := rename(s, f, "Alice", renameIn{Name: "ΟΔΟΣ"}); err != nil {
 		t.Fatal(err)
 	}
 	// The same name in another case (final sigma) is taken, in the store, in lookup and in the panel's check.
@@ -691,7 +691,7 @@ func TestNamesNeverDropFromATruncatedList(t *testing.T) {
 	now := time.Date(2026, 10, 30, 10, 0, 0, 0, time.UTC)
 	s.now = func() time.Time { return now }
 	// A live session beyond Home's cut: named, but not in the list the cut produced.
-	live := session{SessionID: "cli-live", AppSessionID: "local_live", Title: "Far away", Cwd: "/Users/v/far", RepoKey: "github.com/v/far", Role: "main", State: "idle"}
+	live := session{SessionID: "cli-live", AppSessionID: "local_live", Title: "Far away", Cwd: "/Users/alice/far", RepoKey: "github.com/alice/far", Role: "main", State: "idle"}
 	f.mu.Lock()
 	f.sessions = append(f.sessions, live)
 	f.mu.Unlock()
@@ -715,7 +715,7 @@ func TestNamesNeverDropFromATruncatedList(t *testing.T) {
 	var tk bindTicket
 	raw, _ := json.Marshal(f.submits[len(f.submits)-1].Payload)
 	_ = json.Unmarshal(raw, &tk)
-	if tk.SessionID != "cli-live" || tk.AppSessionID != "local_live" || tk.Cwd != "/Users/v/far" || tk.Title != "Far away" {
+	if tk.SessionID != "cli-live" || tk.AppSessionID != "local_live" || tk.Cwd != "/Users/alice/far" || tk.Title != "Far away" {
 		t.Fatalf("ticket %+v", tk)
 	}
 	if note := f.submits[len(f.submits)-1].Preview.(map[string]any)["note"]; note == nil {
@@ -747,7 +747,7 @@ func TestSweepReadsArchivedOnlyWhenDue(t *testing.T) {
 	if a := arch(); len(a) != 1 || a[0] {
 		t.Fatalf("with no names: %v", a)
 	}
-	_, _ = rename(s, f, "Citri", renameIn{Name: "Rubi core"})
+	_, _ = rename(s, f, "Alice", renameIn{Name: "Rubi core"})
 	f.mu.Lock()
 	f.listArch = nil
 	f.mu.Unlock()
@@ -828,7 +828,7 @@ func TestBotNeedsATapToReplaceTheUsersName(t *testing.T) {
 	if _, err := s.panel(ctx, f, "rename", json.RawMessage(`{"device":"dev_mac","session_id":"local_a","name":"Mine"}`)); err != nil {
 		t.Fatal(err)
 	}
-	res, err := rename(s, f, "Citri", renameIn{Name: "Citri's pick"})
+	res, err := rename(s, f, "Alice", renameIn{Name: "Alice's pick"})
 	if err != nil || res.(map[string]any)["status"] != "awaiting_approval" || len(f.submits) != 1 || nameOf(s, mac.ID, mainSess) != "Mine" {
 		t.Fatalf("a Bot replaced the user's name without a tap: %v %v", res, err)
 	}
@@ -837,20 +837,20 @@ func TestBotNeedsATapToReplaceTheUsersName(t *testing.T) {
 	}
 	// Clearing it asks too.
 	f.submits = nil
-	if res, err := rename(s, f, "Citri", renameIn{Clear: true}); err != nil || res.(map[string]any)["status"] != "awaiting_approval" {
+	if res, err := rename(s, f, "Alice", renameIn{Clear: true}); err != nil || res.(map[string]any)["status"] != "awaiting_approval" {
 		t.Fatalf("%v %v", res, err)
 	}
 	// Once the user approved, the Bot's own name can be changed again without asking, and the result shows the old one.
 	f.submits = nil
-	raw, _ := json.Marshal(mustTicket(t, f, s, "Citri's pick"))
+	raw, _ := json.Marshal(mustTicket(t, f, s, "Alice's pick"))
 	var tk renameTicket
 	_ = json.Unmarshal(raw, &tk)
 	if _, err := s.executeRename(ctx, f, tk, "bot", "user approved", nil); err != nil {
 		t.Fatal(err)
 	}
-	res, err = rename(s, f, "Citri", renameIn{Name: "Citri again"})
+	res, err = rename(s, f, "Alice", renameIn{Name: "Alice again"})
 	m, _ := res.(map[string]any)
-	if err != nil || m["renamed"] != true || m["previous_name"] != "Citri's pick" || len(f.submits) != 0 {
+	if err != nil || m["renamed"] != true || m["previous_name"] != "Alice's pick" || len(f.submits) != 0 {
 		t.Fatalf("%v %v", res, err)
 	}
 	// A project trust doesn't change that: the user's name stays the user's.
@@ -858,7 +858,7 @@ func TestBotNeedsATapToReplaceTheUsersName(t *testing.T) {
 	_, _ = s2.panel(ctx, f2, "rename", json.RawMessage(`{"device":"dev_mac","session_id":"local_b","name":"User's sub"}`))
 	grantViaOption(t, f2, s2, "cli-1", ptRoot)
 	f2.submits = nil
-	res, err = rename(s2, f2, "Citri", renameIn{SessionID: "cli-2", Name: "Bot's sub"})
+	res, err = rename(s2, f2, "Alice", renameIn{SessionID: "cli-2", Name: "Bot's sub"})
 	if err != nil || res.(map[string]any)["status"] != "awaiting_approval" {
 		t.Fatalf("under a trust: %v %v", res, err)
 	}
@@ -866,17 +866,17 @@ func TestBotNeedsATapToReplaceTheUsersName(t *testing.T) {
 
 func mustTicket(t *testing.T, f *fakeHost, s *sisters, name string) renameTicket {
 	t.Helper()
-	return renameTicket{Sister: "Citri", Device: mac.ID, DeviceName: mac.Name, SessionID: "cli-1", AppSessionID: "local_a", Name: name}
+	return renameTicket{Sister: "Alice", Device: mac.ID, DeviceName: mac.Name, SessionID: "cli-1", AppSessionID: "local_a", Name: name}
 }
 
 func TestRenameRateLimitCountsOnlyRealSessions(t *testing.T) {
 	f, s := renameFixture(t)
 	for range renamesPerHour + 5 {
-		if _, err := rename(s, f, "Citri", renameIn{SessionID: "no-such", Name: "x"}); err == nil {
+		if _, err := rename(s, f, "Alice", renameIn{SessionID: "no-such", Name: "x"}); err == nil {
 			t.Fatal("unknown session accepted")
 		}
 	}
-	if _, err := rename(s, f, "Citri", renameIn{Name: "still fine"}); err != nil {
+	if _, err := rename(s, f, "Alice", renameIn{Name: "still fine"}); err != nil {
 		t.Fatalf("failed lookups used up the hour: %v", err)
 	}
 }
@@ -885,7 +885,7 @@ func TestApprovedRenameChecksTheNameAgainstSessionIds(t *testing.T) {
 	f, s := renameFixture(t)
 	ctx := context.Background()
 	// The name passed the tool, then a session with exactly that id appeared before the approval was answered.
-	if _, err := rename(s, f, "Citri", renameIn{SessionID: "cli-3", Name: "newcomer"}); err != nil {
+	if _, err := rename(s, f, "Alice", renameIn{SessionID: "cli-3", Name: "newcomer"}); err != nil {
 		t.Fatal(err)
 	}
 	raw, _ := json.Marshal(f.submits[0].Payload)

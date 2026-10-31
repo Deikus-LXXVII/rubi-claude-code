@@ -339,7 +339,7 @@ var readsAnywhere = map[string]bool{"sort": true, "uniq": true, "xxd": true, "tr
 // execCases collects every command the tests know, with the fixed test paths turned into the real tree's.
 func (st shellTree) execCases() (cases, mustAllow []string) {
 	fix := func(c string) string {
-		return strings.ReplaceAll(strings.ReplaceAll(c, "/Users/v/project", st.root), "/Users/v/", st.home+"/")
+		return strings.ReplaceAll(strings.ReplaceAll(c, "/Users/alice/project", st.root), "/Users/alice/", st.home+"/")
 	}
 	for _, l := range [][]string{mandateAllowedCases, writesAllowedCases, tableAllowed, reviewAllowed} {
 		for _, c := range l {
@@ -522,7 +522,7 @@ func TestMandateGitAgainstRealGit(t *testing.T) {
 		"git checkout -B main", "git checkout --detach", "git checkout -p", "git restore -p a.txt")
 	ran := 0
 	for _, cmd := range cases {
-		cmd = strings.ReplaceAll(strings.ReplaceAll(cmd, "/Users/v/project", st.root), "/Users/v/", st.home+"/")
+		cmd = strings.ReplaceAll(strings.ReplaceAll(cmd, "/Users/alice/project", st.root), "/Users/alice/", st.home+"/")
 		if ok, _ := mandateAllows(cmd, st.root, st.root); !ok {
 			continue
 		}

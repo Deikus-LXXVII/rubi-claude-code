@@ -38,7 +38,7 @@ func ticketOf(t *testing.T, f *fakeHost) startTicket {
 
 func TestStartAsksPlainly(t *testing.T) {
 	f, s := startFixture(t)
-	res, err := s.startTool(context.Background(), f, startIn{VerifiedAgent: "Citri", Cwd: "/Users/v/newproj", Task: "Please run the tests & report"})
+	res, err := s.startTool(context.Background(), f, startIn{VerifiedAgent: "Alice", Cwd: "/Users/alice/newproj", Task: "Please run the tests & report"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,17 +49,17 @@ func TestStartAsksPlainly(t *testing.T) {
 	raw, _ := json.Marshal(r.Preview)
 	text := string(raw)
 	for _, want := range []string{
-		"Starts a NEW Claude Code session on Mac in /Users/v/newproj", "Please run the tests & report", "from Citri", "not yours",
-		"bypassPermissions", "can run any command there without asking", "Rubi's reference for this request: <code>", "--- message from Citri ---", "first_message_from_bot", "Rubi approvals don't apply", "Citri is bound",
+		"Starts a NEW Claude Code session on Mac in /Users/alice/newproj", "Please run the tests & report", "from Alice", "not yours",
+		"bypassPermissions", "can run any command there without asking", "Rubi's reference for this request: <code>", "--- message from Alice ---", "first_message_from_bot", "Rubi approvals don't apply", "Alice is bound",
 	} {
 		if !strings.Contains(strings.NewReplacer(`\u0026`, "&", `\u003c`, "<", `\u003e`, ">").Replace(text), want) {
 			t.Errorf("approval text lacks %q:\n%s", want, text)
 		}
 	}
-	if !strings.Contains(r.Summary, "Mac") || !strings.Contains(r.Summary, "Citri") || len(f.creates) != 0 {
+	if !strings.Contains(r.Summary, "Mac") || !strings.Contains(r.Summary, "Alice") || len(f.creates) != 0 {
 		t.Fatalf("summary %q, creates %d (nothing may start before the approval)", r.Summary, len(f.creates))
 	}
-	if tk := ticketOf(t, f); tk.Sister != "Citri" || tk.Device != "dev_mac" || tk.Cwd != "/Users/v/newproj" || tk.Task != "Please run the tests & report" {
+	if tk := ticketOf(t, f); tk.Sister != "Alice" || tk.Device != "dev_mac" || tk.Cwd != "/Users/alice/newproj" || tk.Task != "Please run the tests & report" {
 		t.Fatalf("%+v", tk)
 	}
 	// The manifest asks for the strongest, locked approval.
@@ -76,23 +76,23 @@ func TestStartAsksPlainly(t *testing.T) {
 func TestStartChecksItsInput(t *testing.T) {
 	f, s := startFixture(t)
 	ctx := context.Background()
-	ok := startIn{VerifiedAgent: "Citri", Cwd: "/w", Task: "x"}
+	ok := startIn{VerifiedAgent: "Alice", Cwd: "/w", Task: "x"}
 	for name, in := range map[string]startIn{
 		"unverified": {Cwd: "/w", Task: "x"},
-		"no task":    {VerifiedAgent: "Citri", Cwd: "/w", Task: "  "},
-		"long task":  {VerifiedAgent: "Citri", Cwd: "/w", Task: strings.Repeat("x", maxStartTask+1)},
-		"relative":   {VerifiedAgent: "Citri", Cwd: "w", Task: "x"},
-		"no cwd":     {VerifiedAgent: "Citri", Task: "x"},
-		"control":    {VerifiedAgent: "Citri", Cwd: "/w\n", Task: "x"},
-		"no device":  {VerifiedAgent: "Citri", Cwd: "/w", Task: "x", Device: "Nope"},
-		"zero width": {VerifiedAgent: "Citri", Cwd: "/w", Task: "run\u200B the tests"},
-		"bidi":       {VerifiedAgent: "Citri", Cwd: "/w", Task: "a\u202Eb"},
-		"tag chars":  {VerifiedAgent: "Citri", Cwd: "/w", Task: "a\U000E0041b"},
-		"private":    {VerifiedAgent: "Citri", Cwd: "/w", Task: "a\ue000b"},
-		"C1":         {VerifiedAgent: "Citri", Cwd: "/w", Task: "a\u0085b"},
-		"escape":     {VerifiedAgent: "Citri", Cwd: "/w", Task: "a\x1b[0mb"},
-		"blank run":  {VerifiedAgent: "Citri", Cwd: "/w", Task: "a\n\n\n\nb"},
-		"many lines": {VerifiedAgent: "Citri", Cwd: "/w", Task: strings.Repeat("x\n", maxStartLines+1) + "x"},
+		"no task":    {VerifiedAgent: "Alice", Cwd: "/w", Task: "  "},
+		"long task":  {VerifiedAgent: "Alice", Cwd: "/w", Task: strings.Repeat("x", maxStartTask+1)},
+		"relative":   {VerifiedAgent: "Alice", Cwd: "w", Task: "x"},
+		"no cwd":     {VerifiedAgent: "Alice", Task: "x"},
+		"control":    {VerifiedAgent: "Alice", Cwd: "/w\n", Task: "x"},
+		"no device":  {VerifiedAgent: "Alice", Cwd: "/w", Task: "x", Device: "Nope"},
+		"zero width": {VerifiedAgent: "Alice", Cwd: "/w", Task: "run\u200B the tests"},
+		"bidi":       {VerifiedAgent: "Alice", Cwd: "/w", Task: "a\u202Eb"},
+		"tag chars":  {VerifiedAgent: "Alice", Cwd: "/w", Task: "a\U000E0041b"},
+		"private":    {VerifiedAgent: "Alice", Cwd: "/w", Task: "a\ue000b"},
+		"C1":         {VerifiedAgent: "Alice", Cwd: "/w", Task: "a\u0085b"},
+		"escape":     {VerifiedAgent: "Alice", Cwd: "/w", Task: "a\x1b[0mb"},
+		"blank run":  {VerifiedAgent: "Alice", Cwd: "/w", Task: "a\n\n\n\nb"},
+		"many lines": {VerifiedAgent: "Alice", Cwd: "/w", Task: strings.Repeat("x\n", maxStartLines+1) + "x"},
 	} {
 		if _, err := s.startTool(ctx, f, in); err == nil {
 			t.Errorf("%s accepted", name)
@@ -120,11 +120,11 @@ func TestStartChecksItsInput(t *testing.T) {
 func TestStartIsRateLimitedPerBot(t *testing.T) {
 	f, s := startFixture(t)
 	for i := 0; i < startsPerHour; i++ {
-		if _, err := s.startTool(context.Background(), f, startIn{VerifiedAgent: "Citri", Cwd: "/w", Task: "x"}); err != nil {
+		if _, err := s.startTool(context.Background(), f, startIn{VerifiedAgent: "Alice", Cwd: "/w", Task: "x"}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err := s.startTool(context.Background(), f, startIn{VerifiedAgent: "citri", Cwd: "/w", Task: "x"}); err == nil {
+	if _, err := s.startTool(context.Background(), f, startIn{VerifiedAgent: "alice", Cwd: "/w", Task: "x"}); err == nil {
 		t.Fatal("no limit")
 	}
 	if _, err := s.startTool(context.Background(), f, startIn{VerifiedAgent: "Vega", Cwd: "/w", Task: "x"}); err != nil {
@@ -143,7 +143,7 @@ func TestStartIsRateLimitedPerBot(t *testing.T) {
 
 func approvedStart(t *testing.T, f *fakeHost, s *sisters) startTicket {
 	t.Helper()
-	if _, err := s.startTool(context.Background(), f, startIn{VerifiedAgent: "Citri", Cwd: "/Users/v/rubi", Task: "run the tests"}); err != nil {
+	if _, err := s.startTool(context.Background(), f, startIn{VerifiedAgent: "Alice", Cwd: "/Users/alice/rubi", Task: "run the tests"}); err != nil {
 		t.Fatal(err)
 	}
 	return ticketOf(t, f)
@@ -159,15 +159,15 @@ func TestStartBindsTheNewSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(f.creates) != 1 || f.creates[0]["cwd"] != "/Users/v/rubi" || f.creates[0]["prompt"] != "run the tests" || f.creates[0]["from"] != "Citri" {
+	if len(f.creates) != 1 || f.creates[0]["cwd"] != "/Users/alice/rubi" || f.creates[0]["prompt"] != "run the tests" || f.creates[0]["from"] != "Alice" {
 		t.Fatalf("create args %v", f.creates)
 	}
 	bs := s.st.bindings()
-	if len(bs) != 1 || bs[0].Sister != "Citri" || bs[0].SessionID != "cli-1" || bs[0].AppSessionID != "local_a" || bs[0].RepoKey != "github.com/v/rubi" {
+	if len(bs) != 1 || bs[0].Sister != "Alice" || bs[0].SessionID != "cli-1" || bs[0].AppSessionID != "local_a" || bs[0].RepoKey != "github.com/alice/rubi" {
 		t.Fatalf("binding %+v", bs)
 	}
 	ev := f.events[len(f.events)-1]
-	if ev["_type"] != eventBound || ev["_agent"] != "Citri" || ev["bind_code"] != bs[0].Code {
+	if ev["_type"] != eventBound || ev["_agent"] != "Alice" || ev["bind_code"] != bs[0].Code {
 		t.Fatalf("the code didn't go to the sister alone: %+v", ev)
 	}
 	// The approval's result is handed to whoever follows approvals: no code in it.
@@ -179,14 +179,14 @@ func TestStartBindsTheNewSession(t *testing.T) {
 	if m["started"] != true || m["bound"] != true || m["session_id"] != "cli-1" || m["warning"] != bypassPermsNote {
 		t.Fatalf("result %v", m)
 	}
-	if got := boundCalls(f); !slices.Equal(got, []string{"Citri|cli-1|bound"}) {
+	if got := boundCalls(f); !slices.Equal(got, []string{"Alice|cli-1|bound"}) {
 		t.Fatalf("Rubi Home wasn't told: %v", got)
 	}
 	if !slices.Contains(f.audits, "session_started") || !slices.Contains(f.audits, "binding_created") {
 		t.Fatalf("audits %v", f.audits)
 	}
 	// The bound Bot can send to it.
-	if _, err := s.sendTool(context.Background(), f, sendIn{Sister: "Citri", BindCode: bs[0].Code, Text: "hi"}); err != nil {
+	if _, err := s.sendTool(context.Background(), f, sendIn{Sister: "Alice", BindCode: bs[0].Code, Text: "hi"}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -203,7 +203,7 @@ func TestStartBindsEvenBeforeTheStoreKnowsTheSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	bs := s.st.bindings()
-	if len(bs) != 1 || bs[0].SessionID != "cli-new" || bs[0].Cwd != "/Users/v/rubi" || res.(map[string]any)["warning"] != nil {
+	if len(bs) != 1 || bs[0].SessionID != "cli-new" || bs[0].Cwd != "/Users/alice/rubi" || res.(map[string]any)["warning"] != nil {
 		t.Fatalf("%+v %v", bs, res)
 	}
 }
@@ -265,7 +265,7 @@ func TestStartKeepsTheSessionWhenTheCodeCantBeDelivered(t *testing.T) {
 	f.createFn = func(_ context.Context, a map[string]any) (map[string]any, error) {
 		return map[string]any{"launched": true, "session_id": "cli-1", "cwd": a["cwd"]}, nil
 	}
-	f.emitToErr = errors.New("no Bot named Citri is connected")
+	f.emitToErr = errors.New("no Bot named Alice is connected")
 	res, err := s.executeStart(context.Background(), f, tk)
 	if err != nil {
 		t.Fatal(err)

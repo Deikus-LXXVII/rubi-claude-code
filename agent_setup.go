@@ -2,8 +2,8 @@ package main
 
 // The setup page of the agent path: Rubi Home's agent-setup.* operations (docs/design/home-setup-wizard.md in the
 // Rubi repository) behind buttons, so nobody types a command in a terminal. Everything here is the user's own
-// request from the panel. Three buttons ask for a strong approval first (the container install, the network, a
-// folder), and "Set up everything" is offered only once those two steps are done, so it can't reach them without
+// request from the panel. Two buttons ask for a strong approval first (the container install, a
+// folder), and "Set up everything" is offered only once the container step is done, so it can't reach it without
 // the approval. Bots get no tool for any of it. What Rubi Home reports (reasons, progress, the sign-in link) is
 // untrusted text: it is clipped, shown as item text only, never in a button label or a prompt.
 
@@ -38,7 +38,6 @@ const (
 	setupMaxCode   = 512
 
 	kindSetupInstall = "claude-code.setup.install"
-	kindSetupNetwork = "claude-code.setup.network"
 	kindSetupProject = "claude-code.setup.project"
 )
 
@@ -112,7 +111,7 @@ func (st setupStatus) busy() bool {
 	return false
 }
 
-var setupTitles = map[string]string{"container": "Apple container", "service": "Container service", "network": "Host-only network",
+var setupTitles = map[string]string{"container": "Apple container", "service": "Container service",
 	"image": "Runner image", "projects": "Projects", "login": "Claude sign-in", "selftest": "Self-test"}
 
 var setupStates = map[string]string{"todo": "not done", "working": "working", "done": "done", "failed": "failed", "needs_user": "needs you"}
@@ -201,7 +200,7 @@ func (s *sisters) setupDevice(ctx context.Context, h sisterHost, device string) 
 func (s *sisters) setupLinkSection(ctx context.Context, h sisterHost) []map[string]any {
 	var items []map[string]any
 	for _, d := range s.setupDevices(ctx, h) {
-		items = append(items, map[string]any{"title": "Set up the agent path", "detail": oneLine("On "+d.Name+": Apple's container tool, the network, the runner image, a folder, Claude's sign-in and a self-test, with buttons only.", 300),
+		items = append(items, map[string]any{"title": "Set up the agent path", "detail": oneLine("On "+d.Name+": Apple's container tool, the runner image, a folder, Claude's sign-in and a self-test, with buttons only.", 300),
 			"actions": []map[string]any{{"label": "Open", "open": panelPage{Page: pageSetup, Device: d.ID}.open()}}})
 	}
 	if len(items) == 0 {
@@ -299,12 +298,11 @@ func (s *sisters) setupPage(ctx context.Context, h sisterHost, p panelPage) (any
 	}
 	var topActions []map[string]any
 	c, cok := st.step("container")
-	n, nok := st.step("network")
-	if !busy && cok && nok && c.State == "done" && n.State == "done" {
+	if !busy && cok && c.State == "done" {
 		topActions = append(topActions, act("Set up everything", "setup_run", map[string]any{"device": d.ID, "step": "all"}))
 	}
 	topActions = append(topActions, map[string]any{"label": "Refresh", "open": panelPage{Page: pageSetup, Device: d.ID}.open()})
-	allNote := "\"Set up everything\" appears once the container tool and the network are done: those two ask for your approval, and it never skips them."
+	allNote := "\"Set up everything\" appears once the container tool is done: that step asks for your approval, and it never skips it."
 	sections := []map[string]any{{"title": "Setup", "note": allNote, "empty": "Nothing is running now.", "items": top, "actions": topActions}}
 
 	for i, step := range st.Steps {
@@ -327,10 +325,6 @@ func (s *sisters) setupPage(ctx context.Context, h sisterHost, p panelPage) (any
 				actions = append(actions, act(ifElse(step.Action == "upgrade", "Upgrade", "Install"), "setup_install", dev()))
 			case "start":
 				actions = append(actions, act("Start", "setup_run", map[string]any{"device": d.ID, "step": "service"}))
-			case "create":
-				actions = append(actions, act("Create", "setup_network", dev()))
-			case "use_auto_address":
-				actions = append(actions, act("Use the automatic address", "setup_run", map[string]any{"device": d.ID, "step": "network", "option": "auto-address"}))
 			case "build":
 				actions = append(actions, act(ifElse(step.State == "done", "Update", "Build"), "setup_run", map[string]any{"device": d.ID, "step": "image"}))
 			case "add":
@@ -430,7 +424,7 @@ func (s *sisters) setupPage(ctx context.Context, h sisterHost, p panelPage) (any
 		sections = append(sections, sec)
 	}
 	page := map[string]any{"title": "Set up the agent path: " + oneLine(d.Name, 60), "up": upMain,
-		"note": "The sign-in is one for every project on this computer, with a Claude subscription, for your own personal use under Anthropic's terms. The token stays in Rubi Home on that computer: the agents' VMs never hold it, Rubi Home adds it to their requests to Anthropic. Install shows macOS's own administrator dialog on the computer: this page never asks for a password. Install, Create (network) and Add a folder ask for your strong approval first.", "sections": sections}
+		"note": "The sign-in is one for every project on this computer, with a Claude subscription, for your own personal use under Anthropic's terms. The token stays in Rubi Home on that computer: the agents' VMs never hold it, Rubi Home adds it to their requests to Anthropic. Install shows macOS's own administrator dialog on the computer: this page never asks for a password. Install and Add a folder ask for your strong approval first.", "sections": sections}
 	if busy || st.Login != nil {
 		page["refresh"] = 3
 	}
@@ -459,9 +453,6 @@ func (s *sisters) panelSetup(ctx context.Context, h sisterHost, op string, a set
 	case "setup_install":
 		return s.askSetup(ctx, h, d, kindSetupInstall, "Install Apple's container tool on "+d.Name,
 			"Rubi Home on that computer downloads Apple's signed container installer (a pinned release, checked by size, hash and signature) and installs it. macOS then shows its own administrator dialog on that computer.")
-	case "setup_network":
-		return s.askSetup(ctx, h, d, kindSetupNetwork, "Create the host-only network for the agent path on "+d.Name,
-			"Rubi Home on that computer creates the internal network the project VMs use. It never deletes a network.")
 	case "setup_add":
 		return s.askSetup(ctx, h, d, kindSetupProject, "Add a folder as an agent project on "+d.Name,
 			"A folder chooser opens on that computer. The folder you pick becomes a project: Claude in its VM can read and write everything in it.")
@@ -469,18 +460,6 @@ func (s *sisters) panelSetup(ctx context.Context, h sisterHost, op string, a set
 		args := map[string]any{"step": a.Step}
 		switch a.Step {
 		case "service", "image":
-		case "network":
-			// Only the option that clears the proxy address settings, and only when the network is there to be
-			// used (Rubi Home offers use_auto_address): creating the network asks for the approval.
-			st, err := s.setupStatus(ctx, h, d.ID, true)
-			if err != nil {
-				return nil, errors.New("couldn't read the setup status: " + oneLine(err.Error(), 160))
-			}
-			n, nok := st.step("network")
-			if a.Option != "auto-address" || !nok || n.Action != "use_auto_address" {
-				return nil, errors.New("creating the network asks for your approval")
-			}
-			args["option"] = a.Option
 		case "selftest":
 			if err := s.checkProject(ctx, h, d.ID, a.Project); err != nil {
 				return nil, err
@@ -494,16 +473,15 @@ func (s *sisters) panelSetup(ctx context.Context, h sisterHost, op string, a set
 			}
 		case "signout":
 		case "all":
-			// The container and the network ask for an approval first: refuse unless both are done now. (Rubi Home's
+			// The container asks for an approval first: refuse unless it is done now. (Rubi Home's
 			// "all" no longer runs those two steps at all, so this is a second lock, not the only one.)
 			st, err := s.setupStatus(ctx, h, d.ID, true)
 			if err != nil {
 				return nil, errors.New("couldn't read the setup status: " + oneLine(err.Error(), 160))
 			}
 			c, cok := st.step("container")
-			n, nok := st.step("network")
-			if !cok || !nok || c.State != "done" || n.State != "done" {
-				return nil, errors.New("install the container tool and create the network first: they ask for your approval")
+			if !cok || c.State != "done" {
+				return nil, errors.New("install the container tool first: it asks for your approval")
 			}
 		default:
 			return nil, errors.New("unknown step")
@@ -584,10 +562,6 @@ func (s *sisters) setupDo(ctx context.Context, h sisterHost, d rubiplugin.HomeDe
 
 func (s *sisters) executeSetupInstall(ctx context.Context, h sisterHost, t setupTicket) (any, error) {
 	return s.executeSetup(ctx, h, t, opSetupRun, map[string]any{"step": "container"}, "install the container tool", panelListTimeout)
-}
-
-func (s *sisters) executeSetupNetwork(ctx context.Context, h sisterHost, t setupTicket) (any, error) {
-	return s.executeSetup(ctx, h, t, opSetupRun, map[string]any{"step": "network"}, "create the network", panelListTimeout)
 }
 
 func (s *sisters) executeSetupProject(ctx context.Context, h sisterHost, t setupTicket) (any, error) {
