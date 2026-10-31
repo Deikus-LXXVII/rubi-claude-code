@@ -114,23 +114,23 @@ func TestAgentEventsRouteToTheBoundBot(t *testing.T) {
 	n = len(f.events)
 	s.routeAgent(ctx, f, mac, agentItem{Type: "event", Kind: "sister_reply", Project: "p1", SessionID: "s-1", To: "Alice", InReplyTo: []string{"m2"}, Text: "early answer"})
 	s.routeAgent(ctx, f, mac, agentItem{Type: "event", Kind: "sister_ask", Project: "p1", SessionID: "s-1", AskKind: "audit", Text: "check the diff"})
-	// An ask from a session nobody is bound to goes to a Bot bound in the same project.
+	// An ask from a session nobody is bound to is dropped: only the bound Bot gets asks.
 	s.routeAgent(ctx, f, mac, agentItem{Type: "event", Kind: "sister_ask", Project: "p1", SessionID: "s-2", AskKind: "research", Text: "what is x"})
 	s.routeAgent(ctx, f, mac, agentItem{Type: "event", Kind: "sister_ask", Project: "p9", SessionID: "s-9", Text: "nobody"})
 	s.routeAgent(ctx, f, mac, agentItem{Type: "event", Kind: "message", Project: "p1", SessionID: "s-1", To: "Alice", ID: "m1", State: "answered", At: time.Now()})
 	s.routeAgent(ctx, f, mac, agentItem{Type: "event", Kind: "message", Project: "p1", SessionID: "s-1", To: "Alice", ID: "m1", State: "queued"})
 	got = f.events[n:]
-	if len(got) != 4 || got[0]["_type"] != eventReply || got[1]["_type"] != eventAsk || got[1]["kind"] != "audit" || got[2]["_type"] != eventAsk ||
-		got[2]["_agent"] != "Alice" || got[3]["_type"] != eventMessage || got[3]["state"] != "answered" {
+	if len(got) != 3 || got[0]["_type"] != eventReply || got[1]["_type"] != eventAsk || got[1]["kind"] != "audit" || got[1]["_agent"] != "Alice" ||
+		got[2]["_type"] != eventMessage || got[2]["state"] != "answered" {
 		t.Fatalf("%+v", got)
 	}
 	// An answer to an ask goes to the session that asked.
 	b := s.st.bindings()[0]
-	askID := got[2]["ask_id"].(string)
+	askID := got[1]["ask_id"].(string)
 	if _, err := s.sendTool(ctx, f, sendIn{Sister: "Alice", BindCode: b.Code, Text: "x is 3", ReplyToAsk: askID}); err != nil {
 		t.Fatal(err)
 	}
-	if c := f.agent.called(opAgentSend); len(c) != 1 || c[0]["id"] != "s-2" || c[0]["project"] != "p1" {
+	if c := f.agent.called(opAgentSend); len(c) != 1 || c[0]["id"] != "s-1" || c[0]["project"] != "p1" {
 		t.Fatalf("%v", c)
 	}
 }

@@ -77,7 +77,13 @@ func (s *sisters) agentCapable(ctx context.Context, h homeCaller, device string)
 	if s.caps == nil {
 		s.caps = map[string]capEntry{}
 	}
-	s.caps[device] = capEntry{ok: err == nil, at: now}
+	// "No" is remembered only when Rubi Home says it doesn't do the operation; a timeout or a dropped connection
+	// is not an answer, so a computer that is only slow is not written off for a minute.
+	if err == nil || isUnknownOp(err) {
+		s.caps[device] = capEntry{ok: err == nil, at: now}
+	} else {
+		delete(s.caps, device)
+	}
 	s.mu.Unlock()
 	return err == nil
 }
@@ -265,6 +271,14 @@ type agentItem struct {
 	Cwd       string          `json:"cwd,omitempty"`
 	Mode      string          `json:"mode,omitempty"`
 	ExpiresAt time.Time       `json:"expires_at,omitzero"`
+	// cred.ask and net.ask: the remote's host and repository path and the operation (push, connect). These come
+	// from Claude's own git remote or connection, so they are untrusted text.
+	Host string `json:"host,omitempty"`
+	Path string `json:"path,omitempty"`
+	Op   string `json:"op,omitempty"`
+	// Event is an event item's payload as Rubi Home nests it; its fields are read into the ones below.
+	Event  json.RawMessage `json:"event,omitempty"`
+	detail string          // set by handleAsk: what the approval shows for a question without a tool input
 	// event: Kind is the runner's (assistant, tool, result, sister_reply, sister_ask, message, status, error ...)
 	Kind      string    `json:"kind,omitempty"`
 	ID        string    `json:"id,omitempty"`
@@ -276,6 +290,28 @@ type agentItem struct {
 	IsError   bool      `json:"is_error,omitempty"`
 	Truncated bool      `json:"truncated,omitempty"`
 	At        time.Time `json:"at,omitzero"`
+}
+
+// UnmarshalJSON reads an item, and an event item's nested payload into its flat fields.
+func (it *agentItem) UnmarshalJSON(b []byte) error {
+	type plain agentItem
+	var p plain
+	if err := json.Unmarshal(b, &p); err != nil {
+		return err
+	}
+	if len(p.Event) > 0 {
+		var ev plain
+		if err := json.Unmarshal(p.Event, &ev); err != nil {
+			return err
+		}
+		ev.Type, ev.Project, ev.Event = p.Type, p.Project, p.Event
+		if ev.SessionID == "" {
+			ev.SessionID = p.SessionID
+		}
+		p = ev
+	}
+	*it = agentItem(p)
+	return nil
 }
 
 // pollAgent asks one computer for the agent's questions and events until ctx ends, the computer is unpaired or
@@ -359,15 +395,6 @@ func (s *sisters) routeAgent(ctx context.Context, h sisterHost, d rubiplugin.Hom
 			h.Logf("message state to %s: %v", target.Sister, err)
 		}
 	case "sister_ask":
-		if target == nil {
-			// An ask from a session nobody is bound to goes to a Bot bound in the same project (the oldest).
-			for _, b := range s.st.bindings() {
-				if b.Device == d.ID && b.Project == it.Project && b.Project != "" && (target == nil || b.Since.Before(target.Since)) {
-					b := b
-					target = &b
-				}
-			}
-		}
 		if target == nil {
 			h.Logf("%s: ask from unbound agent session %s dropped", d.Name, it.SessionID)
 			return

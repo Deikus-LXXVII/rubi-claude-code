@@ -139,6 +139,9 @@ func TestAgentFork(t *testing.T) {
 	if len(c) != 1 || c[0]["project"] != "p1" || c[0]["id"] != "s-1" || c[0]["name"] != "experiment" {
 		t.Fatalf("%v", c)
 	}
+	if c[0]["mode"] != "default" {
+		t.Fatalf("the fork did not ask for the source's mode: %v", c[0])
+	}
 	if m := res.(map[string]any); m["forked"] != true || m["session_id"] != "s-fork" || m["name"] != "experiment" {
 		t.Fatalf("%v", m)
 	}
@@ -167,6 +170,13 @@ func TestAgentFork(t *testing.T) {
 	}
 	if _, err := s.forkTool(ctx, f, forkIn{Session: "s-1"}); err == nil {
 		t.Fatal("unverified Bot")
+	}
+	// A source whose mode Home didn't report can't be forked safely.
+	f.agent.mu.Lock()
+	f.agent.sessions["p1"][1].Mode = ""
+	f.agent.mu.Unlock()
+	if _, err := s.forkTool(ctx, f, forkIn{VerifiedAgent: "Alice", Project: "p1", Session: "s-2"}); err == nil {
+		t.Fatal("forked a session of unknown mode")
 	}
 	m := manifest()
 	if a, ok := m.Action(kindForkOwn); !ok || a.DefaultLevel != rubiplugin.Tap {

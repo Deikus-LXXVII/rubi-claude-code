@@ -36,6 +36,7 @@ type forkTicket struct {
 	Project    string `json:"project"`
 	SessionID  string `json:"session_id"`
 	Name       string `json:"name,omitempty"`
+	Mode       string `json:"mode"` // the source session's mode, asked of Rubi Home explicitly so a fork never loosens it
 }
 
 func (s *sisters) forkTool(ctx context.Context, h sisterHost, in forkIn) (any, error) {
@@ -74,6 +75,9 @@ func (s *sisters) forkTool(ctx context.Context, h sisterHost, in forkIn) (any, e
 		return nil, errors.New("no such agent session (list them with claude_code_sessions)")
 	}
 	d, proj, sess := ref.ad.device, ref.proj, ref.sess
+	if _, ok := modeRank[sess.Mode]; !ok {
+		return nil, errors.New("Rubi Home didn't report that session's permission mode, so a fork could end up looser than it; try again later")
+	}
 	if name != "" {
 		if len(s.st.aliasesNamed(d.ID, name)) > 0 {
 			return nil, fmt.Errorf("another session on %s is already called %q", d.Name, name)
@@ -89,27 +93,27 @@ func (s *sisters) forkTool(ctx context.Context, h sisterHost, in forkIn) (any, e
 	for _, b := range s.st.bindings() {
 		own = own || sameBot(b.Sister, sister) && b.Device == d.ID && b.Project == proj.ID && b.SessionID == sess.ID
 	}
-	t := forkTicket{Sister: sister, Device: d.ID, DeviceName: d.Name, Project: proj.ID, SessionID: sess.ID, Name: name}
+	t := forkTicket{Sister: sister, Device: d.ID, DeviceName: d.Name, Project: proj.ID, SessionID: sess.ID, Name: name, Mode: sess.Mode}
 	kind := kindFork
 	if own {
 		kind = kindForkOwn
 	}
 	preview := map[string]any{"bot": sister, "computer": d.Name, "project": proj.Dir, "session": sess.ID, "session_name": sess.Name, "mode": sess.Mode, "new_name": name,
 		"own_session":  own,
-		"what_it_does": "Makes a branch of this Claude session's conversation as a new session. It stays idle until a message is sent to it, and then runs in the same project VM and permission mode as Rubi Home gives new sessions. It is not bound to anyone."}
+		"what_it_does": "Makes a branch of this Claude session's conversation as a new session. It stays idle until a message is sent to it, and then runs in the same project VM and in the same permission mode as the source (" + sess.Mode + "; the plugin asks Rubi Home for exactly that mode). It is not bound to anyone."}
 	return h.Submit(ctx, rubiplugin.Request{Kind: kind, Summary: fmt.Sprintf("Fork a Claude session on %s for %s: %s", d.Name, sister, oneLine(firstNonEmpty(sess.Name, sess.ID), 60)),
 		Preview: preview, Payload: t})
 }
 
 // executeFork runs once the fork was approved.
 func (s *sisters) executeFork(ctx context.Context, h sisterHost, t forkTicket) (any, error) {
-	if t.Device == "" || t.Project == "" || t.SessionID == "" {
+	if _, ok := modeRank[t.Mode]; !ok || t.Device == "" || t.Project == "" || t.SessionID == "" {
 		return nil, errors.New("bad payload")
 	}
 	var res struct {
 		ID string `json:"id"`
 	}
-	args := map[string]any{"project": t.Project, "id": t.SessionID}
+	args := map[string]any{"project": t.Project, "id": t.SessionID, "mode": t.Mode}
 	if t.Name != "" {
 		args["name"] = t.Name
 	}

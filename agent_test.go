@@ -192,7 +192,8 @@ func TestAgentAlwaysAskInEveryMode(t *testing.T) {
 		{"write dotdot", toolAsk("a", "Write", "acceptEdits", map[string]any{"file_path": "../x"})},
 		{"webfetch other", toolAsk("a", "WebFetch", "bypassPermissions", map[string]any{"url": "https://example.com/"})},
 		{"cwd outside", func() agentItem { i := bashAsk("a", "ls", "bypassPermissions"); i.Cwd = "/usr"; return i }()},
-		{"git credential", agentItem{Type: "cred.ask", AskID: "a", Project: "p1", SessionID: "s-1", Mode: "bypassPermissions", ExpiresAt: time.Now().Add(time.Minute)}},
+		{"git credential", agentItem{Type: "cred.ask", AskID: "a", Project: "p1", Host: "git.example.com", Path: "alice/app.git", Op: "push", Mode: "bypassPermissions", ExpiresAt: time.Now().Add(time.Minute)}},
+		{"net.ask", agentItem{Type: "net.ask", AskID: "a", Project: "p1", Host: "cdn.example.com", Op: "connect", ExpiresAt: time.Now().Add(time.Minute)}},
 	}
 	for _, c := range cases {
 		f, _, w := agentFixture(t)
@@ -531,5 +532,96 @@ func TestManifestDeclaresTheAgentPath(t *testing.T) {
 	}
 	if md, _ := m.Action(kindMode); md.DefaultLevel != rubiplugin.Strong {
 		t.Errorf("mode level %v", md.DefaultLevel)
+	}
+}
+
+func TestAgentRemoteQuestionsNeedTheirFields(t *testing.T) {
+	for name, it := range map[string]agentItem{
+		"cred without host": {Type: "cred.ask", AskID: "a", Project: "p1", Path: "x.git", Op: "push"},
+		"cred without op":   {Type: "cred.ask", AskID: "a", Project: "p1", Host: "git.example.com", Path: "x.git"},
+		"cred odd host":     {Type: "cred.ask", AskID: "a", Project: "p1", Host: "git.example.com/../x", Op: "push"},
+		"net without host":  {Type: "net.ask", AskID: "a", Project: "p1", Op: "connect"},
+		"net hidden op":     {Type: "net.ask", AskID: "a", Project: "p1", Host: "h.example.com", Op: "con‮nect"},
+	} {
+		f, _, w := agentFixture(t)
+		w.handleAsk(context.Background(), mac, it)
+		d := f.agent.decided()
+		if len(d) != 1 || d[0].Behavior != "deny" || !strings.Contains(d[0].Message, "unknown remote") || len(f.submits) != 0 {
+			t.Errorf("%s: %+v", name, d)
+		}
+	}
+	// The approval shows the host, the repository path and the operation.
+	f, _, w := agentFixture(t)
+	w.handleAsk(context.Background(), mac, agentItem{Type: "cred.ask", AskID: "a", Project: "p1", Host: "git.example.com", Path: "alice/app.git", Op: "push"})
+	r := lastSubmit(t, f)
+	p := r.Preview.(map[string]any)
+	if p["host"] != "git.example.com" || p["repository_path"] != "alice/app.git" || p["operation"] != "push" || !strings.Contains(r.Summary, "git.example.com/alice/app.git") {
+		t.Fatalf("%+v %s", p, r.Summary)
+	}
+}
+
+// Rubi Home nests an event's fields in "event"; the item reads them.
+func TestAgentItemReadsNestedEvents(t *testing.T) {
+	var out struct {
+		Items []agentItem `json:"items"`
+	}
+	raw := `{"items":[{"type":"event","project":"p1","session_id":"s-1","event":{"kind":"result","text":"done","to":"Alice","in_reply_to":["m1"]}},
+		{"type":"cred.ask","ask_id":"a","project":"p1","host":"h.example.com","path":"o/r.git","op":"push","expires_at":"2030-01-01T00:00:00Z"}]}`
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		t.Fatal(err)
+	}
+	e := out.Items[0]
+	if e.Type != "event" || e.Kind != "result" || e.Text != "done" || e.To != "Alice" || e.SessionID != "s-1" || e.Project != "p1" || len(e.InReplyTo) != 1 {
+		t.Fatalf("%+v", e)
+	}
+	if c := out.Items[1]; c.Host != "h.example.com" || c.Path != "o/r.git" || c.Op != "push" || c.ExpiresAt.IsZero() {
+		t.Fatalf("%+v", c)
+	}
+}
+
+func TestAgentCapabilityTransientErrorIsNotCached(t *testing.T) {
+	f := &fakeHost{devices: []rubiplugin.HomeDevice{mac}, agent: newFakeAgent()}
+	f.agent.failOp = map[string]error{opAgentStatus: context.DeadlineExceeded}
+	s := newSisters(&store{})
+	ctx := context.Background()
+	if s.agentCapable(ctx, f, "dev_mac") {
+		t.Fatal("a timeout counted as the capability")
+	}
+	f.agent.mu.Lock()
+	f.agent.failOp = nil
+	f.agent.mu.Unlock()
+	if !s.agentCapable(ctx, f, "dev_mac") {
+		t.Fatal("the transient failure was remembered as a no")
+	}
+}
+
+func TestAgentQuestionIsPlainAndBounded(t *testing.T) {
+	mk := func(q, label, desc string) agentItem {
+		qs := []map[string]any{{"question": q, "options": []map[string]any{{"label": label, "description": desc}, {"label": "No"}}}}
+		return toolAsk("q", "AskUserQuestion", "default", map[string]any{"questions": qs})
+	}
+	for name, it := range map[string]agentItem{
+		"hidden question": mk("Proceed‮?", "Yes", ""),
+		"long question":   mk(strings.Repeat("q", 501), "Yes", ""),
+		"hidden label":    mk("Proceed?", "Y​es", ""),
+		"long label":      mk("Proceed?", strings.Repeat("l", 101), ""),
+		"long desc":       mk("Proceed?", "Yes", strings.Repeat("d", 301)),
+		"huge payload": func() agentItem {
+			i := mk("Proceed?", "Yes", "")
+			i.Input = []byte(`{"questions":[],"pad":"` + strings.Repeat("x", maxQuestionBytes) + `"}`)
+			return i
+		}(),
+	} {
+		f, _, w := agentFixture(t)
+		w.handleAsk(context.Background(), mac, it)
+		if d := f.agent.decided(); len(d) != 1 || d[0].Behavior != "deny" || len(f.submits) != 0 {
+			t.Errorf("%s: %+v", name, d)
+		}
+	}
+	f, _, w := agentFixture(t)
+	w.handleAsk(context.Background(), mac, mk("Proceed?", "Yes", "go on"))
+	p := lastSubmit(t, f).Preview.(map[string]any)
+	if p["untrusted"] == nil || p["question"] != "Proceed?" {
+		t.Fatalf("%+v", p)
 	}
 }
