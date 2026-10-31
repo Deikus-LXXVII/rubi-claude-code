@@ -272,7 +272,7 @@ func (s *sisters) draftsOf(device string) []sshDraft {
 func checkAllowedCmd(c string) (string, error) {
 	c = strings.TrimSpace(c)
 	if c == "" {
-		return "", errors.New("type a command, or a prefix ending in * such as tail -n *")
+		return "", errors.New("type a command, or a prefix ending in * such as tail -n * (or ** to allow options too)")
 	}
 	if r := approvalText("the command", c, maxAllowedLen); r != "" {
 		return "", errors.New(r)
@@ -280,7 +280,43 @@ func checkAllowedCmd(c string) (string, error) {
 	if strings.ContainsAny(c, "\r\n\t") {
 		return "", errors.New("a command is one line")
 	}
+	// As Rubi Home reads them: a pattern is a command, or a prefix and a final `*` (word boundary, no options in what
+	// the role adds) or `**` (any arguments, options included).
+	if strings.Contains(c, "*") {
+		var prefix string
+		switch {
+		case strings.HasSuffix(c, " **"):
+			prefix = strings.TrimSuffix(c, " **")
+		case strings.HasSuffix(c, " *"):
+			prefix = strings.TrimSuffix(c, " *")
+		default:
+			return "", errors.New("a * goes last, after a space, such as tail -n * (use ** to allow options as well)")
+		}
+		if strings.TrimSpace(prefix) == "" {
+			return "", errors.New("a pattern needs a command before the *; to allow any command use Allow any command")
+		}
+		if strings.Contains(prefix, "*") {
+			return "", errors.New("only one * at the end of a pattern")
+		}
+	}
 	return c, nil
+}
+
+// anyOptionsPattern says the pattern is a `prefix **` one.
+func anyOptionsPattern(c string) bool { return strings.HasSuffix(strings.TrimSpace(c), " **") }
+
+// anyOptionsWarning is shown wherever a `**` pattern is listed or approved.
+const anyOptionsWarning = "lets the role pass any options, including ones that run other programs"
+
+// anyOptionsOf lists the `**` patterns among cmds.
+func anyOptionsOf(cmds []string) []string {
+	var out []string
+	for _, c := range cmds {
+		if anyOptionsPattern(c) {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // ---- panel: the SSH targets page ----
@@ -351,6 +387,10 @@ func (s *sisters) sshRow(device string, t sshTarget) map[string]any {
 			{"label": "Remove", "op": "ssh_remove", "args": panelPage{Device: device}.argsWith("item", t.Name), "danger": true,
 				"confirm": "Remove this target? Its key is deleted, streams open to it are cut and roles lose the grant. You would have to remove the key from the server yourself."},
 		}}
+	if w := anyOptionsOf(t.AllowedCommands); len(w) > 0 {
+		it["warn"] = true
+		it["detail"] = oneLine("WARNING: "+strings.Join(clipList(w, 3), "; ")+" "+anyOptionsWarning+" · "+detail, 580)
+	}
 	if t.HostKeyChanged {
 		it["warn"] = true
 		it["detail"] = oneLine("HOST KEY CHANGED: the server presented another host key than the one pinned, so Rubi Home refuses to connect. This can be a reinstalled server or someone in between; check, then remove and add the target again. · "+detail, 580)
@@ -378,11 +418,16 @@ func sshDraftRow(d sshDraft) map[string]any {
 	detail := fmt.Sprintf("%s@%s:%d · %s · %s%s", d.User, clipOne(d.Host, 80), d.Port, allowed, ifElse(d.Ask, "asks you for each command", "runs without asking"),
 		ifElse(d.Reuse, " · reuses the name of a removed target (roles that still list it get this one)", ""))
 	args := panelPage{Device: d.Device}.argsWith("item", d.Name)
-	return map[string]any{"title": clipOne(d.Name, 40), "detail": oneLine(detail, 580), "actions": []map[string]any{
+	warn := false
+	if w := anyOptionsOf(d.Allowed); len(w) > 0 {
+		detail = "WARNING: " + strings.Join(clipList(w, 3), "; ") + " " + anyOptionsWarning + " · " + detail
+		warn = true
+	}
+	return map[string]any{"title": clipOne(d.Name, 40), "detail": oneLine(detail, 580), "warn": warn, "actions": []map[string]any{
 		{"label": "Check the host key", "op": "ssh_confirm", "args": args,
 			"prompt": map[string]any{"arg": "text", "label": "Host key fingerprint you expect (SHA256:...). Leave empty to compare it in the approval instead", "value": ""}},
 		{"label": "Allow a command", "op": "ssh_draft_cmd", "args": args,
-			"prompt": map[string]any{"arg": "text", "label": "A command, or a prefix ending in *, such as tail -n * (up to 200 characters)", "value": ""}},
+			"prompt": map[string]any{"arg": "text", "label": "A command, or a prefix ending in * (more arguments, no options) or ** (any arguments, options too: it lets the role pass options that run other programs), such as tail -n * (up to 200 characters)", "value": ""}},
 		{"label": "Allow any command", "op": "ssh_draft_anycmd", "args": args},
 		{"label": ifElse(d.Ask, "Don't ask for each command", "Ask for each command"), "op": "ssh_draft_ask", "args": panelPage{Device: d.Device}.argsWith("item", d.Name, "on", !d.Ask)},
 		{"label": ifElse(d.Reuse, "Don't reuse a removed name", "Reuse a removed name"), "op": "ssh_draft_reuse", "args": panelPage{Device: d.Device}.argsWith("item", d.Name, "on", !d.Reuse)},
@@ -532,6 +577,9 @@ func (s *sisters) askSSHRegister(ctx context.Context, h sisterHost, dev rubiplug
 		"allowed_commands": allowed, "ask_each_time": t.AskEachTime, "reuses_the_name_of_a_removed_target": t.Reuse,
 		"compare_the_fingerprint": "Compare the fingerprint with the one the server itself shows (on the server: ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub) before you approve. Rubi Home pins this key and refuses the target if the server ever presents another.",
 		"what_it_does":            "Registers the target on that computer. Rubi Home makes a new key pair there (the private key never leaves it) and shows you the public key line to put on the server. A role can use the target only after it is granted: Bots with a project trust may grant a target with restricted commands or ask-each-time to their roles, and a target that allows any command needs your approval per grant. The project VM never gets the key or the host. Commands run as " + t.User + " on the server."}
+	if w := anyOptionsOf(t.Allowed); len(w) > 0 {
+		preview["warning"] = strings.Join(w, "; ") + " " + anyOptionsWarning
+	}
 	if expect != nil && strings.TrimSpace(*expect) != "" {
 		preview["matches_the_fingerprint_you_typed"] = true
 	}

@@ -632,3 +632,28 @@ func TestSSHAuditUsesAfterSeqAndRemembersIt(t *testing.T) {
 		t.Fatalf("%v", last)
 	}
 }
+
+func TestSSHAllowedPatternsAreCheckedLikeHome(t *testing.T) {
+	for _, ok := range []string{"uptime", "tail -n *", "systemctl status **", "ls -la /srv"} {
+		if _, err := checkAllowedCmd(ok); err != nil {
+			t.Errorf("%q: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"", "*", "**", " ** ", "tail*", "tail -n*", "tail * -n", "tail ** *", "a * b *", "tail ***", "ls\nrm"} {
+		if _, err := checkAllowedCmd(bad); err == nil {
+			t.Errorf("%q should be refused", bad)
+		}
+	}
+	f, s, _, _ := sshFixture(t)
+	pok(t, s, f, "ssh_add", `{"device":"dev_mac","text":"web-1 web.example.com deploy"}`)
+	pok(t, s, f, "ssh_draft_cmd", `{"device":"dev_mac","item":"web-1","text":"systemctl status **"}`)
+	pg := view(t, s, f, `{"page":"ssh"}`)
+	row := findItem(t, pg, "Targets being added", "web-1")
+	if row["warn"] != true || !strings.Contains(row["detail"].(string), "lets the role pass any options, including ones that run other programs") {
+		t.Fatalf("%v", row)
+	}
+	pok(t, s, f, "ssh_confirm", `{"device":"dev_mac","item":"web-1","text":""}`)
+	if p := lastSubmit(t, f).Preview.(map[string]any); !strings.Contains(fmt.Sprint(p["warning"]), "run other programs") {
+		t.Fatalf("%v", p)
+	}
+}

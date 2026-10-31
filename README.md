@@ -518,6 +518,9 @@ user choose allowed commands and whether each command asks, then **Check the hos
 carries `{name, host, port, user, fingerprint, allowed_commands, ask_each_time}`. Only after the approval does the plugin
 call `ssh.register`; Home refuses if the server's key is no longer the one confirmed. The public key line to install on
 the server is returned and shown as item text (with an `info` field for a panel that draws a copy button). **Remove**
+An allowed command is a command, `prefix *` (more arguments, no options) or `prefix **` (any arguments, options too; the draft and the
+approval warn that it lets the role pass options that run other programs); the plugin checks the shape as Home does, and a target
+with `*` or `**` patterns counts as allowing any command for the grant tier. **Remove**
 asks for confirmation, calls `ssh.remove` and takes the grant away from every role that names the target (the user's
 change, audited), so a later target with the same name starts clean; re-registering a removed name needs the draft's
 **Reuse a removed name** switch, which is shown in the approval and is the only way `reuse` is sent. Each target has an
