@@ -75,7 +75,7 @@ func (s *sisters) changeMode(ctx context.Context, h sisterHost, sister, device, 
 		if !byUser {
 			bound := false
 			for _, b := range s.st.bindings() {
-				bound = bound || sameBot(b.Sister, sister) && b.Device == t.Device && b.Project == t.Project
+				bound = bound || sameBot(b.Sister, sister) && b.Device == t.Device && b.Project == t.Project && b.Role == t.Role
 			}
 			if !bound {
 				return nil, errors.New("you are not bound to a session in that project")

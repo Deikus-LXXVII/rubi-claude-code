@@ -517,6 +517,9 @@ func (s *sisters) renameTool(ctx context.Context, h sisterHost, in renameIn) (an
 			if err != nil || !found {
 				return nil, errors.New("the session you are bound to isn't there any more")
 			}
+			if ref.sess.Role != mine.Role {
+				return nil, errors.New("the session you are bound to isn't there any more")
+			}
 			agentTarget(ref)
 		} else {
 			key := firstNonEmpty(mine.AppSessionID, mine.SessionID)

@@ -52,6 +52,9 @@ func TestRoleStartAsksWithoutTheBotsTrust(t *testing.T) {
 	if st := f.agent.called(opAgentStart); len(st) != 1 || st[0]["role"] != id || res["role"] != id {
 		t.Fatalf("%v %v", st, res)
 	}
+	if bs := s.st.bindings(); len(bs) != 1 || bs[0].Role != id || bs[0].SessionID != "s-new" {
+		t.Fatalf("the Bot is not bound to the role's session: %+v", bs)
+	}
 	// The ordinary start carries no role.
 	if tk2 := (startTicket{Sister: botA, Device: "dev_mac", Task: "x", Project: "p1", Mode: "default"}); true {
 		asMap(t)(s.executeStart(context.Background(), f, tk2))

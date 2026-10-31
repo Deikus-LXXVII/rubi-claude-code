@@ -50,11 +50,11 @@ func (s *sisters) agentProjects(ctx context.Context, h sisterHost, device string
 func (s *sisters) bindAgent(ctx context.Context, h sisterHost, sister string, ref agentRef) (any, error) {
 	d, proj, sess := ref.ad.device, ref.proj, ref.sess
 	for _, b := range s.st.bindings() {
-		if !sameBot(b.Sister, sister) && b.Device == d.ID && b.Project == proj.ID && b.SessionID == sess.ID {
+		if !sameBot(b.Sister, sister) && b.Device == d.ID && b.Project == proj.ID && b.Role == sess.Role && b.SessionID == sess.ID {
 			return nil, fmt.Errorf("that session is bound to %s; a session talks to one Bot (the user can unbind it in the panel)", b.Sister)
 		}
 	}
-	t := bindTicket{Sister: sister, Device: d.ID, DeviceName: d.Name, SessionID: sess.ID, RepoKey: proj.Dir, Cwd: proj.Dir, Title: sess.Name, Project: proj.ID}
+	t := bindTicket{Sister: sister, Device: d.ID, DeviceName: d.Name, SessionID: sess.ID, RepoKey: proj.Dir, Cwd: proj.Dir, Title: sess.Name, Project: proj.ID, Role: sess.Role}
 	if pt := s.agentProjectCovering(d.ID, sister, proj.ID); pt != nil && s.allow("bindpt|"+strings.ToLower(sister), bindsUnderTrustPerHour) {
 		h.Audit(auditMandateAll, map[string]any{"mandate": pt.ID, "project": proj.ID, "device": d.ID, "sister": sister, "action": "claude_code_bind", "session": sess.ID, "uses": pt.Uses})
 		res, err := s.executeBind(h, t)
@@ -64,6 +64,7 @@ func (s *sisters) bindAgent(ctx context.Context, h sisterHost, sister string, re
 		return res, err
 	}
 	preview := map[string]any{"bot": sister, "computer": d.Name, "project": proj.Dir, "project_id": proj.ID, "session": sess.ID, "name": sess.Name, "mode": sess.Mode,
+		"role":           firstNonEmpty(sess.RoleName, sess.Role, "default (the project's own .claude)"),
 		"what_it_allows": "This Bot can send this Claude session short messages (they wait in Rubi Home's queue while another session works) and gets its answers and questions. It can't approve commands."}
 	if sess.Mode == "bypassPermissions" {
 		preview["note"] = agentBypassNote
@@ -87,15 +88,15 @@ func queueHint(position int) string {
 }
 
 func (s *sisters) sendAgent(ctx context.Context, h sisterHost, b binding, text, replyToAsk string) (any, error) {
-	project, target := b.Project, b.SessionID
+	project, target, role := b.Project, b.SessionID, b.Role
 	if replyToAsk != "" {
 		s.mu.Lock()
 		ref, ok := s.asks[replyToAsk]
 		s.mu.Unlock()
-		if !ok || ref.sister != b.Sister || ref.device != b.Device || ref.project == "" {
+		if !ok || ref.sister != b.Sister || ref.device != b.Device || ref.project == "" || ref.role != b.Role {
 			return nil, errors.New("unknown ask_id")
 		}
-		project, target = ref.project, ref.session
+		project, target, role = ref.project, ref.session, ref.role
 	}
 	var res struct {
 		Queued    bool  `json:"queued"`
@@ -103,10 +104,10 @@ func (s *sisters) sendAgent(ctx context.Context, h sisterHost, b binding, text, 
 		Delivered *bool `json:"delivered"`
 	}
 	// No steer: a message never interrupts what the session is doing.
-	if err := h.HomeCall(ctx, b.Device, opAgentSend, map[string]any{"project": project, "id": target, "text": text, "from": b.Sister, "bot": botID(b.Sister)}, &res); err != nil {
+	if err := h.HomeCall(ctx, b.Device, opAgentSend, withRole(map[string]any{"project": project, "id": target, "text": text, "from": b.Sister, "bot": botID(b.Sister)}, role), &res); err != nil {
 		return nil, err
 	}
-	h.Audit("message_sent", map[string]any{"sister": b.Sister, "session": target, "project": project, "chars": len([]rune(text)), "position": res.Position})
+	h.Audit("message_sent", map[string]any{"sister": b.Sister, "session": target, "project": project, "role": role, "chars": len([]rune(text)), "position": res.Position})
 	out := map[string]any{"queued": res.Queued, "position": res.Position, "delivery": queueHint(res.Position)}
 	if res.Delivered != nil {
 		out["delivered"] = *res.Delivered
@@ -124,7 +125,7 @@ func (s *sisters) statusAgent(ctx context.Context, h sisterHost, b binding) (any
 	var sr struct {
 		Sessions []agentSess `json:"sessions"`
 	}
-	if err := h.HomeCall(cctx, b.Device, opAgentSessions, map[string]any{"project": b.Project}, &sr); err != nil {
+	if err := h.HomeCall(cctx, b.Device, opAgentSessions, withRole(map[string]any{"project": b.Project}, b.Role), &sr); err != nil {
 		return nil, err
 	}
 	var sess *agentSess
@@ -139,7 +140,7 @@ func (s *sisters) statusAgent(ctx context.Context, h sisterHost, b binding) (any
 	running := st.slotList()
 	inSlot := false
 	for _, sl := range running {
-		inSlot = inSlot || sl.Project == b.Project && sl.Session == b.SessionID
+		inSlot = inSlot || sl.Project == b.Project && sl.Session == b.SessionID && normRole(sl.Project, sl.Role) == b.Role
 	}
 	// The project's places are full: its limit when Home reports one, else (an older Home) any busy slot.
 	full := st.Slot.Busy && st.Slots == nil
@@ -148,7 +149,7 @@ func (s *sisters) statusAgent(ctx context.Context, h sisterHost, b binding) (any
 	}
 	pos, reason := 0, ""
 	for _, q := range st.Queue {
-		if q.Project == b.Project && q.Session == b.SessionID {
+		if q.Project == b.Project && q.Session == b.SessionID && normRole(q.Project, q.Role) == b.Role {
 			pos = max(pos, q.Position)
 			if q.Position == 0 {
 				pos++
@@ -173,7 +174,7 @@ func (s *sisters) statusAgent(ctx context.Context, h sisterHost, b binding) (any
 	if login.LoggedIn != nil && !*login.LoggedIn {
 		eta = "not before the user signs in to Claude on that computer"
 	}
-	out := map[string]any{"session_id": sess.ID, "project": b.Project, "device": b.Device, "state": state, "mode": sess.Mode, "in_slot": inSlot,
+	out := map[string]any{"session_id": sess.ID, "project": b.Project, "role": b.Role, "device": b.Device, "state": state, "mode": sess.Mode, "in_slot": inSlot,
 		"slot_busy": full, "queue_position": pos, "eta": eta}
 	if reason != "" {
 		out["queue_reason"] = oneLine(reason, 200)
@@ -196,7 +197,7 @@ func (s *sisters) agentSessionItems(ctx context.Context, h sisterHost, repo stri
 	bound := map[string]string{}
 	for _, b := range s.st.bindings() {
 		if b.Project != "" {
-			bound[b.Device+"|"+b.Project+"|"+b.SessionID] = b.Sister
+			bound[b.Device+"|"+b.Project+"|"+b.Role+"|"+b.SessionID] = b.Sister
 		}
 	}
 	var items []map[string]any
@@ -217,7 +218,7 @@ func (s *sisters) agentSessionItems(ctx context.Context, h sisterHost, repo stri
 			if a, ok := s.st.aliasFor(ad.device.ID, session{SessionID: x.ID}); ok {
 				it["name"] = a.Name
 			}
-			if sis := bound[ad.device.ID+"|"+x.Project+"|"+x.ID]; sis != "" {
+			if sis := bound[ad.device.ID+"|"+x.Project+"|"+x.Role+"|"+x.ID]; sis != "" {
 				it["bound_to"] = sis
 			}
 			if x.Mode == "bypassPermissions" {
@@ -317,7 +318,7 @@ func (s *sisters) executeStartAgent(ctx context.Context, h sisterHost, t startTi
 			out["name_note"] = "the session was started but couldn't be named: " + err.Error()
 		}
 	}
-	bound, err := s.executeBind(h, bindTicket{Sister: t.Sister, Device: t.Device, DeviceName: t.DeviceName, SessionID: res.ID, Cwd: t.Cwd, RepoKey: t.Cwd, Project: t.Project})
+	bound, err := s.executeBind(h, bindTicket{Sister: t.Sister, Device: t.Device, DeviceName: t.DeviceName, SessionID: res.ID, Cwd: t.Cwd, RepoKey: t.Cwd, Project: t.Project, Role: t.Role})
 	if err != nil {
 		out["bound"] = false
 		out["note"] = "the session was started, but " + err.Error()

@@ -114,6 +114,7 @@ type askRef struct {
 	device, session, sister string
 	at                      time.Time
 	project                 string // set for an ask from a Rubi Home agent project
+	role                    string // and the isolated role of that session ("" is the legacy role)
 }
 
 func newSisters(st *store) *sisters {
@@ -391,6 +392,7 @@ type bindTicket struct {
 	Cwd          string `json:"cwd"`
 	Title        string `json:"title,omitempty"`
 	Project      string `json:"project,omitempty"` // an agent project (claude-agent); SessionID is the agent session
+	Role         string `json:"role,omitempty"`    // the isolated role the agent session runs in ("" is the legacy role)
 }
 
 func (s *sisters) bindTool(ctx context.Context, h sisterHost, in bindIn) (any, error) {
@@ -448,7 +450,7 @@ func (s *sisters) executeBind(h sisterHost, t bindTicket) (any, error) {
 		return nil, errors.New("bad payload")
 	}
 	b := binding{Sister: t.Sister, Device: t.Device, DeviceName: t.DeviceName, SessionID: t.SessionID, AppSessionID: t.AppSessionID,
-		RepoKey: t.RepoKey, Cwd: t.Cwd, Title: t.Title, Code: newID("bc_"), Since: s.now().UTC(), Project: t.Project}
+		RepoKey: t.RepoKey, Cwd: t.Cwd, Title: t.Title, Code: newID("bc_"), Since: s.now().UTC(), Project: t.Project, Role: t.Role}
 	var prev *binding
 	for _, x := range s.st.bindings() {
 		if sameBot(x.Sister, b.Sister) {
@@ -462,7 +464,7 @@ func (s *sisters) executeBind(h sisterHost, t bindTicket) (any, error) {
 	// webhook only, or drops it). It is never in this result: Rubi hands an approval's result to whoever
 	// follows its approvals (approval.decided), which may be another Bot.
 	data := map[string]any{"session_id": b.SessionID, "app_session_id": b.AppSessionID, "project": b.RepoKey, "directory": b.Cwd,
-		"title": b.Title, "bind_code": b.Code, "agent_project": b.Project,
+		"title": b.Title, "bind_code": b.Code, "agent_project": b.Project, "agent_role": b.Role,
 		"next_step": "Keep bind_code private. Send the session short asks with claude_code_send {sister, bind_code, text}; its answers arrive as claude_reply events."}
 	if _, err := h.EmitTo(b.Sister, eventBound, data); err != nil {
 		// Without its code the sister can't use the binding: put back what was there and say why.

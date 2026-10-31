@@ -53,6 +53,7 @@ func (s *sisters) forkTool(ctx context.Context, h sisterHost, in forkIn) (any, e
 		}
 	}
 	device, project, id, nm := in.Device, in.Project, strings.TrimSpace(in.Session), ""
+	wantRole := ""
 	if id == "" {
 		var mine *binding
 		for _, b := range s.st.bindings() {
@@ -64,7 +65,7 @@ func (s *sisters) forkTool(ctx context.Context, h sisterHost, in forkIn) (any, e
 		if mine == nil {
 			return nil, errors.New("you are not bound to an agent session: pass session (its id or name) and project")
 		}
-		device, project, id = mine.Device, mine.Project, mine.SessionID
+		device, project, id, wantRole = mine.Device, mine.Project, mine.SessionID, mine.Role
 	} else {
 		nm = id
 	}
@@ -74,6 +75,9 @@ func (s *sisters) forkTool(ctx context.Context, h sisterHost, in forkIn) (any, e
 	}
 	if !found {
 		return nil, errors.New("no such agent session (list them with claude_code_sessions)")
+	}
+	if strings.TrimSpace(in.Session) == "" && ref.sess.Role != wantRole {
+		return nil, errors.New("the session you are bound to isn't there any more")
 	}
 	d, proj, sess := ref.ad.device, ref.proj, ref.sess
 	if _, ok := modeRank[sess.Mode]; !ok {
@@ -92,7 +96,7 @@ func (s *sisters) forkTool(ctx context.Context, h sisterHost, in forkIn) (any, e
 	}
 	own := false
 	for _, b := range s.st.bindings() {
-		own = own || sameBot(b.Sister, sister) && b.Device == d.ID && b.Project == proj.ID && b.SessionID == sess.ID
+		own = own || sameBot(b.Sister, sister) && b.Device == d.ID && b.Project == proj.ID && b.Role == sess.Role && b.SessionID == sess.ID
 	}
 	t := forkTicket{Sister: sister, Device: d.ID, DeviceName: d.Name, Project: proj.ID, Role: sess.Role, SessionID: sess.ID, Name: name, Mode: sess.Mode}
 	kind := kindFork

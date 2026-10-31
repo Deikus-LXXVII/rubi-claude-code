@@ -38,6 +38,9 @@ type binding struct {
 	// Project is the Rubi Home agent project (claude-agent) whose session this is; SessionID is then the agent
 	// session's id. "" for a Claude Code session seen through the hooks.
 	Project string `json:"project,omitempty"`
+	// Role is the agent role (a Rubi Home role id) the bound session runs in; "" is the project's legacy role. Every
+	// call for the session names it, so a Bot bound to a role's session can't reach the legacy role or another role.
+	Role string `json:"role,omitempty"`
 }
 
 type stateHost interface {

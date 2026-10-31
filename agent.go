@@ -330,6 +330,7 @@ type agentItem struct {
 	Type      string          `json:"type"` // perm.ask, cred.ask, event
 	AskID     string          `json:"ask_id,omitempty"`
 	Project   string          `json:"project,omitempty"`
+	Role      string          `json:"role,omitempty"` // the role (id; the legacy role's is its project id)
 	SessionID string          `json:"session_id,omitempty"`
 	AgentID   string          `json:"agent_id,omitempty"`
 	AgentType string          `json:"agent_type,omitempty"`
@@ -372,6 +373,7 @@ func (it *agentItem) UnmarshalJSON(b []byte) error {
 			return err
 		}
 		ev.Type, ev.Project, ev.Event = p.Type, p.Project, p.Event
+		ev.Role = firstNonEmpty(ev.Role, p.Role)
 		if ev.SessionID == "" {
 			ev.SessionID = p.SessionID
 		}
@@ -425,10 +427,12 @@ func (w *watcher) pollAgent(ctx context.Context, d rubiplugin.HomeDevice) {
 
 // ---- events to Bots ----
 
-// agentBinding finds the binding to a session of a project.
-func (s *sisters) agentBinding(device, project, session string) *binding {
+// agentBinding finds the binding to a session of a project; role is the item's (normRole turns the legacy role's
+// id into "").
+func (s *sisters) agentBinding(device, project, role, session string) *binding {
+	role = normRole(project, role)
 	for _, b := range s.st.bindings() {
-		if b.Device == device && b.Project == project && b.SessionID == session {
+		if b.Device == device && b.Project == project && b.Role == role && b.SessionID == session {
 			b := b
 			return &b
 		}
@@ -442,7 +446,7 @@ func (s *sisters) routeAgent(ctx context.Context, h sisterHost, d rubiplugin.Hom
 	if len(it.To) >= len("local:") && strings.EqualFold(it.To[:len("local:")], "local:") {
 		return
 	}
-	target := s.agentBinding(d.ID, it.Project, it.SessionID)
+	target := s.agentBinding(d.ID, it.Project, it.Role, it.SessionID)
 	switch it.Kind {
 	case "result", "sister_reply":
 		if it.Text == "" || target == nil || it.To == "" || !sameBot(it.To, target.Sister) {
@@ -450,7 +454,7 @@ func (s *sisters) routeAgent(ctx context.Context, h sisterHost, d rubiplugin.Hom
 		}
 		h.Audit("reply_forwarded", map[string]any{"sister": target.Sister, "session": it.SessionID, "project": it.Project, "chars": len([]rune(it.Text))})
 		if _, err := h.EmitTo(target.Sister, eventReply, map[string]any{"session_id": it.SessionID, "project": it.Project, "in_reply_to": it.InReplyTo,
-			"text": it.Text, "truncated": it.Truncated, "computer": d.Name}); err != nil {
+			"text": it.Text, "truncated": it.Truncated, "computer": d.Name, "role": target.Role}); err != nil {
 			h.Logf("reply to %s: %v", target.Sister, err)
 		}
 	case "message":
@@ -477,11 +481,11 @@ func (s *sisters) routeAgent(ctx context.Context, h sisterHost, d rubiplugin.Hom
 				delete(s.asks, k)
 			}
 		}
-		s.asks[id] = askRef{device: d.ID, session: it.SessionID, sister: target.Sister, at: s.now(), project: it.Project}
+		s.asks[id] = askRef{device: d.ID, session: it.SessionID, sister: target.Sister, at: s.now(), project: it.Project, role: target.Role}
 		s.mu.Unlock()
 		h.Audit("ask_forwarded", map[string]any{"sister": target.Sister, "session": it.SessionID, "ask": id, "kind": it.AskKind})
 		data := map[string]any{"ask_id": id, "kind": it.AskKind, "text": it.Text, "session_id": it.SessionID, "project": it.Project,
-			"directory": agentRoot, "computer": d.Name, "role": "main", "title": "",
+			"directory": agentRoot, "computer": d.Name, "role": "main", "agent_role": target.Role, "title": "",
 			"next_step": "Answer briefly with claude_code_send {sister, bind_code, text, reply_to_ask: ask_id}. Small research or audit only."}
 		if _, err := h.EmitTo(target.Sister, eventAsk, data); err != nil {
 			h.Logf("ask to %s: %v", target.Sister, err)
