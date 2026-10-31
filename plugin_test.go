@@ -50,6 +50,7 @@ type fakeHost struct {
 	listCalls int        // claude-sessions.list calls
 	listArch  []bool     // include_archived of each claude-sessions.list call
 	agent     *fakeAgent // the claude-agent operations (nil: a Rubi Home without the capability)
+	setup     *fakeSetup // the agent-setup operations (nil: a Rubi Home without the capability)
 }
 
 type decided struct {
@@ -160,6 +161,12 @@ func (f *fakeHost) HomeCall(ctx context.Context, device, op string, args, out an
 		f.mu.Unlock()
 		b, _ := json.Marshal(ans)
 		return json.Unmarshal(b, out)
+	}
+	if f.setup != nil && strings.HasPrefix(op, "agent-setup.") {
+		return f.setup.call(op, args, out)
+	}
+	if strings.HasPrefix(op, "agent-setup.") {
+		return errors.New(`Rubi Home doesn't do "` + op + `"`)
 	}
 	if f.agent != nil && strings.HasPrefix(op, "claude-agent.") {
 		return f.agent.call(ctx, op, args, out)

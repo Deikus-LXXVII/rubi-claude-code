@@ -59,8 +59,14 @@ type capEntry struct {
 // agentCapable says whether the computer's Rubi Home has the claude-agent capability: claude-agent.status
 // answers. The answer is remembered for a few minutes.
 func (s *sisters) agentCapable(ctx context.Context, h homeCaller, device string) bool {
+	return s.capProbe(ctx, h, device, device, opAgentStatus)
+}
+
+// capProbe asks a computer's Rubi Home an operation that every Rubi Home with a capability answers and remembers
+// the answer under key.
+func (s *sisters) capProbe(ctx context.Context, h homeCaller, device, key, op string) bool {
 	s.mu.Lock()
-	e, ok := s.caps[device]
+	e, ok := s.caps[key]
 	now := s.now()
 	if ok && now.Sub(e.at) < map[bool]time.Duration{true: capYes, false: capNo}[e.ok] {
 		s.mu.Unlock()
@@ -69,7 +75,7 @@ func (s *sisters) agentCapable(ctx context.Context, h homeCaller, device string)
 	s.mu.Unlock()
 	pctx, cancel := context.WithTimeout(ctx, capProbeWait)
 	defer cancel()
-	err := h.HomeCall(pctx, device, opAgentStatus, map[string]any{}, nil)
+	err := h.HomeCall(pctx, device, op, map[string]any{}, nil)
 	if err != nil && ctx.Err() != nil {
 		return false
 	}
@@ -80,9 +86,9 @@ func (s *sisters) agentCapable(ctx context.Context, h homeCaller, device string)
 	// "No" is remembered only when Rubi Home says it doesn't do the operation; a timeout or a dropped connection
 	// is not an answer, so a computer that is only slow is not written off for a minute.
 	if err == nil || isUnknownOp(err) {
-		s.caps[device] = capEntry{ok: err == nil, at: now}
+		s.caps[key] = capEntry{ok: err == nil, at: now}
 	} else {
-		delete(s.caps, device)
+		delete(s.caps, key)
 	}
 	s.mu.Unlock()
 	return err == nil

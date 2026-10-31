@@ -137,6 +137,8 @@ func (s *sisters) agentPage(ctx context.Context, h sisterHost, p panelPage) (any
 		return s.chatPage(ctx, h, p)
 	case pageUsage:
 		return s.usagePage(ctx, h)
+	case pageSetup:
+		return s.setupPage(ctx, h, p)
 	}
 	return nil, fmt.Errorf("unknown page %q", p.Page)
 }

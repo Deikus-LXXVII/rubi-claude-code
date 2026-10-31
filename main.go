@@ -77,6 +77,12 @@ func manifest() rubiplugin.Manifest {
 				Options: []rubiplugin.Option{{Key: "fork", Label: "Fork", Meaning: "Makes a branch of the Bot's own session's conversation as a new, idle session in the same project"}}},
 			{Kind: kindMode, Title: "Loosen the permission mode of a Claude session in a project VM", DefaultLevel: rubiplugin.Strong, Locked: true,
 				Options: []rubiplugin.Option{{Key: "mode", Label: "Change the mode", Meaning: "Moves the session to a looser permission mode: Claude asks fewer questions; bypassPermissions lets it run almost anything in the VM without asking. Push, sudo, the network outside the allow-list, paths outside /work and edits of .rubi/.claude still ask"}}},
+			{Kind: kindSetupInstall, Title: "Install or upgrade Apple's container tool for the agent path", DefaultLevel: rubiplugin.Strong, Locked: true,
+				Options: []rubiplugin.Option{{Key: "install", Label: "Install", Meaning: "Rubi Home on that computer downloads Apple's signed container installer (a pinned release, checked by size, hash and signature) and installs it; macOS then shows its own administrator dialog on that computer"}}},
+			{Kind: kindSetupNetwork, Title: "Create the host-only network of the agent path", DefaultLevel: rubiplugin.Strong, Locked: true,
+				Options: []rubiplugin.Option{{Key: "network", Label: "Create", Meaning: "Rubi Home on that computer creates the host-only (internal) network the project VMs use; it never deletes one"}}},
+			{Kind: kindSetupProject, Title: "Add a folder as a project of the agent path", DefaultLevel: rubiplugin.Strong, Locked: true,
+				Options: []rubiplugin.Option{{Key: "project", Label: "Choose a folder", Meaning: "A folder chooser opens on that computer; the folder you pick becomes a project: Claude in its VM can read and write everything in it"}}},
 		},
 		Events: []rubiplugin.EventType{
 			{Type: eventNeeded, Untrusted: []string{"command", "directory", "claude_says", "computer"}},
@@ -175,6 +181,16 @@ func main() {
 		}
 		return sis.executeMode(ctx, h, t, "user approved")
 	})
+	for kind, run := range map[string]func(context.Context, sisterHost, setupTicket) (any, error){
+		kindSetupInstall: sis.executeSetupInstall, kindSetupNetwork: sis.executeSetupNetwork, kindSetupProject: sis.executeSetupProject} {
+		p.OnExecute(kind, func(ctx context.Context, h *rubiplugin.Host, _ string, payload json.RawMessage) (any, error) {
+			var t setupTicket
+			if err := json.Unmarshal(payload, &t); err != nil {
+				return nil, fmt.Errorf("bad payload")
+			}
+			return run(ctx, h, t)
+		})
+	}
 	p.OnPanel = func(ctx context.Context, h *rubiplugin.Host, op string, args json.RawMessage) (any, error) {
 		return sis.panel(ctx, h, op, args)
 	}

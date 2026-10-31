@@ -69,6 +69,9 @@ func (s *sisters) panel(ctx context.Context, h sisterHost, op string, args json.
 		Mode      string  `json:"mode"`
 		Page      string  `json:"page"`
 		Text      *string `json:"text"`
+		Step      string  `json:"step"`
+		Method    string  `json:"method"`
+		Code      *string `json:"code"`
 	}
 	if len(args) > 0 && string(args) != "null" {
 		if err := json.Unmarshal(args, &a); err != nil {
@@ -80,6 +83,8 @@ func (s *sisters) panel(ctx context.Context, h sisterHost, op string, args json.
 		if a.Page != "" {
 			return s.agentPage(ctx, h, panelPage{Page: a.Page, Device: a.Device, Project: a.Project, Session: a.SessionID})
 		}
+	case "setup_install", "setup_network", "setup_add", "setup_run", "setup_all", "setup_login", "setup_open", "setup_code", "setup_remove", "setup_cancel":
+		return s.panelSetup(ctx, h, op, setupArgs{Device: a.Device, Step: a.Step, Project: a.Project, Method: a.Method, Code: a.Code})
 	case "interrupt", "close":
 		return s.panelAgentSimple(ctx, h, "claude-agent."+op, a.Device, a.Project, a.SessionID)
 	case "fork":
@@ -161,7 +166,7 @@ func (s *sisters) panel(ctx context.Context, h sisterHost, op string, args json.
 		})
 	}
 	nameItems, nameNote := s.nameItems(ctx, h)
-	agent := s.agentLinkSection(ctx, h)
+	agent := append(s.agentLinkSection(ctx, h), s.setupLinkSection(ctx, h)...)
 	return map[string]any{"title": "Claude Code", "refresh": 30,
 		"note": "Sessions running with bypassPermissions never ask, so approvals and trusts here don't apply to them (their messages to and from Bots still work).",
 		"sections": append(agent, []map[string]any{
