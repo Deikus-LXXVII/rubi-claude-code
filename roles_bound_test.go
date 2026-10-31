@@ -141,3 +141,24 @@ func TestMCPApprovalShowsCommandAndArgs(t *testing.T) {
 		t.Fatalf("an arg is not clipped: %s", ch)
 	}
 }
+
+// The headline of an approval starts with what widens, not with the pile of small changes before it.
+func TestApprovalHeadlinePutsWideningFirst(t *testing.T) {
+	f, s, _ := roleFixture(t)
+	trustBot(t, s, botA, "p1")
+	id := mustCreate(t, s, f, botA, "design")
+	var tools []string
+	tools = append(tools, "Read", "Edit", "Write", "Glob", "Grep", "Bash", "Agent", "Skill", "WebFetch", "WebSearch", "CronCreate")
+	m := asMap(t)(s.roleToolsSetTool(context.Background(), f, roleToolsSetIn{roleWho: who(botA), Role: id, Tools: &tools,
+		Deny: &[]string{"Bash(git push:*)", "Bash(rm:*)", "Bash(curl:*)", "Bash(sudo:*)", "Bash(ssh:*)", "Bash(scp:*)", "Bash(dd:*)"}}))
+	if status(m) != "needs_approval" {
+		t.Fatalf("%v", m)
+	}
+	sub := lastSubmit(t, f)
+	if !strings.Contains(sub.Summary, "adds the tool CronCreate") || strings.Index(sub.Summary, "CronCreate") > strings.Index(sub.Summary, "+tool Skill") {
+		t.Fatalf("headline: %s", sub.Summary)
+	}
+	if ch := fmt.Sprint(sub.Preview.(map[string]any)["changes"]); !strings.Contains(ch, "+deny Bash(dd:*)") {
+		t.Fatalf("the full list is in the preview: %s", ch)
+	}
+}

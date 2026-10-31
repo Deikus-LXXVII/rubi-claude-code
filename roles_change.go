@@ -464,7 +464,8 @@ func (s *sisters) applied(h sisterHost, bot, device string, cur, next *role, res
 
 // ---- tier 2: ask ----
 
-func (s *sisters) askRoleChange(ctx context.Context, h sisterHost, rq roleChangeReq, next *role, fields []string, v tierVerdict, lines []string, summary string) (any, error) {
+func (s *sisters) askRoleChange(ctx context.Context, h sisterHost, rq roleChangeReq, next *role, fields []string, v tierVerdict, lines []string, _ string) (any, error) {
+	summary := v.headline(lines, 200)
 	t := roleTicket{ID: newID("rq_"), Bot: rq.Bot, ByUser: rq.ByUser, Device: rq.Dev.ID, DeviceName: rq.Dev.Name, Project: next.Project, Op: rq.Op,
 		After: map[string]json.RawMessage{}, Blobs: rq.Blobs, Summary: summary, Reasons: v.Reasons}
 	if rq.Cur != nil {

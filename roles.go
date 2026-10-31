@@ -467,11 +467,27 @@ type tierVerdict struct {
 	Foreign bool     // role_foreign: a project this Bot holds no trust for
 	Widen   bool     // role_widen: something grows
 	Reasons []string // why tier 2, for the approval and the Bot
+	// Widening is the part of Reasons that says what grows, shortest form first: the headline of an approval, which
+	// a long list of small changes must not push out of the first 100 characters.
+	Widening []string
 }
 
 func (v *tierVerdict) widen(format string, args ...any) {
 	v.Widen = true
-	v.Reasons = append(v.Reasons, fmt.Sprintf(format, args...))
+	r := fmt.Sprintf(format, args...)
+	v.Reasons = append(v.Reasons, r)
+	v.Widening = append(v.Widening, r)
+}
+
+// headline is the summary of a tier 2 approval: what widens first, then (for a project without trust) that the
+// project isn't trusted, then the other changes. The full list of changes is in the approval's preview.
+func (v tierVerdict) headline(lines []string, n int) string {
+	var parts []string
+	parts = append(parts, v.Widening...)
+	if v.Foreign {
+		parts = append(parts, "project not trusted")
+	}
+	return joinSummary(append(parts, lines...), n)
 }
 
 // tierOf compares cur with next (cur nil: a new role) and says which tier the change is. The tier comes from the
