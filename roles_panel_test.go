@@ -344,8 +344,11 @@ func TestRoleDetailPage(t *testing.T) {
 	if n := section(t, pg, "MCP servers")["note"].(string); !strings.Contains(n, "200-character") {
 		t.Errorf("the page doesn't say why: %s", n)
 	}
-	if its := section(t, pg, "SSH grants")["items"].([]map[string]any); len(its) != 1 || its[0]["actions"] != nil {
-		t.Errorf("ssh is view only: %v", its)
+	// A grant of a name no target has (this Home has no registry) can be revoked, and says so.
+	if its := section(t, pg, "SSH grants")["items"].([]map[string]any); len(its) != 1 || its[0]["warn"] != true || !strings.Contains(its[0]["detail"].(string), "no target has this name") {
+		t.Errorf("%v", its)
+	} else if op, _ := actionOp(t, its[0], "Revoke"); op != "role_ssh_revoke" {
+		t.Errorf("%v", its)
 	}
 	// Mode: the current one isn't offered; above the ceiling says it asks. Project instructions toggle.
 	mode := findItem(t, pg, "Mode and project instructions", "Default permission mode")

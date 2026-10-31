@@ -347,6 +347,7 @@ type agentItem struct {
 	// Event is an event item's payload as Rubi Home nests it; its fields are read into the ones below.
 	Event  json.RawMessage `json:"event,omitempty"`
 	detail string          // set by handleAsk: what the approval shows for a question without a tool input
+	extra  map[string]any  // set by handleAsk: more facts for the approval's preview (an ssh.ask's target and user)
 	// event: Kind is the runner's (assistant, tool, result, sister_reply, sister_ask, message, status, error ...)
 	Kind      string    `json:"kind,omitempty"`
 	ID        string    `json:"id,omitempty"`
@@ -416,7 +417,7 @@ func (w *watcher) pollAgent(ctx context.Context, d rubiplugin.HomeDevice) {
 		failures = 0
 		for _, it := range out.Items {
 			switch it.Type {
-			case "perm.ask", "cred.ask", "net.ask":
+			case "perm.ask", "cred.ask", "net.ask", "ssh.ask":
 				w.wg.Go(func() { w.handleAsk(ctx, d, it) })
 			case "event":
 				w.wg.Go(func() { w.s.routeAgent(ctx, w.h, d, it) })

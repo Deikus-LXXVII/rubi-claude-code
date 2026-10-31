@@ -496,7 +496,7 @@ argument is never used, and a call without a verified Bot fails). A project's de
 | `claude_code_role_tools_set {role, tools?, deny?}` | built-in tools and deny rules (each leaving the other as it is when omitted) | 1 for the safe set (Read, Edit, Write, Glob, Grep, Bash, Agent, Skill, WebFetch, WebSearch), added deny rules and removing deny rules this Bot added; 2 for any other tool or removing a deny rule the user (or another Bot) set |
 | `claude_code_role_agents_set {role, agents}` | subagent definitions | 1 |
 | `claude_code_role_mcp_set`, `_plugins_set`, `_hosts_set {role, ...}` | MCP servers, Claude plugins, extra network hosts | always 2 (`role_widen`) |
-| `claude_code_role_ssh_grant` / `_revoke {role, target}` | SSH target grants | answer "not available yet" until the SSH registry (R11/R12); the tier logic is in place: a registered target is 1, an unregistered one 2 |
+| `claude_code_role_ssh_grant` / `_revoke {role, target}` | SSH target grants (R12) | 1 for a registered target, audited (revoking cuts the role's live streams); an unregistered name is rejected, and only the user registers targets |
 | `claude_code_role_start {role, prompt, name?}` | a session in the role's VM (`claude-agent.start` with `role`), the Bot bound to it | as `claude_code_start`: one strong approval (`claude-code.start`), or none with a live project trust held by this Bot, never for a `bypassPermissions` role; same hidden-text checks and 5 an hour |
 | `claude_code_role_list {project?}`, `_get {role, version?}`, `_history {role}` | read | none |
 
@@ -508,6 +508,25 @@ version is dropped at the next check, audited per role (`role.library_dropped`);
 reach the library (Rubi locked, no answer) is never read as a withdrawal. The panel's role page has **Pin to this
 version** and **Follow the latest** per library skill. Submitting an ad-hoc skill to the library is the Bot tool
 `rubi_library_submit` in Rubi's core; nothing in this plugin does it.
+
+**SSH targets (R12).** Rubi Home holds the target registry, the private keys and the pinned host keys and does the network
+work (`claude-agent.ssh.scan`, `.register`, `.list`, `.remove`, `.audit`); the project VM never sees a key or a host. The
+panel's **SSH targets** page (Projects, then SSH targets) lists each target (host key fingerprint, allowed commands, ask
+each time, the roles that have it, a warning when the host key changed). **Add** asks for `name host user [port]`, lets the
+user choose allowed commands and whether each command asks, then **Check the host key**: Rubi Home reads the server's key
+(no login), the user may paste the fingerprint they expect, and the strong approval `claude-code.ssh_target` (locked)
+carries `{name, host, port, user, fingerprint, allowed_commands, ask_each_time}`. Only after the approval does the plugin
+call `ssh.register`; Home refuses if the server's key is no longer the one confirmed. The public key line to install on
+the server is returned and shown as item text (with an `info` field for a panel that draws a copy button). **Remove**
+asks for confirmation, calls `ssh.remove` and takes the grant away from every role that names the target (the user's
+change, audited), so a later target with the same name starts clean; re-registering a removed name needs the draft's
+**Reuse a removed name** switch, which is shown in the approval and is the only way `reuse` is sent. Each target has an
+audit page (`ssh.audit`) and Home's stream entries are copied into Rubi's audit log (`ssh.stream`, at most every 5
+minutes). A Bot can grant or revoke a registered target on a role it may change, nothing else: there is no Bot tool that
+registers or scans. When a target was registered with ask-each-time, Home sends an `ssh.ask` item; the plugin turns it
+into a strong approval (`claude-code.run`, one option) showing the role, target, host, port, user and the command (newlines
+marked `⏎`; hidden characters are refused), in every mode. `ssh <target> ...` and `rubi-ssh` in a Bash call are also
+remote operations that always ask, and no 2-hour or project trust covers them; that is a second, independent check.
 
 **The tier comes from the difference, not from the tool.** The plugin reads the current version, builds the proposed
 one, and compares. It is tier 2 when anything grows in `mcp`, `plugins` or `hosts`; when a tool outside the safe set

@@ -75,6 +75,7 @@ func TestMandateAllows(t *testing.T) {
 		"curl https://example.com",
 		"wget x",
 		"ssh host",
+		"rubi-ssh web-1 ls",
 		"scp a b:",
 		"npm install left-pad",
 		"npm publish",

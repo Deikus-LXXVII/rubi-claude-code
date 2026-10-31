@@ -54,7 +54,7 @@ func TestPanelAgentProjectsAndSessions(t *testing.T) {
 	f.agent.queue = []map[string]any{{"project": "p1", "session": "s-1", "position": 1}}
 	// The main page links to the agent pages.
 	main := view(t, s, f, `{}`)
-	if first := items(t, main, 0); len(first) != 4 || first[0]["title"] != "Projects and sessions" || first[1]["title"] != "Usage modes" {
+	if first := items(t, main, 0); len(first) != 5 || first[0]["title"] != "Projects and sessions" || first[1]["title"] != "Usage modes" {
 		t.Fatalf("%v", main["sections"])
 	}
 	pg := view(t, s, f, `{"page":"agent"}`)

@@ -366,6 +366,10 @@ func (s *sisters) changeRole(ctx context.Context, h sisterHost, rq roleChangeReq
 		return rejected(reasons...), nil
 	}
 	project := next.Project
+	if rq.Cur == nil || !slices.Equal(nz(rq.Cur.SSH), nz(next.SSH)) {
+		// Which targets are registered decides the tier of a new grant: ask Rubi Home, not a stale answer.
+		_ = s.refreshSSH(ctx, h, rq.Dev.ID)
+	}
 	v := tierOf(rq.Cur, next, tierCtx{Bot: rq.Bot, Trust: rq.ByUser || s.botTrust(rq.Dev.ID, rq.Bot, project) != nil, Ceiling: rq.Lim.Ceiling,
 		Registered: s.registeredSSH(rq.Dev.ID), RevertOthers: rq.RevertOthers, ForceWiden: rq.ForceWiden, ByUser: rq.ByUser})
 	if !rq.ByUser && !s.allow("rolechg|"+botID(rq.Bot), rq.Lim.ChangesPerHour) {
@@ -392,13 +396,6 @@ func (s *sisters) changeRole(ctx context.Context, h sisterHost, rq roleChangeReq
 		return s.applied(h, rq.Bot, rq.Dev.ID, rq.Cur, next, res, 1, "", summary), nil
 	}
 	return s.askRoleChange(ctx, h, rq, next, fields, v, lines, summary)
-}
-
-func (s *sisters) registeredSSH(device string) map[string]bool {
-	if s.rc.ssh == nil {
-		return nil
-	}
-	return s.rc.ssh(device)
 }
 
 type putResult struct {

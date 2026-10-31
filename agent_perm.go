@@ -118,6 +118,16 @@ func (w *watcher) handleAsk(ctx context.Context, d rubiplugin.HomeDevice, it age
 			}
 		}
 	}
+	if it.Type == "ssh.ask" {
+		// A command on an SSH target registered with ask_each_time. Rubi Home already checked the grant and the
+		// allowed commands; this is the user's say on this one command. Always a strong approval, never covered by a trust.
+		detail, extra, why := sshAskDetail(it)
+		if why != "" {
+			deny(why)
+			return
+		}
+		tool, it.detail, it.extra, it.Host = "ssh", detail, extra, ""
+	}
 	if tool == "AskUserQuestion" {
 		w.askQuestion(ctx, d, it, deny)
 		return
@@ -128,6 +138,8 @@ func (w *watcher) handleAsk(ctx context.Context, d rubiplugin.HomeDevice, it age
 		reason = "git credentials for " + it.detail
 	case it.Type == "net.ask":
 		reason = it.detail
+	case it.Type == "ssh.ask":
+		reason = "an SSH command on a target you asked to be asked about each time"
 	default:
 		reason = agentAlwaysAsk(tool, it.Input, cwd)
 	}
@@ -206,6 +218,9 @@ func (w *watcher) agentApprove(ctx context.Context, d rubiplugin.HomeDevice, it 
 	}
 	if it.AgentType != "" {
 		preview["subagent"] = it.AgentType
+	}
+	for k, v := range it.extra {
+		preview[k] = v
 	}
 	if r := w.s.roleLabel(d.ID, it.Project, it.Role); r != "" {
 		preview["role"] = r

@@ -85,6 +85,8 @@ func manifest() rubiplugin.Manifest {
 				Options: []rubiplugin.Option{{Key: "apply", Label: "Apply", Meaning: "Gives the agent role what the approval lists: MCP servers and Claude plugins run code, hosts open the role's VM to more of the network, other tools and a looser permission mode let Claude do more without asking. The role's history keeps the older versions, so you can revert. If the role changed since the Bot asked, the request fails and the Bot has to ask again"}}},
 			{Kind: kindRoleSkillAccept, Title: "Accept a skill that Rubi's scan flagged in an agent role", DefaultLevel: rubiplugin.Tap, Locked: true,
 				Options: []rubiplugin.Option{{Key: "accept", Label: "Accept", Meaning: "The role uses the skill from its next session on. A skill is only text Claude reads; it grants no tools, hosts or permissions, but flagged text may try to steer Claude (the approval shows what was flagged)"}}},
+			{Kind: kindSSHTarget, Title: "Register an SSH target on your computer (a server roles may run commands on)", DefaultLevel: rubiplugin.Strong, Locked: true,
+				Options: []rubiplugin.Option{{Key: "register", Label: "Register", Meaning: "Rubi Home on that computer makes a new key pair for the target and pins the server's host key shown in the approval (the fingerprint you confirmed). Roles you later grant the target can run its allowed commands on the server as that user, from your computer; their VMs never get the key or the address. Registering gives no role anything by itself"}}},
 			{Kind: kindSetupInstall, Title: "Install or upgrade Apple's container tool for the agent path", DefaultLevel: rubiplugin.Strong, Locked: true,
 				Options: []rubiplugin.Option{{Key: "install", Label: "Install", Meaning: "Rubi Home on that computer downloads Apple's signed container installer (a pinned release, checked by size, hash and signature) and installs it; macOS then shows its own administrator dialog on that computer"}}},
 			{Kind: kindSetupNetwork, Title: "Create the host-only network of the agent path", DefaultLevel: rubiplugin.Strong, Locked: true,
@@ -212,6 +214,13 @@ func main() {
 			return nil, fmt.Errorf("bad payload")
 		}
 		return sis.executeRoleChange(ctx, h, t)
+	})
+	p.OnExecute(kindSSHTarget, func(ctx context.Context, h *rubiplugin.Host, _ string, payload json.RawMessage) (any, error) {
+		var t sshTicket
+		if err := json.Unmarshal(payload, &t); err != nil {
+			return nil, fmt.Errorf("bad payload")
+		}
+		return sis.executeSSHRegister(ctx, h, t)
 	})
 	p.OnExecute(kindRoleSkillAccept, func(ctx context.Context, h *rubiplugin.Host, _ string, payload json.RawMessage) (any, error) {
 		var t skillAcceptTicket

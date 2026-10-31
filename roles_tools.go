@@ -343,11 +343,11 @@ func registerRoleTools(p *rubiplugin.Plugin, s *sisters) {
 		func(ctx context.Context, h *rubiplugin.Host, in roleHostsSetIn) (any, error) {
 			return s.roleHostsSetTool(ctx, h, in)
 		})
-	rubiplugin.AddTool(p, "claude_code_role_ssh_grant", "Grant a role one registered SSH target (not available yet).",
+	rubiplugin.AddTool(p, "claude_code_role_ssh_grant", "Grant a role one registered SSH target (the user registers targets on Rubi's panel; an unregistered name is rejected). Applied at once and audited; the role can then run the target's allowed commands over SSH from its VM.",
 		func(ctx context.Context, h *rubiplugin.Host, in roleSSHIn) (any, error) {
 			return s.roleSSHTool(ctx, h, in, true)
 		})
-	rubiplugin.AddTool(p, "claude_code_role_ssh_revoke", "Revoke a role's SSH target (not available yet).",
+	rubiplugin.AddTool(p, "claude_code_role_ssh_revoke", "Revoke a role's SSH target. Applied at once; streams the role has open to it are cut.",
 		func(ctx context.Context, h *rubiplugin.Host, in roleSSHIn) (any, error) {
 			return s.roleSSHTool(ctx, h, in, false)
 		})
@@ -859,19 +859,23 @@ func (s *sisters) roleSSHTool(ctx context.Context, h sisterHost, in roleSSHIn, g
 	if _, err := s.who(h, in.roleWho); err != nil {
 		return nil, err
 	}
-	if s.rc.ssh == nil {
-		return rejected("SSH targets are not available yet"), nil
-	}
 	op := "role.ssh.revoke"
 	if grant {
 		op = "role.ssh.grant"
 	}
 	target := strings.TrimSpace(in.Target)
-	return s.roleEdit(ctx, h, in.roleWho, in.Role, op, false, func(_ roleCaller, cur, next *role) (map[string]string, []string, error) {
-		if !roleNameRE.MatchString(target) {
+	return s.roleEdit(ctx, h, in.roleWho, in.Role, op, false, func(c roleCaller, cur, next *role) (map[string]string, []string, error) {
+		if !sshNameRE.MatchString(target) {
 			return nil, []string{"target must be the name of an SSH target"}, nil
 		}
 		if grant {
+			// Only a target the user registered can be granted; a Bot can't register one or ask for one to exist.
+			if err := s.refreshSSH(ctx, h, c.Dev.ID); err != nil {
+				return nil, nil, err
+			}
+			if !s.registeredSSH(c.Dev.ID)[target] {
+				return nil, []string{"the SSH target " + target + " isn't registered; only the user registers targets (on Rubi's SSH targets page), so ask them"}, nil
+			}
 			next.SSH = append(slices.Clone(cur.SSH), target)
 			slices.Sort(next.SSH)
 			next.SSH = slices.Compact(next.SSH)

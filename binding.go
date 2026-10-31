@@ -112,6 +112,13 @@ type sisters struct {
 	// (roles_library.go).
 	libSeen   map[string]time.Time
 	libTickAt time.Time
+	// SSH targets (roles_ssh.go): the registered names of each computer, the targets the user is adding, the public
+	// key lines shown after a registration, and what the audit copy has already passed on.
+	sshNames   map[string]map[string]bool
+	sshDrafts  map[string]*sshDraft
+	sshKeys    map[string]string
+	sshAuditAt time.Time
+	sshSeen    map[string]bool
 }
 
 type askRef struct {

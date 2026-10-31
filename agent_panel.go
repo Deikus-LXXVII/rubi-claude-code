@@ -46,6 +46,7 @@ type panelPage struct {
 	Session string
 	Role    string // an isolated role's id
 	Version int    // a role version (history and diff pages)
+	Target  string // an SSH target's name (its audit page)
 }
 
 func (p panelPage) open() map[string]any {
@@ -64,6 +65,9 @@ func (p panelPage) open() map[string]any {
 	}
 	if p.Version != 0 {
 		m["version"] = p.Version
+	}
+	if p.Target != "" {
+		m["target"] = p.Target
 	}
 	return m
 }
@@ -101,6 +105,7 @@ func (s *sisters) agentLinkSection(ctx context.Context, h sisterHost) []map[stri
 			{"title": "Projects and sessions", "detail": "Each project's sessions with the running ones marked, what is waiting and why, and a button to start a new session.", "actions": []map[string]any{{"label": "Open", "open": panelPage{Page: pageAgent}.open()}}},
 			{"title": "Usage modes", "detail": "How much each Bot may run at once: Maximum, Medium (Recommended) or Light. Only you change it.", "actions": []map[string]any{{"label": "Open", "open": panelPage{Page: pageModes}.open()}}},
 			{"title": "Agent roles", "detail": "Profiles of a project with their own skills, tools and hosts: the roles of each project, what each has, its history with a one-click revert, and a button to start a session in one.", "actions": []map[string]any{{"label": "Open", "open": panelPage{Page: pageRoles}.open()}}},
+			{"title": "SSH targets", "detail": "Servers a role may run commands on, from your computer: add one (you confirm its host key), see which roles have it, remove it, and read what was run.", "actions": []map[string]any{{"label": "Open", "open": panelPage{Page: pageSSH}.open()}}},
 			{"title": "Usage and sign-in", "detail": "Today's estimate and whether Claude is signed in.", "actions": []map[string]any{{"label": "Open", "open": panelPage{Page: pageUsage}.open()}}},
 		}}}
 }
@@ -205,6 +210,10 @@ func (s *sisters) agentPage(ctx context.Context, h sisterHost, p panelPage) (any
 		return s.roleHistoryPage(ctx, h, p)
 	case pageRoleDiff:
 		return s.roleDiffPage(ctx, h, p)
+	case pageSSH:
+		return s.sshPage(ctx, h, p)
+	case pageSSHAudit:
+		return s.sshAuditPage(ctx, h, p)
 	}
 	return nil, fmt.Errorf("unknown page %q", p.Page)
 }

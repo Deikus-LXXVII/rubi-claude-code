@@ -133,6 +133,7 @@ func (w *watcher) refresh(ctx context.Context) {
 		}
 		if len(ids) > 0 {
 			w.wg.Go(func() { w.s.libraryTick(ctx, w.h, ids) })
+			w.wg.Go(func() { w.s.sshAuditTick(ctx, w.h, ids) })
 		}
 	}
 	w.mu.Lock()

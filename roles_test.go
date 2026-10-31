@@ -832,16 +832,16 @@ func TestSSHNeedsTargetsAndKeepsTheTierLogic(t *testing.T) {
 	f, s, fr := roleFixture(t)
 	trustBot(t, s, botA, "p1")
 	id := mustCreate(t, s, f, botA, "design")
-	m := asMap(t)(s.roleSSHTool(context.Background(), f, roleSSHIn{roleWho: who(botA), Role: id, Target: "web-1"}, true))
-	if status(m) != "rejected" || !strings.Contains(m["reasons"].([]string)[0], "not available yet") {
-		t.Fatalf("%v", m)
+	// A Rubi Home with no SSH registry says so; nothing is granted.
+	if _, err := s.roleSSHTool(context.Background(), f, roleSSHIn{roleWho: who(botA), Role: id, Target: "web-1"}, true); err == nil || !strings.Contains(err.Error(), "doesn't do SSH targets") {
+		t.Fatalf("%v", err)
 	}
-	// With a registry (R11), a registered target is tier 1 and an unregistered one asks.
+	// With a registry fixed for the test, a registered target is tier 1 and an unregistered one is rejected.
 	s.rc.ssh = func(string) map[string]bool { return map[string]bool{"web-1": true} }
 	if m := asMap(t)(s.roleSSHTool(context.Background(), f, roleSSHIn{roleWho: who(botA), Role: id, Target: "web-1"}, true)); status(m) != "applied" || fr.current(id).SSH[0] != "web-1" {
 		t.Fatalf("%v", m)
 	}
-	if m := asMap(t)(s.roleSSHTool(context.Background(), f, roleSSHIn{roleWho: who(botA), Role: id, Target: "db-1"}, true)); status(m) != "needs_approval" {
+	if m := asMap(t)(s.roleSSHTool(context.Background(), f, roleSSHIn{roleWho: who(botA), Role: id, Target: "db-1"}, true)); status(m) != "rejected" {
 		t.Fatalf("%v", m)
 	}
 	if m := asMap(t)(s.roleSSHTool(context.Background(), f, roleSSHIn{roleWho: who(botA), Role: id, Target: "web-1"}, false)); status(m) != "applied" || len(fr.current(id).SSH) != 0 {

@@ -191,7 +191,7 @@ var (
 	rootProgs = map[string]bool{"sudo": true, "doas": true, "su": true, "pkexec": true, "run0": true}
 	// Programs that run another program or shell, change the shell's state or hide what runs.
 	wrapperProgs = setOf("sh bash zsh dash ksh csh tcsh fish ash busybox eval exec env xargs source . command builtin nohup timeout nice ionice time setsid stdbuf watch chroot unshare nsenter script flock parallel pushd popd trap alias shopt set setopt unset export declare typeset local readonly at batch crontab systemd-run screen tmux ssh-agent")
-	netProgs     = setOf("ssh scp sftp rsync nc ncat netcat telnet ftp tftp lftp socat nmap ping ping6 traceroute dig nslookup host mosh openssl gnutls-cli aria2c http https httpie websocat wscat smbclient psql mysql mariadb redis-cli mongosh mongo sqlcmd telnetd ftpd tcpdump tshark ngrok cloudflared")
+	netProgs     = setOf("ssh rubi-ssh scp sftp rsync nc ncat netcat telnet ftp tftp lftp socat nmap ping ping6 traceroute dig nslookup host mosh openssl gnutls-cli aria2c http https httpie websocat wscat smbclient psql mysql mariadb redis-cli mongosh mongo sqlcmd telnetd ftpd tcpdump tshark ngrok cloudflared")
 	interpreters = setOf("python python2 python3 node nodejs deno bun ruby perl php lua luajit rscript osascript tclsh pwsh powershell julia ghc runghc swift")
 	publishProgs = setOf("npm pnpm yarn bun cargo gem docker twine vsce poetry flit hatch uv pip pip3")
 	linkProgs    = setOf("ln link mount")
@@ -283,6 +283,8 @@ func segAlwaysAsk(sg segment, dir *string) string {
 	switch {
 	case wrapperProgs[prog]:
 		return prog + ": it runs another program or shell, or changes the shell, in a way Rubi can't follow"
+	case prog == "ssh" || prog == "rubi-ssh":
+		return prog + ": a command on another computer over SSH (Rubi Home also checks the target's grant and allowed commands); it asks every time, and no trust covers it"
 	case netProgs[prog]:
 		return prog + ": the network outside the allow-list"
 	case linkProgs[prog]:

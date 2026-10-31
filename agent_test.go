@@ -35,6 +35,7 @@ type fakeAgent struct {
 	limits map[string]any
 	modes  map[string]any // claude-agent.status "usage"
 	roles  *fakeRoles     // the claude-agent.role.* operations (nil: a Rubi Home without roles)
+	ssh    *fakeSSH       // the claude-agent.ssh.* operations (nil: a Rubi Home without SSH targets)
 }
 
 type fakeCall struct {
@@ -85,6 +86,16 @@ func (a *fakeAgent) call(ctx context.Context, op string, args, out any) error {
 			return errors.New(`Rubi Home doesn't do "` + op + `"`)
 		}
 		v, err := a.roles.call(op, m)
+		if err != nil {
+			return err
+		}
+		return reply(v)
+	}
+	if strings.HasPrefix(op, "claude-agent.ssh.") {
+		if a.ssh == nil {
+			return errors.New(`Rubi Home doesn't do "` + op + `"`)
+		}
+		v, err := a.ssh.call(op, m, a.roles)
 		if err != nil {
 			return err
 		}

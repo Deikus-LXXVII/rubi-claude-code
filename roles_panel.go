@@ -377,13 +377,9 @@ func (s *sisters) rolePage(ctx context.Context, h sisterHost, p panelPage) (any,
 	}
 	sections = append(sections, map[string]any{"title": "Network hosts", "note": "Beyond the base list. Adding a host asks for your strong approval when a Bot asks; the panel only removes them.", "empty": "None.", "items": cap100(hosts)})
 
-	if len(r.SSH) > 0 {
-		var ssh []map[string]any
-		for _, x := range r.SSH {
-			ssh = append(ssh, map[string]any{"title": clipOne(x, 48), "detail": "SSH target this role may use"})
-		}
-		sections = append(sections, map[string]any{"title": "SSH grants", "empty": "None.", "items": cap100(ssh)})
-	}
+	sshItems, sshNote := s.sshGrantItems(ctx, h, d.ID, r, args)
+	sections = append(sections, map[string]any{"title": "SSH grants", "note": sshNote, "empty": "No SSH targets are registered.", "items": sshItems,
+		"actions": []map[string]any{{"label": "SSH targets", "open": panelPage{Page: pageSSH, Device: d.ID}.open()}}})
 
 	var agents []map[string]any
 	for _, a := range r.Agents {
@@ -746,6 +742,32 @@ func (s *sisters) panelRoleItem(ctx context.Context, h sisterHost, op, device, r
 				n.Skills[i].Pin = n.Skills[i].Resolved
 			} else {
 				n.Skills[i].Pin = ""
+			}
+			return nil
+		})
+	case "role_ssh_grant", "role_ssh_revoke":
+		if !sshNameRE.MatchString(item) {
+			return nil, errors.New("no such target")
+		}
+		if op == "role_ssh_grant" {
+			// Only a registered target can be granted.
+			if err := s.refreshSSH(ctx, h, device); err != nil {
+				return nil, err
+			}
+			if !s.registeredSSH(device)[item] {
+				return nil, errors.New("that target isn't registered")
+			}
+		}
+		return edit(func(n *role) error {
+			if op == "role_ssh_grant" {
+				n.SSH = append(slices.Clone(n.SSH), item)
+				slices.Sort(n.SSH)
+				n.SSH = slices.Compact(n.SSH)
+				return nil
+			}
+			var ok bool
+			if n.SSH, ok = removeBy(n.SSH, func(x string) bool { return x == item }); !ok {
+				return errNoItem
 			}
 			return nil
 		})

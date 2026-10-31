@@ -81,6 +81,7 @@ func (s *sisters) panel(ctx context.Context, h sisterHost, op string, args json.
 		Which     string  `json:"which"`
 		Default   bool    `json:"default"`
 		All       bool    `json:"all"`
+		Target    string  `json:"target"`
 	}
 	if len(args) > 0 && string(args) != "null" {
 		if err := json.Unmarshal(args, &a); err != nil {
@@ -90,7 +91,7 @@ func (s *sisters) panel(ctx context.Context, h sisterHost, op string, args json.
 	switch op {
 	case "view":
 		if a.Page != "" {
-			return s.agentPage(ctx, h, panelPage{Page: a.Page, Device: a.Device, Project: a.Project, Session: a.SessionID, Role: a.Role, Version: a.Version})
+			return s.agentPage(ctx, h, panelPage{Page: a.Page, Device: a.Device, Project: a.Project, Session: a.SessionID, Role: a.Role, Version: a.Version, Target: a.Target})
 		}
 	case "setup_install", "setup_network", "setup_add", "setup_run", "setup_open", "setup_code", "setup_remove", "setup_cancel":
 		return s.panelSetup(ctx, h, op, setupArgs{Device: a.Device, Step: a.Step, Project: a.Project, Method: a.Method, Option: a.Option, Code: a.Code})
@@ -105,8 +106,10 @@ func (s *sisters) panel(ctx context.Context, h sisterHost, op string, args json.
 	case "role_new", "role_convert":
 		return s.panelRoleCreate(ctx, h, a.Device, a.Project, a.Text, op == "role_convert")
 	case "role_archive", "role_unarchive", "role_skill_remove", "role_tool", "role_deny_add", "role_deny_remove", "role_mcp_remove",
-		"role_plugin_remove", "role_host_remove", "role_agent_remove", "role_mode", "role_pinstr":
+		"role_plugin_remove", "role_host_remove", "role_agent_remove", "role_mode", "role_pinstr", "role_ssh_grant", "role_ssh_revoke":
 		return s.panelRoleItem(ctx, h, op, a.Device, a.Role, a.Item, a.Mode, a.On, a.Text)
+	case "ssh_add", "ssh_remove", "ssh_confirm", "ssh_draft_cmd", "ssh_draft_anycmd", "ssh_draft_ask", "ssh_draft_reuse", "ssh_draft_discard":
+		return s.panelSSH(ctx, h, op, a.Device, a.Item, a.On, a.Text)
 	case "role_skill_pin", "role_skill_follow":
 		return s.panelSkillPin(ctx, h, a.Device, a.Role, a.Item, op == "role_skill_pin")
 	case "role_skill_accept":

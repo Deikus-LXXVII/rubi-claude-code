@@ -460,7 +460,7 @@ var alwaysAsk = map[string]string{
 	"sh": "runs a shell", "bash": "runs a shell", "zsh": "runs a shell", "dash": "runs a shell", "fish": "runs a shell", "ksh": "runs a shell",
 	"eval": "runs text as a command", "exec": "replaces the shell", "source": "runs a script in the shell", ".": "runs a script in the shell",
 	"env": "runs a command with a changed environment", "xargs": "runs commands from its input",
-	"curl": "network", "wget": "network", "ssh": "network", "scp": "network", "sftp": "network", "rsync": "network",
+	"curl": "network", "wget": "network", "ssh": "network", "rubi-ssh": "network", "scp": "network", "sftp": "network", "rsync": "network",
 	"nc": "network", "ncat": "network", "netcat": "network", "telnet": "network", "ftp": "network", "socat": "network",
 	"gh": "network", "hub": "network", "docker": "containers and registries", "podman": "containers and registries",
 	"brew": "installs software", "pip": "installs software", "pip3": "installs software", "gem": "installs software",
