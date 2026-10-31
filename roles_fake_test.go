@@ -329,6 +329,18 @@ func fakeAdditions(prev, r *role, ch *roleChangeInfo) []fakeAddition {
 			out = append(out, fakeAddition{"tool " + t, change})
 		}
 	}
-	// ACCEPT_PLACEHOLDER
+	for _, sk := range r.Skills {
+		var had []string
+		for _, o := range prev.Skills {
+			if o.Name == sk.Name && o.SHA256 == sk.SHA256 {
+				had = o.Accepted
+			}
+		}
+		for _, id := range sk.Accepted {
+			if !slices.Contains(had, id) {
+				out = append(out, fakeAddition{"accept " + sk.Name + " " + id, change})
+			}
+		}
+	}
 	return out
 }

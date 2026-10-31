@@ -803,7 +803,7 @@ func TestHeldSkillIsAcceptedByTheUser(t *testing.T) {
 	if status(res) != "applied" || r.Skills[0].State != "active" || r.ChangedBy != "user" || r.Change.Op != "role.skill.accept" {
 		t.Fatalf("%v %+v", res, r)
 	}
-	if a := auditsOf(f, "role.change"); a[len(a)-1]["by"] != "user" || a[len(a)-1]["approval"] != kindRoleSkillAccept {
+	if a := auditsOf(f, "role.change"); a[len(a)-1]["by"] != "user" || a[len(a)-1]["approval"] != tk.ApprovalID || !strings.HasPrefix(tk.ApprovalID, "sk_") {
 		t.Fatalf("%v", a)
 	}
 	// If the skill changed after the user was asked, accepting fails.
@@ -930,5 +930,48 @@ func TestToolsAndKindsAreRegistered(t *testing.T) {
 	}
 	if len(levels) != 0 {
 		t.Fatalf("missing kinds %v", levels)
+	}
+}
+
+// Each acceptance has an approval id of its own: Rubi Home spends an id once, so an id shared by the kind's name
+// would let only the first acceptance through.
+func TestSkillAcceptancesUseDistinctApprovalIDs(t *testing.T) {
+	f, s, fr := roleFixture(t)
+	trustBot(t, s, botA, "p1")
+	id := mustCreate(t, s, f, botA, "design")
+	var ids []string
+	for _, n := range []string{"one", "two"} {
+		asMap(t)(s.roleSkillsAddTool(context.Background(), f, roleSkillsAddIn{roleWho: who(botA), Role: id, Name: n, Description: "d", Content: "allowed-tools: Bash"}))
+		if _, err := s.askSkillAccept(context.Background(), f, mac, id, n); err != nil {
+			t.Fatal(err)
+		}
+		b, _ := json.Marshal(lastSubmit(t, f).Payload)
+		var tk skillAcceptTicket
+		_ = json.Unmarshal(b, &tk)
+		if !approvalIDRE.MatchString(tk.ApprovalID) {
+			t.Fatalf("approval id %q", tk.ApprovalID)
+		}
+		if res := asMap(t)(s.executeSkillAccept(context.Background(), f, tk)); status(res) != "applied" {
+			t.Fatalf("%v", res)
+		}
+		ids = append(ids, tk.ApprovalID)
+	}
+	if ids[0] == ids[1] {
+		t.Fatalf("the same approval id twice: %v", ids)
+	}
+	for _, k := range fr.current(id).Skills {
+		if k.State != "active" {
+			t.Fatalf("%+v", k)
+		}
+	}
+	// A ticket without a usable id is refused before anything is written.
+	puts := fr.putCount()
+	for _, bad := range []string{"", "has space", kindRoleSkillAccept, strings.Repeat("a", 65)} {
+		if _, err := s.executeSkillAccept(context.Background(), f, skillAcceptTicket{ApprovalID: bad, Device: "dev_mac", Role: id, Skill: "one", SHA256: "x", Rules: []string{"wid.claim"}}); err == nil {
+			t.Errorf("accepted id %q", bad)
+		}
+	}
+	if fr.putCount() != puts {
+		t.Fatal("a put was made")
 	}
 }

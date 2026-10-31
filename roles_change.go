@@ -590,6 +590,9 @@ func (s *sisters) executeRoleChange(ctx context.Context, h sisterHost, t roleTic
 
 // skillAcceptTicket is the payload of a role_skill_accept approval.
 type skillAcceptTicket struct {
+	// ApprovalID is made when the user is asked and is the id Rubi Home spends with the accepted flags: one per
+	// request, so one acceptance can never authorize another (the kind's name would be spent by the first).
+	ApprovalID string   `json:"approval_id"`
 	Device     string   `json:"device"`
 	DeviceName string   `json:"device_name,omitempty"`
 	Role       string   `json:"role"`
@@ -650,7 +653,7 @@ func (s *sisters) askSkillAccept(ctx context.Context, h sisterHost, dev rubiplug
 	for _, x := range sc.Rules {
 		hits = append(hits, fmt.Sprintf("%s (line %d): %s", clipOne(x.ID, 20), x.Line, clipOne(x.Excerpt, 80)))
 	}
-	t := skillAcceptTicket{Device: dev.ID, DeviceName: dev.Name, Role: r.ID, Project: r.Project, Skill: k.Name, SHA256: k.SHA256, Rules: ruleIDs(sc)}
+	t := skillAcceptTicket{ApprovalID: newID("sk_"), Device: dev.ID, DeviceName: dev.Name, Role: r.ID, Project: r.Project, Skill: k.Name, SHA256: k.SHA256, Rules: ruleIDs(sc)}
 	preview := map[string]any{"computer": dev.Name, "project": r.Project, "role": r.Name, "skill": k.Name, "written_by": firstNonEmpty(k.AddedBy, "unknown"),
 		"flags_found": hits, "what_it_does": "Lets the role use this skill. A skill is only context for Claude: it grants no tools, hosts or permissions. The scan flagged the lines above; the text is not shown here."}
 	return h.Submit(ctx, rubiplugin.Request{Kind: kindRoleSkillAccept,
@@ -660,7 +663,7 @@ func (s *sisters) askSkillAccept(ctx context.Context, h sisterHost, dev rubiplug
 
 // executeSkillAccept runs once the user accepted: the flags the user saw are acknowledged in a new version.
 func (s *sisters) executeSkillAccept(ctx context.Context, h sisterHost, t skillAcceptTicket) (any, error) {
-	if t.Device == "" || t.Role == "" || t.Skill == "" || t.SHA256 == "" || len(t.Rules) == 0 {
+	if t.Device == "" || t.Role == "" || t.Skill == "" || t.SHA256 == "" || len(t.Rules) == 0 || !approvalIDRE.MatchString(t.ApprovalID) {
 		return nil, errors.New("bad payload")
 	}
 	cur, err := s.getRole(ctx, h, t.Device, t.Role, 0)
@@ -678,7 +681,7 @@ func (s *sisters) executeSkillAccept(ctx context.Context, h sisterHost, t skillA
 		}
 	}
 	summary := "accepted skill " + clipOne(t.Skill, 48) + " (rules " + strings.Join(t.Rules, ", ") + ")"
-	res, err := s.putRole(ctx, h, t.Device, cur.ID, cur.Version, next, nil, "user", roleChangeInfo{Op: "role.skill.accept", Tier: 2, Approval: kindRoleSkillAccept, Summary: summary})
+	res, err := s.putRole(ctx, h, t.Device, cur.ID, cur.Version, next, nil, "user", roleChangeInfo{Op: "role.skill.accept", Tier: 2, Approval: t.ApprovalID, Summary: summary})
 	var rf roleRefused
 	if errors.As(err, &rf) {
 		return nil, errors.New("not accepted: " + strings.Join(refusalReasons(rf.msg), "; "))
@@ -686,5 +689,5 @@ func (s *sisters) executeSkillAccept(ctx context.Context, h sisterHost, t skillA
 	if err != nil {
 		return nil, err
 	}
-	return s.applied(h, "user", t.Device, cur, next, res, 2, kindRoleSkillAccept, summary), nil
+	return s.applied(h, "user", t.Device, cur, next, res, 2, t.ApprovalID, summary), nil
 }

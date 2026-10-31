@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -48,6 +49,9 @@ var (
 
 // roleModeRank is the ladder of section 6.3, strictest first. dontAsk is not offered for roles.
 var roleModeRank = map[string]int{"plan": 0, "default": 1, "acceptEdits": 2, "auto": 3, "bypassPermissions": 4}
+
+// approvalIDRE is what Rubi Home takes as an approval id (internal/home/agent/roles/validate.go approvalRE).
+var approvalIDRE = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
 const (
 	roleIDPrefix       = "r_"
