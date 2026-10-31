@@ -85,6 +85,8 @@ func manifest() rubiplugin.Manifest {
 			{Type: eventMessage},
 			{Type: eventAsk, Untrusted: []string{"text", "kind", "title", "directory", "computer"}},
 		},
+		Config: []rubiplugin.ConfigField{{Key: "usage_warn_usd", Label: "Warn when today's Claude usage estimate is above (US dollars)", Type: "text", Default: "10",
+			Help: "A yellow notice on the usage page; nothing is ever blocked."}},
 		Panel: "view",
 		Home:  []string{"claude", "claude-sessions", "claude-start", "claude-agent"},
 	}

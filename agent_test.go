@@ -25,6 +25,9 @@ type fakeAgent struct {
 	startFn   func(args map[string]any) (map[string]any, error)
 	failOp    map[string]error
 	nextID    int
+	messages  []json.RawMessage // claude-agent.messages answer
+	login     any               // claude-agent.status "login" (default: signed in)
+	usage     any               // claude-agent.status "usage_today"
 }
 
 type fakeCall struct {
@@ -74,7 +77,17 @@ func (a *fakeAgent) call(ctx context.Context, op string, args, out any) error {
 	case opAgentStatus:
 		a.mu.Lock()
 		defer a.mu.Unlock()
-		return reply(map[string]any{"login": map[string]any{"logged_in": true}, "slot": a.slot, "queue": a.queue})
+		login := a.login
+		if login == nil {
+			login = map[string]any{"logged_in": true}
+		}
+		return reply(map[string]any{"login": login, "slot": a.slot, "queue": a.queue, "usage_today": a.usage})
+	case opAgentMessages:
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		return reply(map[string]any{"messages": a.messages})
+	case opAgentInterrupt, opAgentClose:
+		return reply(map[string]any{"ok": true})
 	case opAgentProjects:
 		return reply(map[string]any{"projects": a.projects})
 	case opAgentSessions:

@@ -67,6 +67,8 @@ func (s *sisters) panel(ctx context.Context, h sisterHost, op string, args json.
 		Forget    string  `json:"forget"`
 		Project   string  `json:"project"`
 		Mode      string  `json:"mode"`
+		Page      string  `json:"page"`
+		Text      *string `json:"text"`
 	}
 	if len(args) > 0 && string(args) != "null" {
 		if err := json.Unmarshal(args, &a); err != nil {
@@ -75,6 +77,15 @@ func (s *sisters) panel(ctx context.Context, h sisterHost, op string, args json.
 	}
 	switch op {
 	case "view":
+		if a.Page != "" {
+			return s.agentPage(ctx, h, panelPage{Page: a.Page, Device: a.Device, Project: a.Project, Session: a.SessionID})
+		}
+	case "interrupt", "close":
+		return s.panelAgentSimple(ctx, h, "claude-agent."+op, a.Device, a.Project, a.SessionID)
+	case "fork":
+		return s.panelAgentFork(ctx, h, a.Device, a.Project, a.SessionID)
+	case "send":
+		return s.panelAgentSend(ctx, h, a.Device, a.Project, a.SessionID, a.Text)
 	case "revoke":
 		n, err := s.st.revoke(a.ID)
 		if err != nil {
@@ -101,6 +112,9 @@ func (s *sisters) panel(ctx context.Context, h sisterHost, op string, args json.
 		}
 		return map[string]any{"unbound": ok}, nil
 	case "rename":
+		if a.Project != "" {
+			return s.panelAgentRename(ctx, h, a.Device, a.Project, a.SessionID, a.Name)
+		}
 		return s.panelRename(ctx, h, a.Device, a.SessionID, a.Name, a.Forget)
 	case "mode": // an agent session's mode: stricter at once, looser as a strong approval (the page for it is M6)
 		return s.changeMode(ctx, h, "", a.Device, a.Project, a.SessionID, a.Mode, true)
@@ -147,14 +161,15 @@ func (s *sisters) panel(ctx context.Context, h sisterHost, op string, args json.
 		})
 	}
 	nameItems, nameNote := s.nameItems(ctx, h)
+	agent := s.agentLinkSection(ctx, h)
 	return map[string]any{"title": "Claude Code", "refresh": 30,
 		"note": "Sessions running with bypassPermissions never ask, so approvals and trusts here don't apply to them (their messages to and from Bots still work).",
-		"sections": []map[string]any{
+		"sections": append(agent, []map[string]any{
 			{"title": "Trusted sessions (2 hours)", "note": "Rubi allows these sessions' plain, listed commands by itself, including builds and tests that run the project's own code; push, --force, sudo, network commands, credential paths and writing outside the directory or into .git still ask.", "empty": "None.", "items": mitems},
 			{"title": "Trusted projects (until 04:00, or until revoked)", "note": "A trust marked UNTIL REVOKED has no end time and no command limit: it stays on across restarts and days until you revoke it here (or with claude_code_mandates). Every Claude Code session on that computer inside the project: Rubi allows plain, listed commands by itself, including builds and tests that run the project's own code, and a Bot bound to a session of the project can start and bind sessions in it. Push and every remote git command, --force, sudo, network commands, tags, credential paths, writing outside the project and branches outside the pattern still ask.", "empty": "None.", "items": pitems},
 			{"title": "Session names", "note": nameNote, "empty": "No sessions.", "items": nameItems},
 			{"title": "Bots bound to sessions", "note": "Each Bot talks only to its session.", "empty": "None.", "items": bitems},
-		}}, nil
+		}...)}, nil
 }
 
 // panelRename is the user's own rename (or clear) from the panel: no approval, the page is the user's. name

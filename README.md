@@ -473,6 +473,25 @@ a strong approval for any other; no trust shortcut. The fork is asked of Rubi Ho
 `mode` explicitly (`claude-agent.fork {project, id, name?, mode}`; Home must apply it, and the plugin refuses to
 fork a session whose mode it doesn't know), so a fork never runs looser than its source.
 
+### Panel pages for the agent path (M6)
+
+When a computer reports `claude-agent`, the plugin's page gets a "Claude in project VMs" section linking to
+four pages (drill-down views of the same page; they need a Rubi whose panel knows `open` and `kind: "chat"`,
+see its plugin design note). **Projects**: per project the VM state, who holds the agent slot (busy with which
+session) and the queue with positions (`claude-agent.projects` + `.status`). **Sessions**: name, sister bound,
+mode and state, with Open chat, Rename (prompt), Fork (the source's mode, no approval: the page is the user's
+own request), Interrupt, Close and a mode picker (a stricter mode applies at once, a looser one goes through the
+strong approval, labelled "asks you"). **Chat**: the last 100 messages of `claude-agent.messages`, read
+leniently (`{type, message:{content}}` as the SDK gives them, plus `from` for the sender Home recorded); a
+message with a sender is shown as that sister's and marked "untrusted text"; tool calls are one-line summaries;
+the send box queues a message as the user (no `from`, never steering, at most 4000 characters) and Interrupt
+stops the turn. **Usage and sign-in**: today's estimate from `claude-agent.status` `usage_today` (a number of US
+dollars, or an object with `estimate_usd`/`cost_usd`/`total_cost_usd` and tokens) with a yellow notice above the
+setting `usage_warn_usd` (default 10; never blocks), and the login state from `login` (`logged_in`, `plan`,
+`account`). When signed out the page explains Anthropic's own sign-in on the computer running Rubi Home; it has
+no button and Rubi never handles the credentials. Interrupt, close, send, fork and rename are audited
+(`agent_panel_action`, `message_sent`, `session_forked`, `session_renamed`).
+
 ### Events and items the plugin expects from Rubi Home (addendum to the contract)
 
 `claude-agent.next` returns `{items:[...]}`; each item has `type`:
