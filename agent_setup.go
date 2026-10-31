@@ -60,6 +60,7 @@ type setupStep struct {
 	Reason   string         `json:"reason"`
 	Progress []string       `json:"progress"`
 	Action   string         `json:"action"`
+	Action2  string         `json:"action2"`
 	Projects []setupProject `json:"projects"`
 }
 
@@ -70,7 +71,6 @@ type setupStatus struct {
 		Project string `json:"project"`
 	} `json:"job"`
 	Login *struct {
-		Project   string `json:"project"`
 		URL       string `json:"url"`
 		WantsCode bool   `json:"wants_code"`
 	} `json:"login"`
@@ -335,6 +335,14 @@ func (s *sisters) setupPage(ctx context.Context, h sisterHost, p panelPage) (any
 				actions = append(actions, act(ifElse(step.State == "done", "Update", "Build"), "setup_run", map[string]any{"device": d.ID, "step": "image"}))
 			case "add":
 				actions = append(actions, act("Add a folder", "setup_add", dev()))
+			case "check":
+				actions = append(actions, act("Check the sign-in", "setup_run", map[string]any{"device": d.ID, "step": "login"}))
+			case "login", "login_again":
+				actions = append(actions, act(ifElse(step.Action == "login_again", "Sign in again with a Claude subscription", "Sign in with a Claude subscription"), "setup_run", map[string]any{"device": d.ID, "step": "login", "method": "claudeai"}))
+			}
+			if step.Action2 == "sign_out" {
+				actions = append(actions, map[string]any{"label": "Sign out", "op": "setup_run", "args": map[string]any{"device": d.ID, "step": "signout"}, "danger": true,
+					"confirm": "Sign out every project on this computer? To revoke the token fully, also remove it at claude.ai settings."})
 			}
 		}
 		head["actions"] = actions
@@ -355,7 +363,7 @@ func (s *sisters) setupPage(ctx context.Context, h sisterHost, p panelPage) (any
 			projects = projects[:20]
 		}
 		for _, pr := range projects {
-			if key != "projects" && key != "login" && key != "selftest" {
+			if key != "projects" && key != "selftest" { // the sign-in is one row for the computer
 				break
 			}
 			it := map[string]any{"title": name(pr.ID, pr.Dir)}
@@ -380,10 +388,6 @@ func (s *sisters) setupPage(ctx context.Context, h sisterHost, p panelPage) (any
 				switch pr.Action {
 				case "remove":
 					pact = append(pact, map[string]any{"label": "Remove", "op": "setup_remove", "args": pargs, "danger": true, "confirm": "Remove this folder from the agent projects? Its files stay where they are."})
-				case "check":
-					pact = append(pact, act("Check the sign-in", "setup_run", run("login", "")))
-				case "login", "login_again":
-					pact = append(pact, act("Sign in with a Claude subscription", "setup_run", run("login", "claudeai")), act("Sign in with an Anthropic Console account", "setup_run", run("login", "console")))
 				case "selftest":
 					pact = append(pact, act("Run self-test", "setup_run", run("selftest", "")))
 				}
@@ -398,8 +402,8 @@ func (s *sisters) setupPage(ctx context.Context, h sisterHost, p panelPage) (any
 		}
 
 		// A sign-in that waits for the browser: the link as text, and the buttons that use it.
-		if key == "login" && st.Login != nil && st.Login.Project != "" {
-			w := map[string]any{"title": "Sign-in waiting for the browser: " + dirOf(st.Login.Project)}
+		if key == "login" && st.Login != nil {
+			w := map[string]any{"title": "Sign-in waiting for the browser"}
 			detail := "Waiting for Claude's sign-in link."
 			var wact []map[string]any
 			if u := strings.TrimSpace(st.Login.URL); strings.HasPrefix(u, "https://") {
@@ -407,11 +411,11 @@ func (s *sisters) setupPage(ctx context.Context, h sisterHost, p panelPage) (any
 				if utf8.RuneCountInString(u) > setupURLRunes {
 					detail += " (shortened here; the button opens the whole link)"
 				}
-				wact = append(wact, act("Open the sign-in page", "setup_open", map[string]any{"device": d.ID, "project": st.Login.Project}))
+				wact = append(wact, act("Open the sign-in page", "setup_open", dev()))
 			}
 			if st.Login.WantsCode {
 				detail += " Claude shows a code on its page: paste it here."
-				wact = append(wact, map[string]any{"label": "Paste the code", "op": "setup_code", "args": map[string]any{"device": d.ID, "project": st.Login.Project},
+				wact = append(wact, map[string]any{"label": "Paste the code", "op": "setup_code", "args": dev(),
 					"prompt": map[string]any{"arg": "code", "label": "Paste the code shown on the Claude page", "value": ""}})
 			}
 			w["detail"], w["actions"] = detail, wact
@@ -423,7 +427,7 @@ func (s *sisters) setupPage(ctx context.Context, h sisterHost, p panelPage) (any
 		sections = append(sections, map[string]any{"title": "Steps", "empty": "This computer reported no steps."})
 	}
 	page := map[string]any{"title": "Set up the agent path: " + oneLine(d.Name, 60), "up": upMain,
-		"note": "Signing in with a Claude subscription is for your own personal use under Anthropic's terms; an Anthropic Console account is billed per token. Install shows macOS's own administrator dialog on the computer: this page never asks for a password. Install, Create (network) and Add a folder ask for your strong approval first.", "sections": sections}
+		"note": "The sign-in is one for every project on this computer, with a Claude subscription, for your own personal use under Anthropic's terms (a per-project Console account sign-in is possible from Claude Code inside a project if you need it). Install shows macOS's own administrator dialog on the computer: this page never asks for a password. Install, Create (network) and Add a folder ask for your strong approval first.", "sections": sections}
 	if busy || st.Login != nil {
 		page["refresh"] = 3
 	}
@@ -478,16 +482,14 @@ func (s *sisters) panelSetup(ctx context.Context, h sisterHost, op string, a set
 			if err := s.checkProject(ctx, h, d.ID, a.Project); err != nil {
 				return nil, err
 			}
-		case "login": // no method only checks the sign-in
-			if a.Method != "" && a.Method != "claudeai" && a.Method != "console" {
+		case "login": // one sign-in for the computer; no method only checks it (Rubi Home refuses a Console sign-in)
+			if a.Method != "" && a.Method != "claudeai" {
 				return nil, errors.New("no such sign-in method")
-			}
-			if err := s.checkProject(ctx, h, d.ID, a.Project); err != nil {
-				return nil, err
 			}
 			if a.Method != "" {
 				args["method"] = a.Method
 			}
+		case "signout":
 		case "all":
 			// The container and the network ask for an approval first: refuse unless both are done now. (Rubi Home's
 			// "all" no longer runs those two steps at all, so this is a second lock, not the only one.)
@@ -503,15 +505,14 @@ func (s *sisters) panelSetup(ctx context.Context, h sisterHost, op string, a set
 		default:
 			return nil, errors.New("unknown step")
 		}
-		if a.Project != "" {
-			args["project"] = a.Project
+		project := ""
+		if a.Step == "selftest" {
+			project = a.Project
+			args["project"] = project
 		}
-		return s.setupCall(ctx, h, d, opSetupRun, args, "run "+a.Step, a.Project)
+		return s.setupCall(ctx, h, d, opSetupRun, args, "run "+a.Step, project)
 	case "setup_open":
-		if err := s.checkProject(ctx, h, d.ID, a.Project); err != nil {
-			return nil, err
-		}
-		return s.setupCall(ctx, h, d, opSetupOpen, map[string]any{"project": a.Project}, "open the sign-in page", a.Project)
+		return s.setupCall(ctx, h, d, opSetupOpen, map[string]any{}, "open the sign-in page", "")
 	case "setup_code":
 		if a.Code == nil {
 			return nil, errors.New("this Rubi's panel can't ask for the code; update Rubi")
@@ -528,11 +529,8 @@ func (s *sisters) panelSetup(ctx context.Context, h sisterHost, op string, a set
 				return nil, errors.New("the code is plain characters without spaces")
 			}
 		}
-		if err := s.checkProject(ctx, h, d.ID, a.Project); err != nil {
-			return nil, err
-		}
 		// The code goes to Rubi Home and nowhere else: the audit and every error leave it out.
-		return s.setupCall(ctx, h, d, opSetupCode, map[string]any{"project": a.Project, "code": code}, "sign-in code sent", a.Project)
+		return s.setupCall(ctx, h, d, opSetupCode, map[string]any{"code": code}, "sign-in code sent", "")
 	case "setup_remove":
 		st, err := s.setupStatus(ctx, h, d.ID, true)
 		if err != nil {

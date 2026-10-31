@@ -81,7 +81,7 @@ func row(state, reason, action string) map[string]any {
 func allDone(extra ...map[string]any) map[string]any {
 	steps := []map[string]any{step("container", "done", "Installed 1.2", "", nil), step("service", "done", "Running", "", nil), step("network", "done", "Host-only", "", nil),
 		step("image", "done", "Built", "", nil), step("projects", "done", "1 folder", "add", map[string]any{"projects": []any{row("done", "", "remove")}}),
-		step("login", "needs_user", "Not signed in", "", map[string]any{"projects": []any{row("needs_user", "Not signed in", "login")}}),
+		step("login", "todo", "Not signed in", "login", nil),
 		step("selftest", "todo", "Not run", "", map[string]any{"projects": []any{row("todo", "Not run", "selftest")}})}
 	st := map[string]any{"steps": steps}
 	for _, e := range extra {
@@ -190,27 +190,32 @@ func TestSetupPageStates(t *testing.T) {
 	if a["Upgrade"] == nil || a["Start"] == nil || a["Build"] == nil || a["Use the automatic address"] == nil || a["Set up everything"] != nil {
 		t.Fatalf("%v", a)
 	}
-	// All done: sign-in buttons per project, self-test, no step buttons but Add a folder.
+	// All done but the sign-in: one sign-in button for the computer (no Console one), self-test per project.
 	f, s = setupFixture(t, allDone())
 	a = allActions(setupView(t, s, f))
-	if a["Sign in with a Claude subscription"] == nil || a["Sign in with an Anthropic Console account"] == nil || a["Run self-test"] == nil || a["Remove"] == nil || a["Add a folder"] == nil || a["Set up everything"] == nil {
+	if a["Sign in with a Claude subscription"] == nil || a["Run self-test"] == nil || a["Remove"] == nil || a["Add a folder"] == nil || a["Set up everything"] == nil {
 		t.Fatalf("%v", a)
 	}
-	if a["Install"] != nil || a["Start"] != nil || a["Check the sign-in"] != nil {
-		t.Error("button on a done step")
+	if a["Sign in with an Anthropic Console account"] != nil || a["Sign out"] != nil || a["Install"] != nil || a["Start"] != nil || a["Check the sign-in"] != nil {
+		t.Error("button that doesn't belong")
 	}
-	// A project row that Home says to check, and one that may sign in again.
+	// The sign-in row Home says to check, and one that is signed in (sign in again, sign out).
 	st = allDone()
-	st["steps"].([]map[string]any)[5] = step("login", "todo", "Check", "", map[string]any{"projects": []any{row("todo", "Not checked", "check")}})
+	st["steps"].([]map[string]any)[5] = step("login", "todo", "Check", "check", nil)
 	st["steps"].([]map[string]any)[6] = step("selftest", "done", "Passed", "", map[string]any{"projects": []any{row("done", "", "")}})
 	f.setup.status = st
 	a = allActions(setupView(t, s, f))
 	if a["Check the sign-in"] == nil || a["Run self-test"] != nil || a["Sign in with a Claude subscription"] != nil {
 		t.Fatalf("%v", a)
 	}
-	st["steps"].([]map[string]any)[5] = step("login", "done", "Signed in", "", map[string]any{"projects": []any{row("done", "", "login_again")}})
-	if a = allActions(setupView(t, s, f)); a["Sign in with an Anthropic Console account"] == nil {
+	st["steps"].([]map[string]any)[5] = step("login", "done", "Signed in", "login_again", map[string]any{"action2": "sign_out"})
+	a = allActions(setupView(t, s, f))
+	if a["Sign in again with a Claude subscription"] == nil || a["Sign out"] == nil {
 		t.Fatalf("%v", a)
+	}
+	so := a["Sign out"]
+	if so["confirm"] != "Sign out every project on this computer? To revoke the token fully, also remove it at claude.ai settings." || so["args"].(map[string]any)["step"] != "signout" {
+		t.Errorf("%v", so)
 	}
 }
 
@@ -219,10 +224,10 @@ func TestSetupPageWorkingAndSignIn(t *testing.T) {
 	for i := range lines {
 		lines[i] = "line " + string(rune('a'+i%26)) + strings.Repeat("x", 300)
 	}
-	st := allDone(map[string]any{"job": map[string]any{"step": "login", "project": "p1", "started": "now"},
-		"login": map[string]any{"project": "p1", "url": "https://claude.com/oauth?state=abc", "wants_code": true}})
+	st := allDone(map[string]any{"job": map[string]any{"step": "login", "started": "now"},
+		"login": map[string]any{"url": "https://claude.com/oauth?state=abc", "wants_code": true}})
 	steps := st["steps"].([]map[string]any)
-	steps[5] = step("login", "working", "Signing in", "", map[string]any{"progress": lines, "projects": []any{row("working", "", "")}})
+	steps[5] = step("login", "working", "Signing in", "", map[string]any{"progress": lines})
 	f, s := setupFixture(t, st)
 	pg := setupView(t, s, f)
 	if pg["refresh"] != 3 {
@@ -279,7 +284,7 @@ func TestSetupPageWorkingAndSignIn(t *testing.T) {
 		}
 	}
 	// A link that isn't https is not shown and not offered.
-	st["login"] = map[string]any{"project": "p1", "url": "javascript:alert(1)", "wants_code": false}
+	st["login"] = map[string]any{"url": "javascript:alert(1)", "wants_code": false}
 	f.setup.status = st
 	a = allActions(setupView(t, s, f))
 	if a["Open the sign-in page"] != nil || a["Paste the code"] != nil {
@@ -311,10 +316,10 @@ func TestSetupOpsRouteToHome(t *testing.T) {
 		{"setup_run", `{"device":"dev_mac","step":"image"}`, opSetupRun, map[string]any{"step": "image"}},
 		{"setup_run", `{"device":"dev_mac","step":"selftest","project":"p1"}`, opSetupRun, map[string]any{"step": "selftest", "project": "p1"}},
 		{"setup_run", `{"device":"dev_mac","step":"all"}`, opSetupRun, map[string]any{"step": "all"}},
-		{"setup_run", `{"device":"dev_mac","step":"login","project":"p1"}`, opSetupRun, map[string]any{"step": "login", "project": "p1"}},
-		{"setup_run", `{"device":"dev_mac","step":"login","project":"p1","method":"claudeai"}`, opSetupRun, map[string]any{"step": "login", "project": "p1", "method": "claudeai"}},
-		{"setup_run", `{"device":"dev_mac","step":"login","project":"p1","method":"console"}`, opSetupRun, map[string]any{"step": "login", "project": "p1", "method": "console"}},
-		{"setup_open", `{"device":"dev_mac","project":"p1"}`, opSetupOpen, map[string]any{"project": "p1"}},
+		{"setup_run", `{"device":"dev_mac","step":"login"}`, opSetupRun, map[string]any{"step": "login"}},
+		{"setup_run", `{"device":"dev_mac","step":"login","method":"claudeai"}`, opSetupRun, map[string]any{"step": "login", "method": "claudeai"}},
+		{"setup_run", `{"device":"dev_mac","step":"signout"}`, opSetupRun, map[string]any{"step": "signout"}},
+		{"setup_open", `{"device":"dev_mac"}`, opSetupOpen, map[string]any{}},
 		{"setup_remove", `{"device":"dev_mac","project":"p1"}`, opSetupRemove, map[string]any{"dir": "/home/alice/my-project"}},
 		{"setup_cancel", `{"device":"dev_mac"}`, opSetupCancel, map[string]any{}},
 	}
@@ -339,7 +344,7 @@ func TestSetupOpsRouteToHome(t *testing.T) {
 	// Refused: the steps that need an approval can't be run directly, bad input.
 	for _, c := range [][2]string{{"setup_run", `{"device":"dev_mac","step":"container"}`}, {"setup_run", `{"device":"dev_mac","step":"network"}`},
 		{"setup_run", `{"device":"dev_mac","step":"network","option":"other"}`}, {"setup_run", `{"device":"dev_mac","step":"selftest"}`},
-		{"setup_run", `{"device":"dev_mac","step":"login"}`}, {"setup_run", `{"device":"dev_mac","step":"login","project":"p1","method":"x"}`},
+		{"setup_run", `{"device":"dev_mac","step":"login","method":"console"}`}, {"setup_run", `{"device":"dev_mac","step":"login","method":"x"}`},
 		{"setup_login", `{"device":"dev_mac","project":"p1","method":"claudeai"}`}, {"setup_remove", `{"device":"dev_mac","project":"nope"}`},
 		{"setup_run", `{"device":"dev_nope","step":"service"}`}} {
 		n := len(f.setup.calls)
@@ -432,11 +437,11 @@ func TestSetupCodeIsNeverKept(t *testing.T) {
 	ctx := context.Background()
 	const code = "ZXQ9-secret_code.123"
 	// A panel that doesn't send the key is refused.
-	if _, err := s.panel(ctx, f, "setup_code", json.RawMessage(`{"device":"dev_mac","project":"p1"}`)); err == nil {
+	if _, err := s.panel(ctx, f, "setup_code", json.RawMessage(`{"device":"dev_mac"}`)); err == nil {
 		t.Fatal("missing key accepted")
 	}
 	for _, bad := range []string{"", "  ", "has space", "tab\tx", "é", strings.Repeat("a", 513)} {
-		raw, _ := json.Marshal(map[string]any{"device": "dev_mac", "project": "p1", "code": bad})
+		raw, _ := json.Marshal(map[string]any{"device": "dev_mac", "code": bad})
 		if _, err := s.panel(ctx, f, "setup_code", raw); err == nil {
 			t.Errorf("code %q accepted", bad)
 		} else if bad != "" && strings.Contains(err.Error(), bad) {
@@ -446,12 +451,12 @@ func TestSetupCodeIsNeverKept(t *testing.T) {
 	if len(f.setup.called(opSetupCode)) != 0 {
 		t.Fatal("a bad code was sent")
 	}
-	raw, _ := json.Marshal(map[string]any{"device": "dev_mac", "project": "p1", "code": " " + code + "\n"})
+	raw, _ := json.Marshal(map[string]any{"device": "dev_mac", "code": " " + code + "\n"})
 	if _, err := s.panel(ctx, f, "setup_code", raw); err != nil {
 		t.Fatal(err)
 	}
 	got := f.setup.called(opSetupCode)
-	if len(got) != 1 || got[0]["code"] != code || got[0]["project"] != "p1" {
+	if len(got) != 1 || got[0]["code"] != code || len(got[0]) != 1 {
 		t.Fatalf("%v", got)
 	}
 	// Home failing must not echo it either.
@@ -507,15 +512,14 @@ func TestSetupProjectIDsAreChecked(t *testing.T) {
 	f, s := setupFixture(t, allDone())
 	ctx := context.Background()
 	for _, id := range []string{"nope", "", "p1 ", "p1/../x", strings.Repeat("p", 200), "p1\u202e"} {
-		for _, c := range []struct{ op, extra string }{{"setup_run", `"step":"selftest",`}, {"setup_run", `"step":"login",`}, {"setup_run", `"step":"login","method":"console",`},
-			{"setup_open", ""}, {"setup_code", `"code":"abc",`}} {
+		for _, c := range []struct{ op, extra string }{{"setup_run", `"step":"selftest",`}} {
 			raw := `{"device":"dev_mac",` + c.extra + `"project":"` + id + `"}`
 			if _, err := s.panel(ctx, f, c.op, json.RawMessage(raw)); err == nil {
 				t.Errorf("%s %s accepted", c.op, raw)
 			}
 		}
 	}
-	for _, op := range []string{opSetupRun, opSetupOpen, opSetupCode} {
+	for _, op := range []string{opSetupRun} {
 		if len(f.setup.called(op)) != 0 {
 			t.Errorf("%s reached Home", op)
 		}
@@ -534,7 +538,7 @@ func TestSetupProbeIsSharedAndSlowDoesNotHide(t *testing.T) {
 		t.Errorf("%d status calls for the entry and the page", n)
 	}
 	// An action reads a fresh status.
-	if _, err := s.panel(context.Background(), f, "setup_open", json.RawMessage(`{"device":"dev_mac","project":"p1"}`)); err != nil {
+	if _, err := s.panel(context.Background(), f, "setup_run", json.RawMessage(`{"device":"dev_mac","step":"selftest","project":"p1"}`)); err != nil {
 		t.Fatal(err)
 	}
 	if n := len(f.setup.called(opSetupStatus)); n != 2 {
@@ -563,7 +567,7 @@ func TestSetupProbeIsSharedAndSlowDoesNotHide(t *testing.T) {
 
 func TestSetupLongNameAndLink(t *testing.T) {
 	long := "https://claude.com/oauth/authorize?state=" + strings.Repeat("a", 900)
-	st := allDone(map[string]any{"login": map[string]any{"project": "p1", "url": long, "wants_code": false}})
+	st := allDone(map[string]any{"login": map[string]any{"url": long, "wants_code": false}})
 	f, s := setupFixture(t, st)
 	f.devices = []rubiplugin.HomeDevice{{ID: "dev_mac", Name: strings.Repeat("N", 200)}}
 	pg := view(t, s, f, `{"page":"setup","device":"dev_mac"}`)

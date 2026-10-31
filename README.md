@@ -515,13 +515,13 @@ keeps the table of modes.
 When a computer's Rubi Home reports `agent-setup` (probed with `agent-setup.status`, remembered like the
 `claude-agent` probe), the plugin's page gets a "First-time setup" entry that opens a page with one section per
 step: Apple's container tool, its service, the host-only network, the runner image, the project folders, Claude's
-sign-in per project and a self-test per project (the contract is `docs/design/home-setup-wizard.md` in the Rubi
+the one Claude sign-in for the whole computer and a self-test per project (the contract is `docs/design/home-setup-wizard.md` in the Rubi
 repository). Each step shows its state and reason, the last 20 progress lines while it works, and its buttons;
 the status is a full probe of the machine, so its capability probe waits 15 seconds, a status is reused for 2
 seconds, and a computer known to have the capability stays listed through a slow probe; a project id is checked
 against a fresh status before it is forwarded; the page reloads itself every 3 seconds while a job runs or a sign-in waits, and not otherwise. A button is drawn
 from the `action` Rubi Home names on a step row (`install`, `upgrade`, `start`, `create`, `use_auto_address`,
-`build`, `add`) or a project row (`remove`, `check`, `login`, `login_again`, `selftest`); no `action`, no button.
+`build`, `add`) or a project row (`remove`, `selftest`); the sign-in is one row for the computer (`check`, `login`, `login_again`, and `action2: sign_out`); no `action`, no button.
 "Use the automatic address" (`run {step: network, option: auto-address}`) only clears the proxy address settings
 and needs no approval; the plugin sends it only when a fresh status shows the network step offering
 `use_auto_address` (a network that doesn't exist yet is created only through the approval); "Check the sign-in" runs `login` without a method, which only probes.
@@ -529,15 +529,15 @@ and needs no approval; the plugin sends it only when a fresh status shows the ne
 Approvals: **Install / Upgrade** (`claude-code.setup.install`), **Create** the network (`claude-code.setup.network`)
 and **Add a folder** (`claude-code.setup.project`) are strong approvals; the call to Rubi Home
 (`agent-setup.run {step}` / `agent-setup.project.add`, whose folder chooser appears on the computer) is made only
-after approval. Start, Build / Update, Remove, the sign-in buttons, Open the sign-in page, Paste the code, Run
+after approval. Start, Build / Update, Remove, Sign in (`run {step: login, method: claudeai}`; the computer's one sign-in, a Claude subscription only), Sign out (`run {step: signout}`, with a confirmation), Open the sign-in page, Paste the code, Run
 self-test and Cancel are the user's own request and need none. **Set up everything** (`agent-setup.run {step:
 "all"}`) is offered only once the container and network steps are done, and is refused again when pressed if
 they are not, so it cannot get past those two approvals. The sign-in code typed into "Paste the code" goes to
-`agent-setup.login.code` and nowhere else: it is not stored, logged or audited (the audit says "sign-in code
+`agent-setup.login.code` (without a project) and nowhere else: it is not stored, logged or audited (the audit says "sign-in code
 sent"); a panel that does not send the `code` key is refused. What Rubi Home reports (reasons, progress lines,
 the sign-in link) is untrusted text: clipped, shown as item text only, and the link is offered only when it is
 `https://`. Bots have no tool for any of it. Subscription sign-in is for the user's own personal use under
-Anthropic's terms, and macOS shows its own administrator dialog on the computer for Install; the page never asks
+Anthropic's terms (a per-project Console account sign-in is possible from Claude Code inside a project if needed), and macOS shows its own administrator dialog on the computer for Install; the page never asks
 for a password. Actions are audited as `agent_setup_action`.
 
 ### Events and items the plugin expects from Rubi Home (addendum to the contract)
