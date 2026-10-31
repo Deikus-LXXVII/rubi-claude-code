@@ -647,3 +647,40 @@ func TestSendUsesWaiterFields(t *testing.T) {
 		t.Fatalf("busy: %+v", r)
 	}
 }
+
+// A Bot's own binding is its own whatever the "sister" argument says: callers pass the session's id or
+// name (or nothing, or another spelling) there, and only the Bot Rubi verified and the code decide.
+// claude_code_status and _send used to answer "this binding belongs to another Bot" for them.
+func TestOwnBindingIgnoresTypedSisterWhenVerified(t *testing.T) {
+	f, s, code := boundFixture(t)
+	ctx := context.Background()
+	if _, err := s.renameTool(ctx, f, renameIn{VerifiedAgent: "Citri", Name: "Rubi core"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, typed := range []string{"", "local_a", "cli-1", "Rubi core", "rubi core", "Rubi main"} {
+		if _, err := s.statusTool(ctx, f, statusIn{Sister: typed, BindCode: code, VerifiedAgent: "Citri"}); err != nil {
+			t.Fatalf("status with sister %q: %v", typed, err)
+		}
+		if _, err := s.sendTool(ctx, f, sendIn{Sister: typed, BindCode: code, Text: "hi", VerifiedAgent: " citri "}); err != nil {
+			t.Fatalf("send with sister %q: %v", typed, err)
+		}
+	}
+	// The session's id changes (the desktop app starts a new CLI session): the binding is still its own.
+	s.st.follow("Citri", "cli-9")
+	if _, err := s.statusTool(ctx, f, statusIn{Sister: "cli-9", BindCode: code, VerifiedAgent: "Citri"}); err != nil {
+		t.Fatalf("status after the id change: %v", err)
+	}
+	// Still refused: another verified Bot, a wrong code, and nobody verified with a typed name that isn't the Bot's.
+	if _, err := s.statusTool(ctx, f, statusIn{Sister: "Citri", BindCode: code, VerifiedAgent: "Vega"}); err == nil {
+		t.Fatal("another verified Bot read Citri's status")
+	}
+	if _, err := s.statusTool(ctx, f, statusIn{Sister: "local_a", BindCode: "bc_wrong", VerifiedAgent: "Citri"}); err == nil {
+		t.Fatal("a wrong code went through")
+	}
+	if _, err := s.statusTool(ctx, f, statusIn{Sister: "local_a", BindCode: code}); err == nil {
+		t.Fatal("an unverified call with a non-Bot name went through")
+	}
+	if _, err := s.unbindTool(ctx, f, unbindIn{Sister: "Rubi core", BindCode: code, VerifiedAgent: "Citri"}); err != nil || len(s.st.bindings()) != 0 {
+		t.Fatalf("unbind: %v %+v", err, s.st.bindings())
+	}
+}

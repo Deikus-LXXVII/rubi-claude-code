@@ -413,7 +413,7 @@ func (s *sisters) trustTool(ctx context.Context, h sisterHost, in trustIn) (any,
 	if sister == "" || len(sister) > 64 {
 		return nil, errors.New("Rubi didn't confirm which Bot you are: pass rubi_agent (your Bot name) and rubi_agent_code (the agent_code of your latest Rubi webhook, or call rubi_verify to get one)")
 	}
-	b, ok := s.st.bindingOf(sister, in.BindCode)
+	b, ok := s.st.ownBinding(sister, in.VerifiedAgent, in.BindCode)
 	if !ok {
 		return nil, errors.New("not bound: bind to a session first (claude_code_bind), then pass the bind_code you got")
 	}

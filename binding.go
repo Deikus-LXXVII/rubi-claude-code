@@ -469,7 +469,9 @@ func (s *sisters) executeBind(h sisterHost, t bindTicket) (any, error) {
 }
 
 type unbindIn struct {
-	Sister        string `json:"sister"`
+	Sister        string `json:"sister,omitempty" jsonschema:"optional: your Bot name (rubi_agent decides)"`
+	Agent         string `json:"rubi_agent,omitempty" jsonschema:"your Bot name as connected to Rubi"`
+	AgentCode     string `json:"rubi_agent_code,omitempty" jsonschema:"the agent_code of your latest Rubi webhook; proves you are that Bot"`
 	BindCode      string `json:"bind_code"`
 	VerifiedAgent string `json:"rubi_verified_agent,omitempty" jsonschema:"set by Rubi; don't pass it"`
 }
@@ -477,19 +479,25 @@ type unbindIn struct {
 // sameBot says whether two names are the same Bot: Rubi's Bot names don't depend on case.
 func sameBot(a, b string) bool { return strings.EqualFold(strings.TrimSpace(a), strings.TrimSpace(b)) }
 
-// notOtherBot refuses a call Rubi verified as coming from a Bot other than the binding's.
-func notOtherBot(sister, verified string) error {
-	if verified != "" && !sameBot(sister, verified) {
-		return fmt.Errorf("Rubi confirmed you as %s; this binding belongs to another Bot", verified)
+// callerBot is who a bound-session tool call is for: the Bot Rubi verified when it did, else the
+// "sister" the caller typed (the bind code is then the only proof). The typed name is never compared with
+// the verified one: callers pass what they like there (their session's id or name, another spelling),
+// and the verified name alone says whose binding the code is looked up in.
+func callerBot(sister, verified string) string {
+	if v := strings.TrimSpace(verified); v != "" {
+		return v
 	}
-	return nil
+	return strings.TrimSpace(sister)
+}
+
+// ownBinding is the one ownership check of claude_code_send, _status, _unbind and _trust_project: the
+// binding of the calling Bot, if code is its bind code.
+func (s *store) ownBinding(sister, verified, code string) (binding, bool) {
+	return s.bindingOf(callerBot(sister, verified), code)
 }
 
 func (s *sisters) unbindTool(_ context.Context, h sisterHost, in unbindIn) (any, error) {
-	if err := notOtherBot(in.Sister, in.VerifiedAgent); err != nil {
-		return nil, err
-	}
-	b, ok := s.st.bindingOf(in.Sister, in.BindCode)
+	b, ok := s.st.ownBinding(in.Sister, in.VerifiedAgent, in.BindCode)
 	if !ok {
 		return nil, errors.New("no binding with that sister and code (the user can unbind in the panel)")
 	}
@@ -502,7 +510,9 @@ func (s *sisters) unbindTool(_ context.Context, h sisterHost, in unbindIn) (any,
 }
 
 type sendIn struct {
-	Sister     string `json:"sister"`
+	Sister     string `json:"sister,omitempty" jsonschema:"optional: your Bot name (rubi_agent decides)"`
+	Agent      string `json:"rubi_agent,omitempty" jsonschema:"your Bot name as connected to Rubi"`
+	AgentCode  string `json:"rubi_agent_code,omitempty" jsonschema:"the agent_code of your latest Rubi webhook; proves you are that Bot"`
 	BindCode   string `json:"bind_code"`
 	Text       string `json:"text" jsonschema:"a short ask (at most 4000 characters); bulky work goes to Claude as a task, not a message"`
 	ReplyToAsk string `json:"reply_to_ask,omitempty" jsonschema:"the ask_id of a claude_ask you answer: the answer goes to the session that asked"`
@@ -511,10 +521,7 @@ type sendIn struct {
 }
 
 func (s *sisters) sendTool(ctx context.Context, h sisterHost, in sendIn) (any, error) {
-	if err := notOtherBot(in.Sister, in.VerifiedAgent); err != nil {
-		return nil, err
-	}
-	b, ok := s.st.bindingOf(in.Sister, in.BindCode)
+	b, ok := s.st.ownBinding(in.Sister, in.VerifiedAgent, in.BindCode)
 	if !ok {
 		return nil, errors.New("not bound: bind to a session first (claude_code_bind), then pass the bind_code you got")
 	}
@@ -618,17 +625,16 @@ func etaText(sess session, waiter bool) string {
 }
 
 type statusIn struct {
-	Sister        string `json:"sister"`
+	Sister        string `json:"sister,omitempty" jsonschema:"optional: your Bot name (rubi_agent decides)"`
+	Agent         string `json:"rubi_agent,omitempty" jsonschema:"your Bot name as connected to Rubi"`
+	AgentCode     string `json:"rubi_agent_code,omitempty" jsonschema:"the agent_code of your latest Rubi webhook; proves you are that Bot"`
 	BindCode      string `json:"bind_code"`
 	VerifiedAgent string `json:"rubi_verified_agent,omitempty" jsonschema:"set by Rubi; don't pass it"`
 }
 
 // statusTool says how the bound session stands and when a message to it would be read.
 func (s *sisters) statusTool(ctx context.Context, h sisterHost, in statusIn) (any, error) {
-	if err := notOtherBot(in.Sister, in.VerifiedAgent); err != nil {
-		return nil, err
-	}
-	b, ok := s.st.bindingOf(in.Sister, in.BindCode)
+	b, ok := s.st.ownBinding(in.Sister, in.VerifiedAgent, in.BindCode)
 	if !ok {
 		return nil, errors.New("not bound: bind to a session first (claude_code_bind), then pass the bind_code you got")
 	}
