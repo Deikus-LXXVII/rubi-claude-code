@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -26,6 +27,13 @@ func roleFixture(t *testing.T) (*fakeHost, *sisters, *fakeRoles) {
 	f, s, _ := agentFixture(t)
 	fr := newFakeRoles()
 	f.agent.roles = fr
+	// Every approval has its own id, as Rubi's have.
+	n := 0
+	f.submit = func(rubiplugin.Request) (map[string]any, error) {
+		n++
+		id := fmt.Sprintf("apr_%d", n)
+		return map[string]any{"status": "awaiting_approval", "approval_id": id, "level": "strong", "approval_url": "https://rubi-panel.com/#a=" + id}, nil
+	}
 	return f, s, fr
 }
 
@@ -415,11 +423,12 @@ func TestToolsSetTiers(t *testing.T) {
 	tk := lastTicket(t, f)
 	_ = tk
 	m = asMap(t)(s.roleMCPSetTool(context.Background(), f, roleMCPSetIn{roleWho: who(botA), Role: id, MCP: []roleMCPIn{{Name: "docs", Type: "http", URL: "https://mcp.example.com/"}}}))
+	askedWith, _ := m["approval_id"].(string)
 	res := asMap(t)(s.executeRoleChange(context.Background(), f, lastTicket(t, f)))
 	if status(res) != "applied" {
 		t.Fatalf("%v", res)
 	}
-	if mcp := fr.current(id).MCP; len(mcp) != 1 || mcp[0].Approval != "apr_1" || mcp[0].URL != "https://mcp.example.com/" {
+	if mcp := fr.current(id).MCP; len(mcp) != 1 || mcp[0].Approval != askedWith || askedWith == "" || mcp[0].URL != "https://mcp.example.com/" {
 		t.Fatalf("%+v", mcp)
 	}
 	// Removing it again still asks (always tier 2), and the unchanged server keeps its approval.

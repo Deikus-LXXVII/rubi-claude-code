@@ -79,3 +79,20 @@ func TestLegacyBindingHasNoRole(t *testing.T) {
 		t.Fatalf("%v", c)
 	}
 }
+
+func TestClearStaleApprovals(t *testing.T) {
+	cur := &role{MCP: []roleMCP{{Name: "kept", Type: "stdio", Command: "x", Args: []string{"a"}, Approval: "apr_cur"}},
+		Plugins: []rolePlugin{{Name: "p", Source: "s", Approval: "apr_cur"}}}
+	next := &role{
+		MCP: []roleMCP{{Name: "kept", Type: "stdio", Command: "x", Args: []string{"a"}, Approval: "apr_old"},
+			{Name: "kept2", Type: "stdio", Command: "x", Args: []string{"b"}, Approval: "apr_old"},
+			{Name: "kept", Type: "stdio", Command: "x", Args: []string{"changed"}, Approval: "apr_old"}},
+		Plugins: []rolePlugin{{Name: "p", Source: "s", Approval: "apr_old"}, {Name: "q", Source: "s", Approval: "apr_old"}}}
+	clearStaleApprovals(cur, next)
+	if next.MCP[0].Approval != "apr_cur" || next.MCP[1].Approval != "" || next.MCP[2].Approval != "" {
+		t.Fatalf("%+v", next.MCP)
+	}
+	if next.Plugins[0].Approval != "apr_cur" || next.Plugins[1].Approval != "" {
+		t.Fatalf("%+v", next.Plugins)
+	}
+}

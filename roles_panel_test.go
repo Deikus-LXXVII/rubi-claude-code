@@ -711,9 +711,14 @@ func TestRoleHistoryDiffAndRevert(t *testing.T) {
 	if why := fmt.Sprint(lastSubmit(t, f).Preview.(map[string]any)["why_you_are_asked"]); !strings.Contains(why, "MCP server docs") {
 		t.Errorf("%s", why)
 	}
+	// The old entry's approval id was spent by version 3: the revert asks for a fresh one.
+	if tk := lastTicket(t, f); len(tk.After["mcp"]) == 0 || strings.Contains(string(tk.After["mcp"]), "ap_1") {
+		t.Errorf("the ticket carries the spent approval: %s", tk.After["mcp"])
+	}
+	revertApproval, _ := m["approval_id"].(string)
 	res := approveRole(t, s, f).(map[string]any)
 	r = fr.current(id)
-	if status(res) != "applied" || r.Version != 6 || len(r.MCP) != 1 || r.MCP[0].Approval != "ap_1" || r.Change.Tier != 2 || r.Change.Op != "role.revert(3)" {
+	if status(res) != "applied" || r.Version != 6 || len(r.MCP) != 1 || r.MCP[0].Approval != revertApproval || revertApproval == "" || revertApproval == "ap_1" || r.Change.Tier != 2 || r.Change.Op != "role.revert(3)" {
 		t.Fatalf("%v %+v", res, r)
 	}
 	// Bad versions: the current one, a newer one, zero.

@@ -766,6 +766,7 @@ func (s *sisters) panelRoleRevert(ctx context.Context, h sisterHost, device, rol
 	next := old.clone()
 	next.ID, next.Version, next.Parent, next.Project = cur.ID, cur.Version, cur.Version, cur.Project
 	next.CreatedBy, next.CreatedAt = cur.CreatedBy, cur.CreatedAt
+	clearStaleApprovals(cur, next)
 	return s.panelChange(ctx, h, roleChangeReq{Bot: panelUser, ByUser: true, Dev: d, Op: fmt.Sprintf("role.revert(%d)", version), Cur: cur, Next: next, Lim: roleLimitsOf(h)})
 }
 

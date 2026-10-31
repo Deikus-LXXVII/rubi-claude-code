@@ -465,7 +465,28 @@ func (s *sisters) roleRevert(ctx context.Context, h sisterHost, in roleUpdateIn)
 	next := old.clone()
 	next.ID, next.Version, next.Parent, next.Project = cur.ID, cur.Version, cur.Version, cur.Project
 	next.CreatedBy, next.CreatedAt = cur.CreatedBy, cur.CreatedAt
+	clearStaleApprovals(cur, next)
 	return s.changeRole(ctx, h, roleChangeReq{Bot: c.Bot, Dev: c.Dev, Op: fmt.Sprintf("role.revert(%d)", in.RevertTo), Cur: cur, Next: next, Lim: c.Lim, RevertOthers: others})
+}
+
+// clearStaleApprovals prepares a version taken from the past: an MCP server or plugin that the current version
+// doesn't have in the same form keeps no approval id (the old one was spent by the version that added it), so
+// the approval that allows the revert gives it a fresh one. One the current version has keeps its own.
+func clearStaleApprovals(cur, next *role) {
+	for i, m := range next.MCP {
+		if j := slices.IndexFunc(cur.MCP, func(o roleMCP) bool { return sameMCP(o, m) }); j >= 0 {
+			next.MCP[i].Approval = cur.MCP[j].Approval
+		} else {
+			next.MCP[i].Approval = ""
+		}
+	}
+	for i, p := range next.Plugins {
+		if j := slices.IndexFunc(cur.Plugins, func(o rolePlugin) bool { return o.Name == p.Name && o.Source == p.Source }); j >= 0 {
+			next.Plugins[i].Approval = cur.Plugins[j].Approval
+		} else {
+			next.Plugins[i].Approval = ""
+		}
+	}
 }
 
 func (s *sisters) roleArchiveTool(ctx context.Context, h sisterHost, in roleRefIn, archive bool) (any, error) {

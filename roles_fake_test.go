@@ -22,10 +22,11 @@ type fakeRoles struct {
 	n      int
 	puts   []map[string]any
 	legacy []string
+	used   map[string]map[string]int // role id -> approval id -> the version that spent it (Home's used.json)
 }
 
 func newFakeRoles() *fakeRoles {
-	return &fakeRoles{roles: map[string][]*role{}, blobs: map[string]string{}, legacy: []string{"p1"}}
+	return &fakeRoles{roles: map[string][]*role{}, blobs: map[string]string{}, legacy: []string{"p1"}, used: map[string]map[string]int{}}
 }
 
 func homeRefusal(format string, args ...any) error {
@@ -163,13 +164,25 @@ func (f *fakeRoles) put(raw []byte) (any, error) {
 		}
 	}
 	for _, m := range r.MCP {
-		if m.Approval == "" {
+		if !fakeApprovalRE.MatchString(m.Approval) {
 			why = append(why, "mcp "+m.Name+": it needs an approval id")
 		}
 	}
 	for _, p := range r.Plugins {
-		if p.Approval == "" {
+		if !fakeApprovalRE.MatchString(p.Approval) {
 			why = append(why, "plugin "+p.Name+": it needs an approval id")
+		}
+	}
+	fakeCarry(r, old)
+	adds := fakeAdditions(old, r, a.Change)
+	for _, ad := range adds {
+		switch {
+		case ad.approval == "":
+			why = append(why, "adding "+ad.key+" needs an approval id")
+		case !fakeApprovalRE.MatchString(ad.approval):
+			why = append(why, "approval id "+ad.approval+" is malformed")
+		case f.used[a.ID][ad.approval] > 0:
+			why = append(why, fmt.Sprintf("approval %s was already used by version %d", ad.approval, f.used[a.ID][ad.approval]))
 		}
 	}
 	newBlobs := map[string]string{}
@@ -222,6 +235,12 @@ func (f *fakeRoles) put(raw []byte) (any, error) {
 	}
 	r.ChangedBy, r.ChangedAt, r.Change = a.By, now, a.Change
 	f.roles[r.ID] = append(f.roles[r.ID], r)
+	if f.used[r.ID] == nil {
+		f.used[r.ID] = map[string]int{}
+	}
+	for _, ad := range adds {
+		f.used[r.ID][ad.approval] = r.Version
+	}
 	res := map[string]any{"id": r.ID, "version": r.Version}
 	var sk []map[string]any
 	for _, k := range r.Skills {
@@ -244,4 +263,72 @@ func (f *fakeRoles) putCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.puts)
+}
+
+// ---- Home's approval rules (internal/home/agent/roles/approvals.go and validate.go, mirrored: the plugin can't
+// import them, they are internal to the Rubi module). An addition names an approval id of ^[A-Za-z0-9_-]{1,64}$ and
+// an id is spent once, by the version that commits with it. ----
+
+var fakeApprovalRE = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+
+type fakeAddition struct{ key, approval string }
+
+func fakeDigest(parts ...string) string { return strings.Join(parts, "\x00") }
+
+func fakeMCPDigest(m roleMCP) string {
+	return fakeDigest(m.Type, m.URL, m.Command, fmt.Sprint(len(m.Args)), strings.Join(m.Args, "\x00"))
+}
+
+// fakeCarry gives what a put left unchanged the labels of the previous version (an MCP server's or plugin's approval).
+func fakeCarry(r, prev *role) {
+	if prev == nil {
+		return
+	}
+	for i, m := range r.MCP {
+		for _, o := range prev.MCP {
+			if o.Name == m.Name && fakeMCPDigest(o) == fakeMCPDigest(m) {
+				r.MCP[i].Approval = o.Approval
+			}
+		}
+	}
+	for i, p := range r.Plugins {
+		for _, o := range prev.Plugins {
+			if o.Name == p.Name && o.Source == p.Source {
+				r.Plugins[i].Approval = o.Approval
+			}
+		}
+	}
+}
+
+func fakeAdditions(prev, r *role, ch *roleChangeInfo) []fakeAddition {
+	if prev == nil {
+		prev = &role{}
+	}
+	change := ""
+	if ch != nil {
+		change = ch.Approval
+	}
+	var out []fakeAddition
+	for _, m := range r.MCP {
+		if !slices.ContainsFunc(prev.MCP, func(o roleMCP) bool { return o.Name == m.Name && fakeMCPDigest(o) == fakeMCPDigest(m) }) {
+			out = append(out, fakeAddition{"mcp " + m.Name, m.Approval})
+		}
+	}
+	for _, p := range r.Plugins {
+		if !slices.ContainsFunc(prev.Plugins, func(o rolePlugin) bool { return o.Name == p.Name && o.Source == p.Source }) {
+			out = append(out, fakeAddition{"plugin " + p.Name, p.Approval})
+		}
+	}
+	for _, h := range r.Hosts {
+		if !slices.Contains(prev.Hosts, h) {
+			out = append(out, fakeAddition{"host " + h, change})
+		}
+	}
+	for _, t := range r.Tools {
+		if !slices.Contains(prev.Tools, t) && !slices.Contains(safeRoleTools, t) {
+			out = append(out, fakeAddition{"tool " + t, change})
+		}
+	}
+	// ACCEPT_PLACEHOLDER
+	return out
 }
