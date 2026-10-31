@@ -489,7 +489,7 @@ stops the turn. **Usage and sign-in**: today's estimate from `claude-agent.statu
 dollars, or an object with `estimate_usd`/`cost_usd`/`total_cost_usd` and tokens) with a yellow notice above the
 setting `usage_warn_usd` (default 10; never blocks), and the login state from `login` (`logged_in`, `plan`,
 `account`). When signed out the page explains Anthropic's own sign-in on the computer running Rubi Home; it has
-no button and Rubi never handles the credentials. Interrupt, close, send, fork and rename are audited
+no button and Rubi never handles the credentials. A user-role message counts as the user's own only if it has no `from` and its text does not start with the runner's first line `[message from <from>]` (the plugin depends on that runner prefix; see the runner's README); anything with either, or in a shape the plugin doesn't know, is shown as another sender's ("Bot: name") and untrusted. Tool lines show the full command or URL (up to 300 characters), so the user sees what Claude ran. Interrupt, close (also when Home refuses), send, fork and rename are audited
 (`agent_panel_action`, `message_sent`, `session_forked`, `session_renamed`).
 
 ### Events and items the plugin expects from Rubi Home (addendum to the contract)

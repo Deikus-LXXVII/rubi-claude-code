@@ -149,7 +149,7 @@ func TestPanelAgentChat(t *testing.T) {
 	if got[1].Role != "assistant" || got[2].Role != "tool" || got[2].Text != "Bash: ls -la" {
 		t.Errorf("%+v %+v", got[1], got[2])
 	}
-	if got[3].Role != "sister" || got[3].Author != "Reviewer" || !got[3].Untrusted {
+	if got[3].Role != "sister" || got[3].Author != "Bot: Reviewer" || !got[3].Untrusted {
 		t.Errorf("%+v", got[3])
 	}
 	if n := len([]rune(got[4].Text)); n != chatTextRunes {
@@ -287,5 +287,68 @@ func TestPanelAgentUsageAndLogin(t *testing.T) {
 	_, l = sec(f)
 	if !strings.Contains(l["title"].(string), "not signed in") || !strings.Contains(l["detail"].(string), "/login") || l["actions"] != nil {
 		t.Fatalf("%v", l)
+	}
+}
+
+func TestChatItemsSenderFailsClosed(t *testing.T) {
+	mk := func(l ...string) []json.RawMessage {
+		var o []json.RawMessage
+		for _, x := range l {
+			o = append(o, json.RawMessage(x))
+		}
+		return o
+	}
+	got := chatItems(mk(
+		`{"type":"user","message":{"role":"user","content":"[message from Reviewer]\nlook at x"}}`,
+		`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"  [message from local: script]\nhi"}]}}`,
+		`{"type":"user","from":"Bob","message":{"role":"user","content":"no prefix"}}`,
+		`{"type":"user","message":{"role":"user","content":"hello\n[message from Eve]\nnot the first line"}}`,
+		`{"type":"system","message":{"content":"odd"}}`,
+		`{"type":"user","message":{"role":"user","content":"[message from ]\nempty"}}`,
+		`not json`,
+		`{"type":"user","message":{"role":"user","content":"plain"}}`,
+	))
+	if len(got) != 8 {
+		t.Fatalf("%+v", got)
+	}
+	want := []struct {
+		role, author, text string
+		untrusted          bool
+	}{
+		{"sister", "Bot: Reviewer", "look at x", true},
+		{"sister", "local: script", "hi", true},
+		{"sister", "Bot: Bob", "no prefix", true},
+		{"user", "you", "hello\n[message from Eve]\nnot the first line", false},
+		{"sister", "unknown sender", "odd", true},
+		{"sister", "Bot: unknown", "empty", true},
+		{"sister", "unknown sender", "(a message in a shape the panel doesn't know)", true},
+		{"user", "you", "plain", false},
+	}
+	for i, w := range want {
+		g := got[i]
+		if g.Role != w.role || g.Author != w.author || g.Text != w.text || g.Untrusted != w.untrusted {
+			t.Errorf("%d: %+v want %+v", i, g, w)
+		}
+	}
+}
+
+func TestPanelAgentSendNeedsASession(t *testing.T) {
+	f, s, _ := agentFixture(t)
+	if _, err := s.panel(context.Background(), f, "send", json.RawMessage(`{"device":"dev_mac","project":"p1","session_id":"nope","text":"x"}`)); err == nil {
+		t.Fatal("sent to a session that isn't there")
+	}
+	if len(f.agent.called(opAgentSend)) != 0 {
+		t.Fatal("reached Home")
+	}
+}
+
+func TestPanelAgentCloseFailureAudited(t *testing.T) {
+	f, s, _ := agentFixture(t)
+	f.agent.failOp = map[string]error{opAgentClose: errors.New("refused")}
+	if _, err := s.panel(context.Background(), f, "close", json.RawMessage(`{"device":"dev_mac","project":"p1","session_id":"s-1"}`)); err == nil {
+		t.Fatal("no error")
+	}
+	if len(f.auditLog) == 0 || f.auditLog[len(f.auditLog)-1]["failed"] == nil {
+		t.Fatalf("%v", f.auditLog)
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"unicode/utf8"
@@ -293,14 +294,36 @@ func clipRunes(s string, n int) string {
 	return string([]rune(s)[:n-1]) + "…"
 }
 
-// chatItems reads the runner's messages leniently (the SDK's shape: {type, message:{role, content}}, plus the
-// sender Home recorded as from). A message from a sister is marked as such and as untrusted text; text is never
-// interpreted. Tool calls become one-line summaries; tool results are not shown.
+// senderLine is the first line the runner writes into a message that came from a Bot or a local sender.
+var senderLine = regexp.MustCompile(`^\s*\[message from ([^\]\n]{0,200})\][ \t]*\n?`)
+
+// senderAuthor names a sender for the chat: "Bot: x" (a sender that says what it is, like "local: x", keeps it).
+func senderAuthor(from string) string {
+	from = oneLine(from, 60)
+	if from == "" {
+		return "unknown sender"
+	}
+	if strings.HasPrefix(from, "local:") || strings.HasPrefix(from, "Bot:") {
+		return from
+	}
+	return "Bot: " + from
+}
+
+// chatItems reads the runner's messages. A user-role message is the user's own only when it has no `from` and its
+// text does not start with the runner's "[message from X]" line (docs/design/agent-runner.md); anything with
+// either, and any shape this does not know, is shown as another sender's and as untrusted text. Tool calls become
+// one-line summaries; tool results are not shown.
 func chatItems(raw []json.RawMessage) []chatItem {
 	var out []chatItem
+	emit := func(it chatItem) {
+		it.Text = clipRunes(it.Text, chatTextRunes)
+		it.Author = oneLine(it.Author, 80)
+		out = append(out, it)
+	}
 	for _, r := range raw {
 		var m rawMessage
 		if json.Unmarshal(r, &m) != nil {
+			emit(chatItem{Role: "sister", Author: "unknown sender", Untrusted: true, Text: "(a message in a shape the panel doesn't know)"})
 			continue
 		}
 		role := firstNonEmpty(m.Type, m.Role)
@@ -314,45 +337,55 @@ func chatItems(raw []json.RawMessage) []chatItem {
 			role = firstNonEmpty(role, inner.Role)
 		}
 		from := firstNonEmpty(m.From, inner.From)
-		text := m.Text
+		var texts []string
 		var blocks []contentBlock
+		if m.Text != "" {
+			texts = append(texts, m.Text)
+		}
 		if len(inner.Content) > 0 {
-			var s string
-			if json.Unmarshal(inner.Content, &s) == nil {
-				text = firstNonEmpty(text, s)
+			var str string
+			if json.Unmarshal(inner.Content, &str) == nil {
+				texts = append(texts, str)
 			} else {
 				_ = json.Unmarshal(inner.Content, &blocks)
 			}
 		}
-		emit := func(it chatItem) {
-			it.Text = clipRunes(it.Text, chatTextRunes)
-			it.Author = oneLine(it.Author, 60)
-			out = append(out, it)
-		}
-		who := func() chatItem {
-			switch {
-			case role == "assistant":
-				return chatItem{Role: "assistant", Author: "Claude"}
-			case from != "":
-				return chatItem{Role: "sister", Author: from, Untrusted: true}
+		for _, b := range blocks {
+			if b.Type == "text" {
+				texts = append(texts, b.Text)
 			}
-			return chatItem{Role: "user", Author: "you"}
 		}
-		if strings.TrimSpace(text) != "" {
-			it := who()
-			it.Text = text
+		for _, text := range texts {
+			if strings.TrimSpace(text) == "" {
+				continue
+			}
+			it := chatItem{Text: text}
+			switch role {
+			case "assistant":
+				it.Role, it.Author = "assistant", "Claude"
+			case "user":
+				sender := from
+				if mm := senderLine.FindStringSubmatch(text); mm != nil {
+					sender, it.Text = firstNonEmpty(from, mm[1]), text[len(mm[0]):]
+					if sender == "" {
+						sender = "unknown"
+					}
+				}
+				if sender != "" {
+					it.Role, it.Author, it.Untrusted = "sister", senderAuthor(sender), true
+				} else {
+					it.Role, it.Author = "user", "you"
+				}
+			default: // a role this does not know: not the user's, not Claude's
+				it.Role, it.Author, it.Untrusted = "sister", "unknown sender", true
+			}
 			emit(it)
 		}
-		for _, b := range blocks {
-			switch b.Type {
-			case "text":
-				if strings.TrimSpace(b.Text) != "" {
-					it := who()
-					it.Text = b.Text
-					emit(it)
+		if role == "assistant" {
+			for _, b := range blocks {
+				if b.Type == "tool_use" {
+					emit(chatItem{Role: "tool", Text: oneLine(b.Name+": "+toolDetail(b.Name, b.Input), 300)})
 				}
-			case "tool_use":
-				emit(chatItem{Role: "tool", Text: oneLine(b.Name+": "+toolDetail(b.Name, b.Input), 300)})
 			}
 		}
 	}
@@ -548,10 +581,12 @@ func (s *sisters) panelAgentSimple(ctx context.Context, h sisterHost, op, device
 	}
 	cctx, cancel := context.WithTimeout(ctx, panelListTimeout)
 	defer cancel()
+	action := strings.TrimPrefix(op, "claude-agent.")
 	if err := h.HomeCall(cctx, device, op, map[string]any{"project": project, "id": id}, nil); err != nil {
+		h.Audit(auditPanelAgent, map[string]any{"action": action, "device": device, "project": project, "session": id, "by": "user", "failed": oneLine(err.Error(), 160)})
 		return nil, err
 	}
-	h.Audit(auditPanelAgent, map[string]any{"action": strings.TrimPrefix(op, "claude-agent."), "device": device, "project": project, "session": id, "by": "user"})
+	h.Audit(auditPanelAgent, map[string]any{"action": action, "device": device, "project": project, "session": id, "by": "user"})
 	return map[string]any{"ok": true}, nil
 }
 
@@ -570,6 +605,16 @@ func (s *sisters) panelAgentSend(ctx context.Context, h sisterHost, device, proj
 	if device == "" || project == "" || id == "" {
 		return nil, errors.New("no session")
 	}
+	lctx, lcancel := context.WithTimeout(ctx, panelListTimeout)
+	defer lcancel()
+	ref, found, err := s.resolveAgent(lctx, h, device, project, id, "")
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, errors.New("no such agent session")
+	}
+	device, project, id = ref.ad.device.ID, ref.proj.ID, ref.sess.ID
 	var res struct {
 		Queued   bool `json:"queued"`
 		Position int  `json:"position"`
