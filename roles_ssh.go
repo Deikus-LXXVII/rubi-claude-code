@@ -49,6 +49,7 @@ const (
 	sshAuditEvery  = 5 * time.Minute
 	sshAuditLimit  = 50
 	maxSSHItems    = 100
+	maxSSHAskCmd   = 1000 // an ssh.ask command longer than this is refused, never cut
 )
 
 var (
@@ -849,8 +850,8 @@ type sshAskInput struct {
 	Command string `json:"command"`
 }
 
-// sshAskDetail checks an ssh.ask and builds what the user reads. The command is the Bot's own text: it is shown whole
-// (newlines marked, so a second line can't pass for part of the first) or the question is refused.
+// sshAskDetail checks an ssh.ask and builds what the user reads. The command is the Bot's own text: it is shown exactly
+// (line ends marked, so a second line can't pass for part of the first) or the question is refused.
 func sshAskDetail(it agentItem) (detail string, extra map[string]any, why string) {
 	var in sshAskInput
 	if err := json.Unmarshal(it.Input, &in); err != nil {
@@ -860,15 +861,18 @@ func sshAskDetail(it agentItem) (detail string, extra map[string]any, why string
 	switch {
 	case !sshNameRE.MatchString(in.Target) || !hostnameOK(host) || hiddenChars(host) || !sshUserRE.MatchString(in.User) || in.Port < 1 || in.Port > 65535:
 		return "", nil, "unknown SSH request: Rubi Home didn't say which target, host and user this is"
-	case strings.TrimSpace(in.Command) == "" || len(in.Command) > 1000:
-		return "", nil, "unknown SSH request: the command is empty or too long for Rubi to show"
+	case strings.TrimSpace(in.Command) == "" || len(in.Command) > maxSSHAskCmd:
+		return "", nil, "unknown SSH request: the command is empty or too long for Rubi to show whole, so it was refused"
+	case strings.ContainsAny(in.Command, "⏎⇥"):
+		return "", nil, "the SSH command has the characters Rubi uses to mark line ends, so Rubi can't show exactly what it does"
 	case hiddenChars(strings.NewReplacer("\n", "", "\r", "", "\t", "").Replace(in.Command)):
 		return "", nil, "the SSH command has hidden or control characters, so Rubi can't show what it does"
 	}
-	cmd := strings.NewReplacer("\r\n", " ⏎ ", "\n", " ⏎ ", "\r", " ⏎ ", "\t", " ").Replace(in.Command)
-	cmd = strings.Join(strings.Fields(cmd), " ")
+	// Exactly the command, spaces and all. Only line ends and tabs get a visible mark (a command that has the marks
+	// itself is refused), so a second line can't pass for part of the first.
+	cmd := strings.NewReplacer("\r\n", "⏎", "\n", "⏎", "\r", "⏎", "\t", "⇥").Replace(in.Command)
 	detail = "ssh " + in.Target + " (" + in.User + "@" + strings.ToLower(host) + ":" + strconv.Itoa(in.Port) + "): " + cmd
 	extra = map[string]any{"ssh_target": in.Target, "ssh_host": strings.ToLower(host), "ssh_port": in.Port, "ssh_user": in.User, "ssh_command": cmd,
-		"what_it_does": "Runs this command as " + in.User + " on the server " + strings.ToLower(host) + " from your computer, once. You are asked each time because the target was registered that way. The command is the agent's own text."}
+		"what_it_does": "Runs this command as " + in.User + " on the server " + strings.ToLower(host) + " from your computer, once. You are asked each time because the target was registered that way. The command is shown exactly as the agent wrote it (line ends and tabs are marked)."}
 	return detail, extra, ""
 }

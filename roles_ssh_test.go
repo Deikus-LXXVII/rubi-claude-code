@@ -495,8 +495,19 @@ func TestSSHAskIsCheckedBeforeAnyoneIsAsked(t *testing.T) {
 	// A second line can't pass for part of the first: newlines are marked.
 	f, _, w := agentFixture(t)
 	w.handleAsk(context.Background(), mac, sshAskItem("m", "r_aaaaaaaa", goodSSHInput("ls\nrm -rf /srv")))
-	if c := lastSubmit(t, f).Preview.(map[string]any)["ssh_command"]; c != "ls ⏎ rm -rf /srv" {
+	if c := lastSubmit(t, f).Preview.(map[string]any)["ssh_command"]; c != "ls⏎rm -rf /srv" {
 		t.Fatalf("%v", c)
+	}
+	// Spaces are kept as typed, and a command with our marks is refused.
+	f3, _, w3 := agentFixture(t)
+	w3.handleAsk(context.Background(), mac, sshAskItem("x", "r_aaaaaaaa", goodSSHInput("echo  a\tb")))
+	if c := lastSubmit(t, f3).Preview.(map[string]any)["ssh_command"]; c != "echo  a⇥b" {
+		t.Fatalf("%v", c)
+	}
+	f4, _, w4 := agentFixture(t)
+	w4.handleAsk(context.Background(), mac, sshAskItem("y", "r_aaaaaaaa", goodSSHInput("ls ⏎ rm")))
+	if d := f4.agent.decided(); len(d) != 1 || d[0].Behavior != "deny" {
+		t.Fatalf("%+v", d)
 	}
 	// The legacy role (its id is its project's) names no role.
 	f2, _, w2 := agentFixture(t)

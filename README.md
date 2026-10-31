@@ -526,8 +526,9 @@ minutes): the plugin asks for the entries after the last `seq` it copied (kept p
 sends no `seq` gets the old newest-50 dedupe), and audits a summary with the number copied, the refusals and Home's refusal
 counters (`ssh.audit_copied`). A Bot can grant or revoke a registered target on a role it may change, nothing else: there is no Bot tool that
 registers or scans. When a target was registered with ask-each-time, Home sends an `ssh.ask` item; the plugin turns it
-into a strong approval (`claude-code.run`, one option) showing the role, target, host, port, user and the command (newlines
-marked `⏎`; hidden characters are refused), in every mode. `ssh <target> ...` and `rubi-ssh` in a Bash call are also
+into a strong approval (`claude-code.run`, one option) showing the role, target, host, port, user and the command exactly
+as Home sends it (line ends marked `⏎`, tabs `⇥`, spaces kept; hidden characters, those marks inside the command, or more
+than 1000 bytes are refused, never cut), in every mode. `ssh <target> ...` and `rubi-ssh` in a Bash call are also
 remote operations that always ask, and no 2-hour or project trust covers them; that is a second, independent check.
 
 **The tier comes from the difference, not from the tool.** The plugin reads the current version, builds the proposed
