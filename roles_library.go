@@ -43,7 +43,7 @@ const (
 
 // libraryHost is the part of the host that reads the shared skill library: the read-only host method library.get
 // {id, version?} of a plugin that declares the claude-agent capability (version 0 asks for the latest admitted). The
-// host in tests implements it; Rubi's SDK Host has it since v0.14.0-rc.1.
+// host in tests implements it; Rubi's SDK Host has it since v0.14.0-rc.2.
 type libraryHost interface {
 	LibraryGet(ctx context.Context, id string, version int, out any) error
 }
