@@ -22,6 +22,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/Deikus-LXXVII/rubi/sdk/rubiplugin"
 )
 
 const (
@@ -41,10 +43,13 @@ const (
 
 // libraryHost is the part of the host that reads the shared skill library: the read-only host method library.get
 // {id, version?} of a plugin that declares the claude-agent capability (version 0 asks for the latest admitted). The
-// host in tests implements it; Rubi's SDK Host needs a method of this shape.
+// host in tests implements it; Rubi's SDK Host has it since v0.14.0-rc.1.
 type libraryHost interface {
 	LibraryGet(ctx context.Context, id string, version int, out any) error
 }
+
+// The SDK's Host must offer library.get, or library add would fail at run time with "can't read the skill library".
+var _ libraryHost = (*rubiplugin.Host)(nil)
 
 // libInfo is the answer of library.get.
 type libInfo struct {
